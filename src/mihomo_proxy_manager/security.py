@@ -5,6 +5,7 @@ URL safety checks (SSRF prevention), path entropy validation, and secret redacti
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import re
 import socket
@@ -200,6 +201,11 @@ def assert_safe_url(
 
     Assert that a URL is safe, preventing SSRF attacks.
 
+    .. warning::
+        ``resolve_dns=True`` performs a synchronous ``socket.getaddrinfo`` and
+        will block the event loop. From async code call
+        :func:`assert_safe_url_async` instead.
+
     Args:
         url: 待验证的 URL / URL to validate.
         allow_private_network: 是否允许私有网络地址 / Whether to allow private network addresses.
@@ -208,13 +214,58 @@ def assert_safe_url(
     Raises:
         SecurityError: 如果 URL 不安全 / If the URL is not safe.
     """
+    parsed = _check_static(url, allow_private_network=allow_private_network)
+    if parsed is None or not resolve_dns:
+        return
+    host = parsed.hostname.rstrip(".")  # type: ignore[union-attr]
+    ips = _resolve_host(host)
+    for ip in ips:
+        if not _is_public_ip(ip):
+            raise SecurityError(f"URL resolves to non-public address: {ip}")
+
+
+async def assert_safe_url_async(
+    url: str, *, allow_private_network: bool, resolve_dns: bool = True
+) -> None:
+    """异步版本的 :func:`assert_safe_url`，将 DNS 解析卸载到线程池。
+
+    Async variant of :func:`assert_safe_url` that offloads the blocking
+    ``getaddrinfo`` call to the default executor so the event loop is not
+    stalled while resolving subscription hosts.
+
+    Args:
+        url: 待验证的 URL / URL to validate.
+        allow_private_network: 是否允许私有网络地址 / Whether to allow private network addresses.
+        resolve_dns: 是否执行 DNS 解析（默认 True） / Whether to perform DNS resolution.
+
+    Raises:
+        SecurityError: 如果 URL 不安全 / If the URL is not safe.
+    """
+    parsed = _check_static(url, allow_private_network=allow_private_network)
+    if parsed is None or not resolve_dns:
+        return
+    host = parsed.hostname.rstrip(".")  # type: ignore[union-attr]
+    ips = await asyncio.to_thread(_resolve_host, host)
+    for ip in ips:
+        if not _is_public_ip(ip):
+            raise SecurityError(f"URL resolves to non-public address: {ip}")
+
+
+def _check_static(url: str, *, allow_private_network: bool):
+    """共享的同步检查路径，仅返回需要解析 DNS 的已解析 URL 对象。
+
+    Shared synchronous portion of URL validation. Returns the parsed URL only
+    when a DNS lookup is still required to finish validation; returns ``None``
+    when validation has been completed (e.g. private addresses allowed, IP
+    literal, or blocked hostname).
+    """
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"}:
         raise SecurityError(f"unsupported URL scheme: {parsed.scheme}")
     if not parsed.hostname:
         raise SecurityError("URL host is required")
     if allow_private_network:
-        return
+        return None
 
     host = parsed.hostname.rstrip(".")
 
@@ -222,18 +273,12 @@ def assert_safe_url(
     if ip_literal is not None:
         if not _is_public_ip(ip_literal):
             raise SecurityError(f"URL resolves to non-public address: {ip_literal}")
-        return
+        return None
 
     if _is_blocked_hostname(host):
         raise SecurityError(f"URL host is blocked: {host}")
 
-    if not resolve_dns:
-        return
-
-    ips = _resolve_host(host)
-    for ip in ips:
-        if not _is_public_ip(ip):
-            raise SecurityError(f"URL resolves to non-public address: {ip}")
+    return parsed
 
 
 def has_path_entropy(path: str, *, min_bits: int) -> bool:

@@ -13,7 +13,7 @@ import httpx2 as httpx
 from loguru import logger
 
 from .models import FetchConfig, HttpConfig
-from .security import assert_safe_url, redact_secret, redact_url
+from .security import assert_safe_url_async, redact_secret, redact_url
 
 
 # Headers considered safe to forward across origins on a redirect. Per-source
@@ -156,7 +156,7 @@ class SafeHttpClient:
             allow_private=allow_private_network,
         )
         for attempt in range(self.http_config.max_redirects + 1):
-            assert_safe_url(
+            await assert_safe_url_async(
                 current, allow_private_network=allow_private_network, resolve_dns=True
             )
             async with self.client.stream(

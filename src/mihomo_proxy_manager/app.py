@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+import contextlib
+from datetime import UTC, datetime, timedelta
+from typing import Any, Protocol, TypeGuard
 from zoneinfo import ZoneInfo
 
 from croniter import croniter
@@ -11,16 +13,27 @@ from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route
 
 from .cache import SourceCacheStore
-from .models import AppConfig, ProxyRecord, SourceConfig
+from .models import AppConfig, ProxyRecord, SourceCache, SourceConfig
 from .render import ProviderRenderer
 from .status import build_status
 
 
-def _is_still_valid(cache, max_stale) -> bool:
-    return bool(cache and cache.last_success_at and datetime.now(UTC) - cache.last_success_at <= max_stale)
+class _Refresher(Protocol):
+    async def refresh(self, source_name: str) -> Any: ...
 
 
-def _is_due(cache, source: SourceConfig, timezone: str) -> bool:
+class _Scheduler(Protocol):
+    async def start(self) -> None: ...
+    async def stop(self) -> None: ...
+
+
+def _is_still_valid(cache: SourceCache | None, max_stale: timedelta) -> TypeGuard[SourceCache]:
+    if cache is None or cache.last_success_at is None:
+        return False
+    return datetime.now(UTC) - cache.last_success_at <= max_stale
+
+
+def _is_due(cache: SourceCache | None, source: SourceConfig, timezone: str) -> bool:
     if not cache or not cache.last_success_at:
         return True
     now = datetime.now(UTC)
@@ -38,7 +51,7 @@ def _is_due(cache, source: SourceConfig, timezone: str) -> bool:
     return False
 
 
-def _track_background_refresh(task: asyncio.Task, source_name: str) -> None:
+def _track_background_refresh(task: asyncio.Task[Any], source_name: str) -> None:
     try:
         result = task.result()
     except asyncio.CancelledError:
@@ -47,22 +60,38 @@ def _track_background_refresh(task: asyncio.Task, source_name: str) -> None:
         logger.warning("background refresh failed for source {source}: {error}", source=source_name, error=exc)
         return
     if result is not None and not getattr(result, "ok", True):
+        error = getattr(result, "error", None) or "unknown error"
         logger.warning(
             "background refresh failed for source {source}: {error}",
             source=source_name,
-            error=getattr(result, "error", None),
+            error=error,
         )
 
 
-def create_app(config: AppConfig, *, cache_store: SourceCacheStore, refresher, scheduler) -> Starlette:
+def create_app(
+    config: AppConfig,
+    *,
+    cache_store: SourceCacheStore,
+    refresher: _Refresher | None,
+    scheduler: _Scheduler | None,
+) -> Starlette:
     renderer = ProviderRenderer(yaml_sort_keys=config.output.yaml_sort_keys)
     route_by_path = {route.path: route for route in config.routes.values()}
+    background_tasks: set[asyncio.Task[Any]] = set()
 
     async def health(request):
         return JSONResponse({"ok": True})
 
     async def status(request):
         return JSONResponse(await build_status(cache_store, list(config.sources)))
+
+    def _spawn_background_refresh(source_name: str) -> None:
+        if refresher is None:
+            return
+        task = asyncio.create_task(refresher.refresh(source_name))
+        background_tasks.add(task)
+        task.add_done_callback(background_tasks.discard)
+        task.add_done_callback(lambda item, name=source_name: _track_background_refresh(item, name))
 
     async def provider(request):
         route = route_by_path.get(request.url.path)
@@ -82,9 +111,7 @@ def create_app(config: AppConfig, *, cache_store: SourceCacheStore, refresher, s
                 missing.append(source_name)
 
         for source_name in due:
-            if refresher is not None:
-                task = asyncio.create_task(refresher.refresh(source_name))
-                task.add_done_callback(lambda item, name=source_name: _track_background_refresh(item, name))
+            _spawn_background_refresh(source_name)
         if due:
             await asyncio.sleep(0)
 
@@ -101,6 +128,8 @@ def create_app(config: AppConfig, *, cache_store: SourceCacheStore, refresher, s
                         return PlainTextResponse("route unavailable", status_code=503)
             else:
                 for source_name, task in zip(missing, tasks, strict=False):
+                    background_tasks.add(task)
+                    task.add_done_callback(background_tasks.discard)
                     task.add_done_callback(lambda item, name=source_name: _track_background_refresh(item, name))
 
         if not records:
@@ -114,7 +143,8 @@ def create_app(config: AppConfig, *, cache_store: SourceCacheStore, refresher, s
         routes.append(Route(config.server.status_path, status))
     routes.append(Route("/{path:path}", provider))
 
-    async def lifespan(app):
+    @contextlib.asynccontextmanager
+    async def lifespan(app: Starlette):
         if scheduler:
             await scheduler.start()
         yield

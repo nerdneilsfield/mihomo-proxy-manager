@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -40,6 +41,47 @@ class FakeRefresher:
 
     async def refresh(self, source_name: str):
         self.called.append(source_name)
+
+
+@dataclass(frozen=True)
+class FailedResult:
+    ok: bool = False
+    error: str | None = None
+
+
+@pytest.mark.asyncio
+async def test_status_endpoint_returns_source_states(tmp_path) -> None:
+    config = load_config(config_file(tmp_path))
+    store = JsonSourceCacheStore(config.cache)
+    now = datetime.now(UTC)
+    await store.set(
+        "airport_a",
+        SourceCache(
+            "airport_a",
+            1,
+            now,
+            now,
+            None,
+            None,
+            2,
+            (),
+            None,
+            (
+                ProxyRecord("airport_a", {"name": "HK", "type": "vmess"}),
+                ProxyRecord("airport_a", {"name": "JP", "type": "vmess"}),
+            ),
+        ),
+    )
+    app = create_app(config, cache_store=store, refresher=None, scheduler=None)
+
+    with TestClient(app) as client:
+        response = client.get("/s/X6HfeBRQz6xqk9S4dTV7gQwL2nP8aYcM")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["sources"][0]["source"] == "airport_a"
+    assert data["sources"][0]["node_count"] == 2
+    assert data["sources"][0]["last_error"] is None
 
 
 @pytest.mark.asyncio
@@ -138,3 +180,43 @@ async def test_provider_uses_last_attempt_to_avoid_refresh_storm(tmp_path) -> No
 
     assert response.status_code == 200
     assert refresher.called == []
+
+
+class FailingRefresher:
+    def __init__(self, error: str | None = None) -> None:
+        self.called: list[str] = []
+        self.error = error
+
+    async def refresh(self, source_name: str):
+        self.called.append(source_name)
+        return FailedResult(ok=False, error=self.error)
+
+
+@pytest.mark.asyncio
+async def test_background_refresh_failure_without_error_is_handled(tmp_path) -> None:
+    config = load_config(config_file(tmp_path))
+    store = JsonSourceCacheStore(config.cache)
+    old_success = datetime.now(UTC) - timedelta(hours=2)
+    await store.set(
+        "airport_a",
+        SourceCache(
+            "airport_a",
+            1,
+            old_success,
+            old_success,
+            None,
+            None,
+            1,
+            (),
+            None,
+            (ProxyRecord("airport_a", {"name": "HK", "type": "vmess"}),),
+        ),
+    )
+    refresher = FailingRefresher(error=None)
+    app = create_app(config, cache_store=store, refresher=refresher, scheduler=None)
+
+    with TestClient(app) as client:
+        response = client.get("/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml")
+
+    assert response.status_code == 200
+    assert refresher.called == ["airport_a"]

@@ -41,11 +41,15 @@ class ProviderRenderer:
         Returns:
             YAML 格式的字节流 / YAML formatted byte stream.
         """
-        transformed = apply_transform(records, filter_config=route.filter, rename_config=route.rename)
+        transformed = apply_transform(
+            records, filter_config=route.filter, rename_config=route.rename
+        )
         repaired = repair_duplicate_names(transformed)
         proxies = [dict(record.data) for record in repaired]
         payload = {"proxies": proxies}
-        body = yaml.safe_dump(payload, allow_unicode=True, sort_keys=self.yaml_sort_keys).encode("utf-8")
+        body = yaml.safe_dump(
+            payload, allow_unicode=True, sort_keys=self.yaml_sort_keys
+        ).encode("utf-8")
         if route.output.include_meta_comments:
             prefix = (
                 f"# generated_at: {datetime.now(UTC).isoformat()}\n"

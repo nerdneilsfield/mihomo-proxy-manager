@@ -33,6 +33,7 @@ async def test_http_action_success() -> None:
 
     Test that the HTTP Action plugin executes successfully.
     """
+
     async def handler(request: httpx.Request) -> httpx.Response:
         """请求处理器 / Request handler.
 
@@ -46,7 +47,12 @@ async def test_http_action_success() -> None:
         return httpx.Response(204)
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    plugin = HttpActionPlugin(SafeHttpClient(client, HttpConfig(__import__("datetime").timedelta(seconds=30), "ua", 1024, 3)))
+    plugin = HttpActionPlugin(
+        SafeHttpClient(
+            client,
+            HttpConfig(__import__("datetime").timedelta(seconds=30), "ua", 1024, 3),
+        )
+    )
     config = PluginConfig(
         name="turn_on",
         type="http_action",
@@ -69,13 +75,16 @@ async def test_http_action_redacts_secrets_in_error_message() -> None:
 
     Test that the HTTP Action plugin redacts secrets in error messages.
     """
+
     class RaisingSafeHttp:
         """模拟抛出异常的 SafeHttpClient。
 
         A mock SafeHttpClient that raises an exception.
         """
 
-        async def request(self, method: str, url: str, **kwargs: object) -> httpx.Response:
+        async def request(
+            self, method: str, url: str, **kwargs: object
+        ) -> httpx.Response:
             """模拟请求并抛出异常。
 
             Mock a request and raise an exception.
@@ -88,7 +97,9 @@ async def test_http_action_redacts_secrets_in_error_message() -> None:
             Raises:
                 ValueError: 总是抛出 / Always raised.
             """
-            raise ValueError("request to https://example.com/switch?token=secret failed")
+            raise ValueError(
+                "request to https://example.com/switch?token=secret failed"
+            )
 
     plugin = HttpActionPlugin(cast(SafeHttpClient, RaisingSafeHttp()))
     config = PluginConfig(
@@ -170,7 +181,7 @@ async def test_refresher_writes_cache(tmp_path) -> None:
 
     Test that the refresher writes to cache.
     """
-    body = b'''
+    body = b"""
 proxies:
   - name: HK
     type: vmess
@@ -178,7 +189,7 @@ proxies:
     port: 443
     uuid: 00000000-0000-0000-0000-000000000000
     cipher: auto
-'''
+"""
     store = JsonSourceCacheStore(CacheConfig(tmp_path, 2, 0o600, timedelta(days=7)))
     refresher = SourceRefresher(
         sources={"airport_a": source_config()},
@@ -203,7 +214,7 @@ async def test_refresher_shares_inflight_refresh(tmp_path) -> None:
 
     Test that the refresher shares in-flight refresh tasks.
     """
-    body = b'''
+    body = b"""
 proxies:
   - name: HK
     type: vmess
@@ -211,7 +222,7 @@ proxies:
     port: 443
     uuid: 00000000-0000-0000-0000-000000000000
     cipher: auto
-'''
+"""
     store = JsonSourceCacheStore(CacheConfig(tmp_path, 2, 0o600, timedelta(days=7)))
     fetcher = StaticFetcher(body)
     refresher = SourceRefresher(
@@ -223,7 +234,9 @@ proxies:
         refresh_lock_timeout=timedelta(seconds=1),
     )
 
-    first, second = await asyncio.gather(refresher.refresh("airport_a"), refresher.refresh("airport_a"))
+    first, second = await asyncio.gather(
+        refresher.refresh("airport_a"), refresher.refresh("airport_a")
+    )
 
     assert first.ok
     assert second.ok
@@ -322,12 +335,14 @@ async def test_refresher_clears_refreshing_flag_when_cache_get_fails(tmp_path) -
 
 
 @pytest.mark.asyncio
-async def test_refresher_returns_done_inflight_result_without_extra_fetch(tmp_path) -> None:
+async def test_refresher_returns_done_inflight_result_without_extra_fetch(
+    tmp_path,
+) -> None:
     """测试刷新器返回已完成的任务结果而不额外抓取。
 
     Test that the refresher returns a done in-flight result without extra fetch.
     """
-    body = b'''
+    body = b"""
 proxies:
   - name: HK
     type: vmess
@@ -335,7 +350,7 @@ proxies:
     port: 443
     uuid: 00000000-0000-0000-0000-000000000000
     cipher: auto
-'''
+"""
     store = JsonSourceCacheStore(CacheConfig(tmp_path, 2, 0o600, timedelta(days=7)))
     fetcher = StaticFetcher(body)
     refresher = SourceRefresher(

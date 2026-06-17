@@ -38,13 +38,17 @@ def validate_required_fields(proxy: dict[str, Any]) -> list[str]:
     warnings: list[str] = []
     for field in REQUIRED_FIELDS.get(proxy_type, ("name", "type")):
         if field not in proxy or proxy[field] in (None, ""):
-            warnings.append(f"proxy {proxy.get('name', '<unnamed>')!r} missing required field {field!r}")
+            warnings.append(
+                f"proxy {proxy.get('name', '<unnamed>')!r} missing required field {field!r}"
+            )
     if "name" not in proxy or "type" not in proxy:
         warnings.append("proxy missing required field 'name' or 'type'")
     return warnings
 
 
-def parse_yaml_subscription(body: bytes, *, source: str) -> tuple[list[ProxyRecord], list[str]]:
+def parse_yaml_subscription(
+    body: bytes, *, source: str
+) -> tuple[list[ProxyRecord], list[str]]:
     """解析 YAML 格式的订阅内容。
 
     Parse a YAML-format subscription.

@@ -10,7 +10,6 @@ import json
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
 
 import httpx
 import pytest
@@ -328,6 +327,7 @@ def _http_plugin_status(status: int) -> HttpActionPlugin:
     Returns:
         HttpActionPlugin: HTTP 动作插件实例 / HTTP action plugin instance.
     """
+
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(status)
 
@@ -430,12 +430,17 @@ def _app_config(
 
 
 @pytest.mark.asyncio
-async def test_before_fetch_plugin_success_then_refresh_succeeds(tmp_path: Path) -> None:
+async def test_before_fetch_plugin_success_then_refresh_succeeds(
+    tmp_path: Path,
+) -> None:
     """测试 before_fetch 插件成功后刷新成功。
 
     Test that a successful before_fetch plugin leads to a successful refresh.
     """
-    source = _source("src", plugins=SourcePluginConfig(before_fetch={"auth": PluginRefConfig("abort")}))
+    source = _source(
+        "src",
+        plugins=SourcePluginConfig(before_fetch={"auth": PluginRefConfig("abort")}),
+    )
     store = JsonSourceCacheStore(
         CacheConfig(tmp_path, 2, 0o600, max_stale=timedelta(days=7))
     )
@@ -458,7 +463,9 @@ async def test_before_fetch_plugin_success_then_refresh_succeeds(tmp_path: Path)
 
 
 @pytest.mark.asyncio
-async def test_before_fetch_plugin_abort_preserves_cache_and_records_error(tmp_path: Path) -> None:
+async def test_before_fetch_plugin_abort_preserves_cache_and_records_error(
+    tmp_path: Path,
+) -> None:
     """测试 before_fetch 插件中止时保留旧缓存并记录错误。
 
     Test that a before_fetch plugin abort preserves old cache and records error.
@@ -480,7 +487,10 @@ async def test_before_fetch_plugin_abort_preserves_cache_and_records_error(tmp_p
     )
     await store.set("src", old)
 
-    source = _source("src", plugins=SourcePluginConfig(before_fetch={"auth": PluginRefConfig("abort")}))
+    source = _source(
+        "src",
+        plugins=SourcePluginConfig(before_fetch={"auth": PluginRefConfig("abort")}),
+    )
     refresher = SourceRefresher(
         sources={"src": source},
         plugins={"auth": _plugin_config()},
@@ -501,12 +511,17 @@ async def test_before_fetch_plugin_abort_preserves_cache_and_records_error(tmp_p
 
 
 @pytest.mark.asyncio
-async def test_before_fetch_plugin_continue_ignores_failure_and_refreshes(tmp_path: Path) -> None:
+async def test_before_fetch_plugin_continue_ignores_failure_and_refreshes(
+    tmp_path: Path,
+) -> None:
     """测试 before_fetch 插件 continue 模式忽略失败并继续刷新。
 
     Test that before_fetch plugin continue mode ignores failure and proceeds.
     """
-    source = _source("src", plugins=SourcePluginConfig(before_fetch={"auth": PluginRefConfig("continue")}))
+    source = _source(
+        "src",
+        plugins=SourcePluginConfig(before_fetch={"auth": PluginRefConfig("continue")}),
+    )
     store = JsonSourceCacheStore(
         CacheConfig(tmp_path, 2, 0o600, max_stale=timedelta(days=7))
     )
@@ -536,7 +551,9 @@ async def test_require_all_sources_503_when_any_source_missing(tmp_path: Path) -
     config = _app_config(
         tmp_path,
         sources={"a": _source("a"), "b": _source("b")},
-        routes={"r": _route("r", "/r/aaabbbccc.yaml", ("a", "b"), require_all_sources=True)},
+        routes={
+            "r": _route("r", "/r/aaabbbccc.yaml", ("a", "b"), require_all_sources=True)
+        },
     )
     store = JsonSourceCacheStore(config.cache)
     await store.set(
@@ -590,7 +607,9 @@ async def test_require_all_sources_503_when_any_source_missing(tmp_path: Path) -
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fail_mode", ["raise", "empty"])
-async def test_refresher_preserves_old_cache_on_download_or_parse_failure(tmp_path: Path, fail_mode: str) -> None:
+async def test_refresher_preserves_old_cache_on_download_or_parse_failure(
+    tmp_path: Path, fail_mode: str
+) -> None:
     """测试刷新器在下载或解析失败时保留旧缓存。
 
     Test that the refresher preserves old cache on download or parse failure.
@@ -622,7 +641,9 @@ async def test_refresher_preserves_old_cache_on_download_or_parse_failure(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_refresher_rewrites_cache_timestamps_on_304_not_modified(tmp_path: Path) -> None:
+async def test_refresher_rewrites_cache_timestamps_on_304_not_modified(
+    tmp_path: Path,
+) -> None:
     """测试刷新器在 304 未修改时更新缓存时间戳。
 
     Test that the refresher rewrites cache timestamps on 304 Not Modified.
@@ -646,7 +667,9 @@ async def test_refresher_rewrites_cache_timestamps_on_304_not_modified(tmp_path:
         sources={"src": _source("src")},
         plugins={},
         cache_store=store,
-        fetcher=StaticFetcher(b"", etag=old.etag, last_modified=old.last_modified, not_modified=True),
+        fetcher=StaticFetcher(
+            b"", etag=old.etag, last_modified=old.last_modified, not_modified=True
+        ),
         http_plugin=None,
         refresh_lock_timeout=timedelta(seconds=1),
     )
@@ -671,7 +694,9 @@ async def test_refresher_rewrites_cache_timestamps_on_304_not_modified(tmp_path:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("require_all_sources", [True, False])
-async def test_route_refresh_wait_timeout_is_respected(tmp_path: Path, require_all_sources: bool) -> None:
+async def test_route_refresh_wait_timeout_is_respected(
+    tmp_path: Path, require_all_sources: bool
+) -> None:
     """测试路由刷新等待超时被遵守。
 
     Test that the route refresh wait timeout is respected.
@@ -679,7 +704,14 @@ async def test_route_refresh_wait_timeout_is_respected(tmp_path: Path, require_a
     config = _app_config(
         tmp_path,
         sources={"src": _source("src")},
-        routes={"r": _route("r", "/r/aaabbbccc.yaml", ("src",), require_all_sources=require_all_sources)},
+        routes={
+            "r": _route(
+                "r",
+                "/r/aaabbbccc.yaml",
+                ("src",),
+                require_all_sources=require_all_sources,
+            )
+        },
         route_refresh_wait=timedelta(seconds=0.1),
     )
     store = JsonSourceCacheStore(config.cache)
@@ -704,7 +736,9 @@ async def test_route_refresh_wait_timeout_is_respected(tmp_path: Path, require_a
 
 
 @pytest.mark.asyncio
-async def test_concurrent_refresher_instances_do_not_corrupt_cache(tmp_path: Path) -> None:
+async def test_concurrent_refresher_instances_do_not_corrupt_cache(
+    tmp_path: Path,
+) -> None:
     """测试并发刷新器实例不会损坏缓存。
 
     Test that concurrent refresher instances do not corrupt the cache.
@@ -785,7 +819,10 @@ async def test_disabled_status_path_returns_404(tmp_path: Path) -> None:
         status_path=None,
     )
     app = create_app(
-        config, cache_store=JsonSourceCacheStore(config.cache), refresher=None, scheduler=None
+        config,
+        cache_store=JsonSourceCacheStore(config.cache),
+        refresher=None,
+        scheduler=None,
     )
 
     with TestClient(app) as client:
@@ -828,7 +865,10 @@ async def test_app_real_refresher_plugin_abort_returns_503(tmp_path: Path) -> No
 
     Test that the app returns 503 when a plugin aborts.
     """
-    source = _source("src", plugins=SourcePluginConfig(before_fetch={"auth": PluginRefConfig("abort")}))
+    source = _source(
+        "src",
+        plugins=SourcePluginConfig(before_fetch={"auth": PluginRefConfig("abort")}),
+    )
     config = _app_config(
         tmp_path,
         sources={"src": source},
@@ -853,7 +893,9 @@ async def test_app_real_refresher_plugin_abort_returns_503(tmp_path: Path) -> No
 
 
 @pytest.mark.asyncio
-async def test_app_real_refresher_serves_stale_cache_when_background_refresh_fails(tmp_path: Path) -> None:
+async def test_app_real_refresher_serves_stale_cache_when_background_refresh_fails(
+    tmp_path: Path,
+) -> None:
     """测试应用在后台刷新失败时提供旧缓存。
 
     Test that the app serves stale cache when background refresh fails.
@@ -903,7 +945,9 @@ async def test_app_real_refresher_serves_stale_cache_when_background_refresh_fai
 
 
 @pytest.mark.asyncio
-async def test_app_real_refresher_rewrites_cache_on_304_and_serves_stale(tmp_path: Path) -> None:
+async def test_app_real_refresher_rewrites_cache_on_304_and_serves_stale(
+    tmp_path: Path,
+) -> None:
     """测试应用在 304 时重写缓存并提供旧内容。
 
     Test that the app rewrites cache on 304 and serves stale content.
@@ -936,7 +980,12 @@ async def test_app_real_refresher_rewrites_cache_on_304_and_serves_stale(tmp_pat
         sources={"src": source},
         plugins={},
         cache_store=store,
-        fetcher=StaticFetcher(b"", etag='"etag"', last_modified="Wed, 17 Jun 2026 04:00:00 GMT", not_modified=True),
+        fetcher=StaticFetcher(
+            b"",
+            etag='"etag"',
+            last_modified="Wed, 17 Jun 2026 04:00:00 GMT",
+            not_modified=True,
+        ),
         http_plugin=None,
         refresh_lock_timeout=timedelta(seconds=1),
     )

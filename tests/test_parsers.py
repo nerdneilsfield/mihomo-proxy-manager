@@ -27,7 +27,9 @@ proxies:
     uuid: 00000000-0000-0000-0000-000000000000
     cipher: auto
 """
-    result = parse_subscription(body, source="airport_a", fmt="yaml", parse_error="fail")
+    result = parse_subscription(
+        body, source="airport_a", fmt="yaml", parse_error="fail"
+    )
 
     assert result.warnings == []
     assert result.records[0].source == "airport_a"
@@ -49,7 +51,9 @@ proxies:
     cipher: chacha20-ietf-poly1305
     password: secret
 """
-    result = parse_subscription(body, source="airport_a", fmt="auto", parse_error="fail")
+    result = parse_subscription(
+        body, source="airport_a", fmt="auto", parse_error="fail"
+    )
 
     assert result.records[0].data["type"] == "ss"
 
@@ -66,10 +70,22 @@ def test_required_field_validation() -> None:
 @pytest.mark.parametrize(
     ("proxy_type", "missing_field", "proxy"),
     [
-        ("ss", "password", {"name": "x", "type": "ss", "server": "s", "port": 443, "cipher": "aes"}),
+        (
+            "ss",
+            "password",
+            {"name": "x", "type": "ss", "server": "s", "port": 443, "cipher": "aes"},
+        ),
         ("vless", "uuid", {"name": "x", "type": "vless", "server": "s", "port": 443}),
-        ("trojan", "password", {"name": "x", "type": "trojan", "server": "s", "port": 443}),
-        ("hysteria2", "password", {"name": "x", "type": "hysteria2", "server": "s", "port": 443}),
+        (
+            "trojan",
+            "password",
+            {"name": "x", "type": "trojan", "server": "s", "port": 443},
+        ),
+        (
+            "hysteria2",
+            "password",
+            {"name": "x", "type": "hysteria2", "server": "s", "port": 443},
+        ),
         ("http", "port", {"name": "x", "type": "http", "server": "s"}),
         ("socks5", "port", {"name": "x", "type": "socks5", "server": "s"}),
     ],
@@ -90,8 +106,12 @@ def test_validate_required_fields_per_type(
     assert any(f"missing required field {missing_field!r}" in w for w in warnings)
 
 
-@pytest.mark.parametrize("proxy_type", ["ss", "vless", "trojan", "hysteria2", "http", "socks5"])
-def test_validate_required_fields_complete_proxy_has_no_warnings(proxy_type: str) -> None:
+@pytest.mark.parametrize(
+    "proxy_type", ["ss", "vless", "trojan", "hysteria2", "http", "socks5"]
+)
+def test_validate_required_fields_complete_proxy_has_no_warnings(
+    proxy_type: str,
+) -> None:
     """测试完整的代理配置没有验证警告。
 
     Test that a complete proxy config has no validation warnings.
@@ -121,7 +141,9 @@ def test_plain_share_links() -> None:
     Test parsing plain share-link format subscription content.
     """
     body = b"trojan://password@example.com:443?sni=example.com#TR%2001\n"
-    result = parse_subscription(body, source="airport_a", fmt="share-links", parse_error="fail")
+    result = parse_subscription(
+        body, source="airport_a", fmt="share-links", parse_error="fail"
+    )
 
     assert result.records[0].data["name"] == "TR 01"
     assert result.records[0].data["type"] == "trojan"
@@ -134,7 +156,9 @@ def test_ss_sip002_share_link() -> None:
     Test parsing SS SIP002 format share-link.
     """
     body = b"ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTpzZWNyZXQ@example.com:443#SS%2001\n"
-    result = parse_subscription(body, source="airport_a", fmt="share-links", parse_error="fail")
+    result = parse_subscription(
+        body, source="airport_a", fmt="share-links", parse_error="fail"
+    )
 
     proxy = result.records[0].data
     assert proxy["type"] == "ss"
@@ -152,7 +176,9 @@ def test_ss_share_link_maps_plugin_options() -> None:
         b"ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTpzZWNyZXQ@example.com:443"
         b"?plugin=obfs-local%3Bobfs%3Dhttp%3Bobfs-host%3Dwww.bing.com#SS%2001\n"
     )
-    result = parse_subscription(body, source="airport_a", fmt="share-links", parse_error="fail")
+    result = parse_subscription(
+        body, source="airport_a", fmt="share-links", parse_error="fail"
+    )
 
     proxy = result.records[0].data
     assert proxy["plugin"] == "obfs-local"
@@ -165,7 +191,9 @@ def test_vless_share_link() -> None:
     Test parsing vless share-link.
     """
     body = b"vless://00000000-0000-0000-0000-000000000000@example.com:443?encryption=none&security=tls&sni=example.com#VL%2001\n"
-    result = parse_subscription(body, source="airport_a", fmt="share-links", parse_error="fail")
+    result = parse_subscription(
+        body, source="airport_a", fmt="share-links", parse_error="fail"
+    )
 
     assert result.records[0].data["type"] == "vless"
     assert result.records[0].data["uuid"] == "00000000-0000-0000-0000-000000000000"
@@ -181,7 +209,9 @@ def test_vless_share_link_maps_reality_and_transport_options() -> None:
         b"?encryption=none&security=reality&type=tcp&sni=example.com"
         b"&flow=xtls-rprx-vision&pbk=pubkey&sid=abcd&fp=chrome#VL%2001\n"
     )
-    result = parse_subscription(body, source="airport_a", fmt="share-links", parse_error="fail")
+    result = parse_subscription(
+        body, source="airport_a", fmt="share-links", parse_error="fail"
+    )
 
     proxy = result.records[0].data
     assert proxy["network"] == "tcp"
@@ -200,7 +230,9 @@ def test_trojan_share_link_maps_ws_options() -> None:
         b"trojan://password@example.com:443"
         b"?type=ws&sni=example.com&host=cdn.example.com&path=%2Fws#TR%2001\n"
     )
-    result = parse_subscription(body, source="airport_a", fmt="share-links", parse_error="fail")
+    result = parse_subscription(
+        body, source="airport_a", fmt="share-links", parse_error="fail"
+    )
 
     proxy = result.records[0].data
     assert proxy["network"] == "ws"
@@ -213,7 +245,9 @@ def test_hysteria2_share_link() -> None:
     Test parsing hysteria2 share-link.
     """
     body = b"hysteria2://password@example.com:443?sni=example.com#HY2%2001\n"
-    result = parse_subscription(body, source="airport_a", fmt="share-links", parse_error="fail")
+    result = parse_subscription(
+        body, source="airport_a", fmt="share-links", parse_error="fail"
+    )
 
     assert result.records[0].data["type"] == "hysteria2"
     assert result.records[0].data["password"] == "password"
@@ -237,7 +271,9 @@ def test_base64_share_links() -> None:
     link = "vmess://" + base64.b64encode(json.dumps(vmess).encode()).decode()
     encoded = base64.b64encode(link.encode())
 
-    result = parse_subscription(encoded, source="airport_a", fmt="auto", parse_error="fail")
+    result = parse_subscription(
+        encoded, source="airport_a", fmt="auto", parse_error="fail"
+    )
 
     assert result.records[0].data["type"] == "vmess"
     assert result.records[0].data["name"] == "VM 01"
@@ -249,7 +285,9 @@ def test_parse_error_skip_bad_nodes() -> None:
     Test that bad nodes are skipped when parse_error=skip.
     """
     body = b"not-a-node\ntrojan://password@example.com:443#TR%2001\n"
-    result = parse_subscription(body, source="airport_a", fmt="share-links", parse_error="skip")
+    result = parse_subscription(
+        body, source="airport_a", fmt="share-links", parse_error="skip"
+    )
 
     assert len(result.records) == 1
     assert result.warnings
@@ -261,7 +299,9 @@ def test_parse_error_fail_bad_nodes() -> None:
     Test that bad nodes raise an error when parse_error=fail.
     """
     with pytest.raises(ParseError):
-        parse_subscription(b"not-a-node\n", source="airport_a", fmt="share-links", parse_error="fail")
+        parse_subscription(
+            b"not-a-node\n", source="airport_a", fmt="share-links", parse_error="fail"
+        )
 
 
 def test_share_links_rejects_non_utf8_body() -> None:
@@ -270,7 +310,9 @@ def test_share_links_rejects_non_utf8_body() -> None:
     Test that share-links parsing rejects non-UTF-8 content.
     """
     with pytest.raises(ParseError, match="UTF-8"):
-        parse_subscription(b"\xff\xfe\xfd", source="airport_a", fmt="share-links", parse_error="fail")
+        parse_subscription(
+            b"\xff\xfe\xfd", source="airport_a", fmt="share-links", parse_error="fail"
+        )
 
 
 def test_auto_rejects_invalid_base64() -> None:
@@ -279,7 +321,9 @@ def test_auto_rejects_invalid_base64() -> None:
     Test that auto mode rejects invalid base64 content.
     """
     with pytest.raises(ParseError, match="base64"):
-        parse_subscription(b"not-base64!!!", source="airport_a", fmt="auto", parse_error="fail")
+        parse_subscription(
+            b"not-base64!!!", source="airport_a", fmt="auto", parse_error="fail"
+        )
 
 
 def test_auto_includes_yaml_error_when_all_formats_fail() -> None:
@@ -287,7 +331,9 @@ def test_auto_includes_yaml_error_when_all_formats_fail() -> None:
 
     Test that auto mode includes YAML error when all formats fail.
     """
-    with pytest.raises(ParseError, match="YAML was not a valid subscription") as exc_info:
+    with pytest.raises(
+        ParseError, match="YAML was not a valid subscription"
+    ) as exc_info:
         parse_subscription(b"{", source="airport_a", fmt="auto", parse_error="skip")
 
     assert "base64" in str(exc_info.value)
@@ -299,7 +345,9 @@ def test_parse_yaml_rejects_non_utf8_body() -> None:
     Test that YAML parsing rejects non-UTF-8 content.
     """
     with pytest.raises(ParseError, match="failed to parse YAML"):
-        parse_subscription(b"\xff\xfe\xfd", source="airport_a", fmt="yaml", parse_error="fail")
+        parse_subscription(
+            b"\xff\xfe\xfd", source="airport_a", fmt="yaml", parse_error="fail"
+        )
 
 
 def test_auto_yaml_validation_fail_does_not_fallback() -> None:
@@ -325,7 +373,9 @@ def test_legacy_ss_link_with_ipv6_endpoint() -> None:
 
     Test parsing legacy SS link with IPv6 endpoint.
     """
-    payload = base64.urlsafe_b64encode(b"chacha20-ietf-poly1305:secret@[2001:db8::1]:443").decode()
+    payload = base64.urlsafe_b64encode(
+        b"chacha20-ietf-poly1305:secret@[2001:db8::1]:443"
+    ).decode()
     link = f"ss://{payload}#SS%20IPv6"
     proxy = _parse_ss(link)
 
@@ -344,7 +394,9 @@ def test_share_links_warning_redacts_exception_detail() -> None:
     # could contain the raw link/token. The warning must redact/truncate it.
     body = b"vmess://secret-token-that-should-not-leak\n"
     with pytest.raises(ParseError) as exc_info:
-        parse_subscription(body, source="airport_a", fmt="share-links", parse_error="skip")
+        parse_subscription(
+            body, source="airport_a", fmt="share-links", parse_error="skip"
+        )
 
     message = str(exc_info.value)
     assert "secret-token-that-should-not-leak" not in message
@@ -356,12 +408,16 @@ def test_legacy_ss_link_with_plugin_query() -> None:
 
     Test parsing legacy SS link with plugin query parameters.
     """
-    payload = base64.urlsafe_b64encode(b"chacha20-ietf-poly1305:secret@example.com:443").decode()
+    payload = base64.urlsafe_b64encode(
+        b"chacha20-ietf-poly1305:secret@example.com:443"
+    ).decode()
     body = (
         f"ss://{payload}"
         "?plugin=obfs-local%3Bobfs%3Dhttp%3Bobfs-host%3Dwww.bing.com#SS%2001"
     ).encode()
-    result = parse_subscription(body, source="airport_a", fmt="share-links", parse_error="fail")
+    result = parse_subscription(
+        body, source="airport_a", fmt="share-links", parse_error="fail"
+    )
 
     proxy = result.records[0].data
     assert proxy["type"] == "ss"
@@ -402,7 +458,9 @@ def test_urlsafe_base64_share_links() -> None:
     link = "vmess://" + base64.b64encode(json.dumps(vmess).encode()).decode()
     encoded = base64.urlsafe_b64encode(link.encode())
 
-    result = parse_subscription(encoded, source="airport_a", fmt="auto", parse_error="fail")
+    result = parse_subscription(
+        encoded, source="airport_a", fmt="auto", parse_error="fail"
+    )
 
     assert result.records[0].data["type"] == "vmess"
     assert result.records[0].data["name"] == "VM 02"
@@ -416,7 +474,9 @@ def test_ss_legacy_share_link_falls_back_to_standard_base64() -> None:
     payload = base64.b64encode(b"aes-256-gcm:???@example.com:443").decode()
     assert "+" in payload or "/" in payload
     body = f"ss://{payload}#SS%2001".encode()
-    result = parse_subscription(body, source="airport_a", fmt="share-links", parse_error="fail")
+    result = parse_subscription(
+        body, source="airport_a", fmt="share-links", parse_error="fail"
+    )
 
     proxy = result.records[0].data
     assert proxy["type"] == "ss"

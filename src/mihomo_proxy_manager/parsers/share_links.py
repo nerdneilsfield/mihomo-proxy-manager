@@ -112,7 +112,9 @@ def _apply_transport_options(proxy: dict[str, object], query: dict[str, str]) ->
     if "flow" in query:
         proxy["flow"] = query["flow"]
     if "allowInsecure" in query or "insecure" in query:
-        proxy["skip-cert-verify"] = query.get("allowInsecure", query.get("insecure")) in {"1", "true", "True"}
+        proxy["skip-cert-verify"] = query.get(
+            "allowInsecure", query.get("insecure")
+        ) in {"1", "true", "True"}
 
     public_key = query.get("publicKey") or query.get("pbk")
     short_id = query.get("shortId") or query.get("sid")
@@ -124,7 +126,9 @@ def _apply_transport_options(proxy: dict[str, object], query: dict[str, str]) ->
             opts["short-id"] = short_id
         proxy["reality-opts"] = opts
 
-    fingerprint = query.get("client-fingerprint") or query.get("fingerprint") or query.get("fp")
+    fingerprint = (
+        query.get("client-fingerprint") or query.get("fingerprint") or query.get("fp")
+    )
     if fingerprint:
         proxy["client-fingerprint"] = fingerprint
 
@@ -167,7 +171,10 @@ def _parse_vmess(link: str) -> dict[str, object]:
     if data.get("net"):
         proxy["network"] = data.get("net")
     if data.get("host") or data.get("path"):
-        proxy["ws-opts"] = {"path": data.get("path", "/"), "headers": {"Host": data.get("host", "")}}
+        proxy["ws-opts"] = {
+            "path": data.get("path", "/"),
+            "headers": {"Host": data.get("host", "")},
+        }
     return proxy
 
 
@@ -266,7 +273,9 @@ def _parse_url_link(link: str) -> dict[str, object]:
     return proxy
 
 
-def parse_share_links_text(text: str, *, source: str) -> tuple[list[ProxyRecord], list[str]]:
+def parse_share_links_text(
+    text: str, *, source: str
+) -> tuple[list[ProxyRecord], list[str]]:
     """解析 share-link 文本，返回代理记录和警告列表。
 
     Parse share-link text, returning proxy records and warnings.
@@ -286,7 +295,9 @@ def parse_share_links_text(text: str, *, source: str) -> tuple[list[ProxyRecord]
         try:
             if line.startswith("vmess://"):
                 proxy = _parse_vmess(line)
-            elif line.startswith(("ss://", "vless://", "trojan://", "hysteria2://", "hy2://")):
+            elif line.startswith(
+                ("ss://", "vless://", "trojan://", "hysteria2://", "hy2://")
+            ):
                 proxy = _parse_url_link(line)
             else:
                 raise ValueError("unsupported share link")

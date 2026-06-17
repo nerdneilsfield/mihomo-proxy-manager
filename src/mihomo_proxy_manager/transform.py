@@ -134,7 +134,9 @@ def repair_duplicate_names(records: list[ProxyRecord]) -> list[ProxyRecord]:
         remaining_original[base] -= 1
         candidate = base
         counter = 2
-        while candidate in used or (candidate != base and remaining_original[candidate] > 0):
+        while candidate in used or (
+            candidate != base and remaining_original[candidate] > 0
+        ):
             candidate = f"{base} #{counter}"
             counter += 1
         data["name"] = candidate

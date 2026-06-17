@@ -33,10 +33,18 @@ async def build_status(
         sources.append(
             {
                 "source": status.source,
-                "last_attempt_at": status.last_attempt_at.isoformat() if status.last_attempt_at else None,
-                "last_success_at": status.last_success_at.isoformat() if status.last_success_at else None,
+                "last_attempt_at": status.last_attempt_at.isoformat()
+                if status.last_attempt_at
+                else None,
+                "last_success_at": status.last_success_at.isoformat()
+                if status.last_success_at
+                else None,
                 "node_count": status.node_count,
-                "last_error": redact_secret(status.last_error, extra_secrets=extra_secrets) if status.last_error else None,
+                "last_error": redact_secret(
+                    status.last_error, extra_secrets=extra_secrets
+                )
+                if status.last_error
+                else None,
                 "refreshing": status.refreshing,
             }
         )

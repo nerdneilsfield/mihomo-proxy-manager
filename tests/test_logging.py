@@ -58,17 +58,31 @@ def _minimal_config(tmp_path, plugins=None):
         plugins=SourcePluginConfig(),
     )
     return AppConfig(
-        server=ServerConfig("127.0.0.1", 8080, "Asia/Shanghai", "/healthz", None, timedelta(seconds=1)),
+        server=ServerConfig(
+            "127.0.0.1", 8080, "Asia/Shanghai", "/healthz", None, timedelta(seconds=1)
+        ),
         cache=CacheConfig(tmp_path, 2, 0o600, timedelta(days=7)),
         logging_console=LoggingSinkConfig(True, "INFO", True),
         logging_file=LoggingSinkConfig(False, "DEBUG"),
         http=HttpConfig(timedelta(seconds=30), "ua", 1024, 3),
-        scheduler=SchedulerConfig(True, "background", timedelta(seconds=0), timedelta(seconds=1)),
+        scheduler=SchedulerConfig(
+            True, "background", timedelta(seconds=0), timedelta(seconds=1)
+        ),
         security=SecurityConfig(128, False),
         parser=ParserConfig("auto", "skip"),
         output=OutputConfig(False, False),
         sources={"airport_a": source},
-        routes={"phone": RouteConfig("phone", "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml", ("airport_a",), False, RouteOutputConfig(), RenameConfig(), FilterConfig())},
+        routes={
+            "phone": RouteConfig(
+                "phone",
+                "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml",
+                ("airport_a",),
+                False,
+                RouteOutputConfig(),
+                RenameConfig(),
+                FilterConfig(),
+            )
+        },
         plugins=plugins or {},
     )
 

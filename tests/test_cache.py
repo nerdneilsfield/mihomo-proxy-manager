@@ -27,7 +27,11 @@ async def test_cache_roundtrip_and_permissions(tmp_path) -> None:
         - 读取的缓存对象与写入的一致 / The loaded cache equals the written cache.
         - 文件权限为预期的 0o600 / File permission is 0o600.
     """
-    store = JsonSourceCacheStore(CacheConfig(tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7)))
+    store = JsonSourceCacheStore(
+        CacheConfig(
+            tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7)
+        )
+    )
     cache = SourceCache(
         source="airport_a",
         schema_version=1,
@@ -64,7 +68,11 @@ async def test_unknown_schema_version_is_treated_as_miss(tmp_path, caplog) -> No
     """
     path = tmp_path / "airport_a.json"
     path.write_text('{"schema_version": 99, "source": "airport_a"}', encoding="utf-8")
-    store = JsonSourceCacheStore(CacheConfig(tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7)))
+    store = JsonSourceCacheStore(
+        CacheConfig(
+            tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7)
+        )
+    )
 
     assert await store.get("airport_a") is None
 
@@ -86,7 +94,11 @@ async def test_legacy_schema_version_zero_is_treated_as_miss(tmp_path) -> None:
         '{"schema_version": 0, "source": "airport_a", "proxies": []}',
         encoding="utf-8",
     )
-    store = JsonSourceCacheStore(CacheConfig(tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7)))
+    store = JsonSourceCacheStore(
+        CacheConfig(
+            tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7)
+        )
+    )
 
     assert await store.get("airport_a") is None
 
@@ -103,16 +115,34 @@ async def test_cache_reloads_when_file_changes_from_another_process(tmp_path) ->
     Asserts:
         第二次读取返回新写入的数据 / The second read returns the newly written data.
     """
-    config = CacheConfig(tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7))
+    config = CacheConfig(
+        tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7)
+    )
     server_store = JsonSourceCacheStore(config)
     cli_store = JsonSourceCacheStore(config)
     old_cache = SourceCache(
-        "airport_a", 1, datetime(2026, 6, 17, tzinfo=UTC), datetime(2026, 6, 17, tzinfo=UTC),
-        None, None, 1, (), None, (ProxyRecord("airport_a", {"name": "old", "type": "vmess"}),),
+        "airport_a",
+        1,
+        datetime(2026, 6, 17, tzinfo=UTC),
+        datetime(2026, 6, 17, tzinfo=UTC),
+        None,
+        None,
+        1,
+        (),
+        None,
+        (ProxyRecord("airport_a", {"name": "old", "type": "vmess"}),),
     )
     new_cache = SourceCache(
-        "airport_a", 1, datetime(2026, 6, 18, tzinfo=UTC), datetime(2026, 6, 18, tzinfo=UTC),
-        None, None, 1, (), None, (ProxyRecord("airport_a", {"name": "new", "type": "vmess"}),),
+        "airport_a",
+        1,
+        datetime(2026, 6, 18, tzinfo=UTC),
+        datetime(2026, 6, 18, tzinfo=UTC),
+        None,
+        None,
+        1,
+        (),
+        None,
+        (ProxyRecord("airport_a", {"name": "new", "type": "vmess"}),),
     )
 
     await server_store.set("airport_a", old_cache)
@@ -141,7 +171,11 @@ async def test_malformed_cache_json_is_treated_as_miss(tmp_path) -> None:
     """
     path = tmp_path / "airport_a.json"
     path.write_text("not json", encoding="utf-8")
-    store = JsonSourceCacheStore(CacheConfig(tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7)))
+    store = JsonSourceCacheStore(
+        CacheConfig(
+            tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7)
+        )
+    )
 
     assert await store.get("airport_a") is None
 
@@ -160,7 +194,11 @@ async def test_malformed_cache_missing_source_is_treated_as_miss(tmp_path) -> No
     """
     path = tmp_path / "airport_a.json"
     path.write_text('{"schema_version": 1}', encoding="utf-8")
-    store = JsonSourceCacheStore(CacheConfig(tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7)))
+    store = JsonSourceCacheStore(
+        CacheConfig(
+            tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7)
+        )
+    )
 
     assert await store.get("airport_a") is None
 
@@ -215,7 +253,9 @@ def test_read_or_miss_treats_race_condition_as_miss(tmp_path) -> None:
     """
     from unittest.mock import MagicMock
 
-    config = CacheConfig(tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7))
+    config = CacheConfig(
+        tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7)
+    )
     store = JsonSourceCacheStore(config)
     path = MagicMock()
     path.exists.return_value = True
@@ -238,7 +278,9 @@ async def test_get_does_not_overwrite_newer_memory_with_older_disk(tmp_path) -> 
     """
     import time
 
-    config = CacheConfig(tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7))
+    config = CacheConfig(
+        tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7)
+    )
     store = JsonSourceCacheStore(config)
     new_cache = SourceCache(
         "airport_a",
@@ -288,7 +330,9 @@ async def test_write_removes_stale_tmp_file(tmp_path) -> None:
         - 过期的 .tmp 文件被删除 / The stale .tmp file is removed.
         - 目标 .json 文件被创建 / The target .json file is created.
     """
-    config = CacheConfig(tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7))
+    config = CacheConfig(
+        tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7)
+    )
     store = JsonSourceCacheStore(config)
     stale_tmp = tmp_path / "airport_a.json.tmp"
     stale_tmp.write_text("stale", encoding="utf-8")
@@ -323,7 +367,9 @@ async def test_startup_cleans_stale_tmp_files(tmp_path) -> None:
     Asserts:
         过期的 .tmp 文件在 _ensure_dir 后被删除 / The stale .tmp file is removed after _ensure_dir.
     """
-    config = CacheConfig(tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7))
+    config = CacheConfig(
+        tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7)
+    )
     stale_tmp = tmp_path / "airport_a.json.tmp"
     stale_tmp.write_text("stale", encoding="utf-8")
     # Make the tmp file look stale so the 60s writer-race grace period skips it.

@@ -5,7 +5,12 @@ URL safety, path entropy, and redaction function tests.
 
 import pytest
 
-from mihomo_proxy_manager.security import SecurityError, assert_safe_url, has_path_entropy, redact_secret
+from mihomo_proxy_manager.security import (
+    SecurityError,
+    assert_safe_url,
+    has_path_entropy,
+    redact_secret,
+)
 
 
 def test_rejects_private_network_url() -> None:
@@ -37,7 +42,9 @@ def test_redact_secret() -> None:
     Test the redact function to mask sensitive information in URL paths, tokens, and Authorization headers.
     """
     text = "GET /p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml https://x.test/sub?token=secret Authorization=Bearer abc"
-    redacted = redact_secret(text, extra_secrets=["/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml"])
+    redacted = redact_secret(
+        text, extra_secrets=["/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml"]
+    )
 
     assert "CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL" not in redacted
     assert "token=secret" not in redacted
@@ -52,7 +59,10 @@ def test_redact_secret() -> None:
         ("Authorization=Basic abc123", "Authorization=***"),
         ("Authorization=abc123 extra", "Authorization=*** extra"),
         ("Authorization=Bearer abc extra", "Authorization=*** extra"),
-        ("X=before Authorization=Bearer abc Y=after", "X=before Authorization=*** Y=after"),
+        (
+            "X=before Authorization=Bearer abc Y=after",
+            "X=before Authorization=*** Y=after",
+        ),
     ],
 )
 def test_redact_secret_authorization(text: str, expected: str) -> None:
@@ -84,7 +94,9 @@ def test_rejects_blocked_hostnames_without_dns(hostname: str) -> None:
 
 def test_allows_public_hostname_without_dns() -> None:
     """测试在不进行 DNS 解析时允许公共主机名 / Test allowing public hostnames without DNS resolution."""
-    assert_safe_url("https://example.com/foo", allow_private_network=False, resolve_dns=False)
+    assert_safe_url(
+        "https://example.com/foo", allow_private_network=False, resolve_dns=False
+    )
 
 
 @pytest.mark.parametrize(
@@ -120,7 +132,9 @@ def test_allows_public_noncanonical_ip_literals_without_dns() -> None:
     Test allowing non-canonical public IP literals without DNS resolution.
     """
     # 134744072 == 8.8.8.8
-    assert_safe_url("http://134744072/foo", allow_private_network=False, resolve_dns=False)
+    assert_safe_url(
+        "http://134744072/foo", allow_private_network=False, resolve_dns=False
+    )
 
 
 @pytest.mark.parametrize(
@@ -146,13 +160,17 @@ def test_allows_public_hex_octal_ip_literals_without_dns() -> None:
 
     Test allowing public hex/octal IP literals without DNS resolution.
     """
-    assert_safe_url("http://0x8.0x8.0x8.0x8/foo", allow_private_network=False, resolve_dns=False)
+    assert_safe_url(
+        "http://0x8.0x8.0x8.0x8/foo", allow_private_network=False, resolve_dns=False
+    )
 
 
 def test_redact_secret_standalone_bearer() -> None:
     """测试脱敏独立出现的 Bearer token / Test redaction of standalone Bearer tokens."""
     assert redact_secret("log line with Bearer abc123") == "log line with Bearer ***"
-    assert redact_secret("Bearer first and Bearer second") == "Bearer *** and Bearer ***"
+    assert (
+        redact_secret("Bearer first and Bearer second") == "Bearer *** and Bearer ***"
+    )
     assert "Bearer secret" not in redact_secret("some Bearer secret here")
 
 

@@ -5,7 +5,6 @@ CLI parser and command smoke tests.
 
 from pathlib import Path
 
-import pytest
 
 from mihomo_proxy_manager.cli import build_parser, main
 from mihomo_proxy_manager.refresher import RefreshResult
@@ -32,7 +31,8 @@ def test_check_command_reports_valid_config(tmp_path: Path, capsys) -> None:
         capsys: pytest 标准输出捕获夹具 / pytest stdout capture fixture.
     """
     config = tmp_path / "config.toml"
-    config.write_text(f'''
+    config.write_text(
+        f'''
 [server]
 status_path = "/s/X6HfeBRQz6xqk9S4dTV7gQwL2nP8aYcM"
 
@@ -45,7 +45,9 @@ url = "https://example.com/sub"
 [routes.phone]
 path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml"
 sources = ["airport_a"]
-''', encoding="utf-8")
+''',
+        encoding="utf-8",
+    )
 
     code = main(["check", "-c", str(config)])
 
@@ -80,7 +82,9 @@ class FailingRefresher:
         Returns:
             RefreshResult: 包含错误信息的失败结果 / Failed result with error info.
         """
-        return RefreshResult(False, source_name, node_count=0, warning_count=1, error="boom")
+        return RefreshResult(
+            False, source_name, node_count=0, warning_count=1, error="boom"
+        )
 
 
 def test_refresh_command_failure_includes_node_and_warning_counts(
@@ -96,7 +100,8 @@ def test_refresh_command_failure_includes_node_and_warning_counts(
         capsys: pytest 标准输出捕获夹具 / pytest stdout capture fixture.
     """
     config = tmp_path / "config.toml"
-    config.write_text(f'''
+    config.write_text(
+        f'''
 [server]
 status_path = "/s/X6HfeBRQz6xqk9S4dTV7gQwL2nP8aYcM"
 
@@ -109,7 +114,9 @@ url = "https://example.com/sub"
 [routes.phone]
 path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml"
 sources = ["airport_a"]
-''', encoding="utf-8")
+''',
+        encoding="utf-8",
+    )
     monkeypatch.setattr("mihomo_proxy_manager.cli.SourceRefresher", FailingRefresher)
 
     code = main(["refresh", "-c", str(config), "airport_a"])

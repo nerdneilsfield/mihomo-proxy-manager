@@ -23,6 +23,7 @@ class ParseError(ValueError):
 
     Parse error raised when subscription parsing fails.
     """
+
     pass
 
 
@@ -76,7 +77,12 @@ def _try_base64_text(body: bytes) -> str:
         return base64.b64decode(padded).decode("utf-8-sig")
 
 
-def _finalize(records: list[ProxyRecord], warnings: list[str], *, parse_error: Literal["skip", "fail"]) -> ParseResult:
+def _finalize(
+    records: list[ProxyRecord],
+    warnings: list[str],
+    *,
+    parse_error: Literal["skip", "fail"],
+) -> ParseResult:
     """根据 parse_error 策略最终确定解析结果。
 
     Finalize the parse result according to the parse_error strategy.

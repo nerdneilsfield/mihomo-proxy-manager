@@ -7,7 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from mihomo_proxy_manager.config import load_config, parse_duration, parse_file_mode, parse_size
+from mihomo_proxy_manager.config import (
+    load_config,
+    parse_duration,
+    parse_file_mode,
+    parse_size,
+)
 
 
 def write_config(path: Path, body: str) -> Path:
@@ -109,7 +114,9 @@ sources = ["missing"]
     assert "health_path and status_path collide" in joined
 
 
-def test_validation_rejects_invalid_enums_and_route_regex(temp_config_path: Path) -> None:
+def test_validation_rejects_invalid_enums_and_route_regex(
+    temp_config_path: Path,
+) -> None:
     """测试验证拒绝无效的枚举值和路由正则表达式。
 
     Test that validation rejects invalid enums and route regex.
@@ -158,10 +165,13 @@ def test_file_mode_accepts_toml_integer(temp_config_path: Path) -> None:
     Args:
         temp_config_path: 临时配置文件路径 / Temporary config file path.
     """
-    body = minimal_config() + """
+    body = (
+        minimal_config()
+        + """
 [cache]
 file_mode = 0o600
 """
+    )
     config = load_config(write_config(temp_config_path, body))
 
     assert config.cache.file_mode == 0o600
@@ -190,10 +200,13 @@ def test_cron_accepts_single_string(temp_config_path: Path) -> None:
     Args:
         temp_config_path: 临时配置文件路径 / Temporary config file path.
     """
-    body = minimal_config() + """
+    body = (
+        minimal_config()
+        + """
 [sources.airport_a.refresh]
 cron = "0 * * * *"
 """
+    )
     config = load_config(write_config(temp_config_path, body))
     assert config.sources["airport_a"].refresh.cron == ("0 * * * *",)
 
@@ -206,11 +219,14 @@ def test_success_status_accepts_single_int(temp_config_path: Path) -> None:
     Args:
         temp_config_path: 临时配置文件路径 / Temporary config file path.
     """
-    body = minimal_config() + """
+    body = (
+        minimal_config()
+        + """
 [plugins.turn_on]
 url = "https://example.com/action"
 success_status = 204
 """
+    )
     config = load_config(write_config(temp_config_path, body))
     assert config.plugins["turn_on"].success_status == (204,)
 
@@ -237,7 +253,7 @@ def test_validation_rejects_missing_source_url(temp_config_path: Path) -> None:
     """
     body = minimal_config().replace(
         '[sources.airport_a]\nurl = "https://example.com/sub"',
-        '[sources.airport_a]',
+        "[sources.airport_a]",
     )
     config = load_config(write_config(temp_config_path, body), validate=False)
     report = config.validate(config_path=temp_config_path)
@@ -246,7 +262,9 @@ def test_validation_rejects_missing_source_url(temp_config_path: Path) -> None:
     assert "source 'airport_a' URL is required" in "\n".join(report.errors)
 
 
-def test_source_plugin_on_failure_must_be_abort_or_continue(temp_config_path: Path) -> None:
+def test_source_plugin_on_failure_must_be_abort_or_continue(
+    temp_config_path: Path,
+) -> None:
     """测试源插件 on_failure 必须是 abort 或 continue。
 
     Test that source plugin on_failure must be abort or continue.
@@ -254,13 +272,16 @@ def test_source_plugin_on_failure_must_be_abort_or_continue(temp_config_path: Pa
     Args:
         temp_config_path: 临时配置文件路径 / Temporary config file path.
     """
-    body = minimal_config() + """
+    body = (
+        minimal_config()
+        + """
 [sources.airport_a.plugins.before_fetch.turn_on]
 on_failure = "panic"
 
 [plugins.turn_on]
 url = "https://example.com/action"
 """
+    )
     config = load_config(write_config(temp_config_path, body), validate=False)
     report = config.validate(config_path=temp_config_path)
 

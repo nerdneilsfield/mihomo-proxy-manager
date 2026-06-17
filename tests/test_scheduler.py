@@ -56,7 +56,9 @@ class FakeRefresher:
         self.done.set()
 
 
-def scheduler_config(tmp_path, *, startup_refresh=True, startup_refresh_mode="blocking") -> AppConfig:
+def scheduler_config(
+    tmp_path, *, startup_refresh=True, startup_refresh_mode="blocking"
+) -> AppConfig:
     """创建调度器测试用应用配置。
 
     Create an app config for scheduler testing.
@@ -81,17 +83,34 @@ def scheduler_config(tmp_path, *, startup_refresh=True, startup_refresh_mode="bl
         plugins=SourcePluginConfig(),
     )
     return AppConfig(
-        server=ServerConfig("127.0.0.1", 8080, "Asia/Shanghai", "/healthz", None, timedelta(seconds=1)),
+        server=ServerConfig(
+            "127.0.0.1", 8080, "Asia/Shanghai", "/healthz", None, timedelta(seconds=1)
+        ),
         cache=CacheConfig(tmp_path, 2, 0o600, timedelta(days=7)),
         logging_console=LoggingSinkConfig(True, "INFO", True),
         logging_file=LoggingSinkConfig(False, "DEBUG"),
         http=HttpConfig(timedelta(seconds=30), "ua", 1024, 3),
-        scheduler=SchedulerConfig(startup_refresh, startup_refresh_mode, timedelta(seconds=0), timedelta(seconds=1)),
+        scheduler=SchedulerConfig(
+            startup_refresh,
+            startup_refresh_mode,
+            timedelta(seconds=0),
+            timedelta(seconds=1),
+        ),
         security=SecurityConfig(128, False),
         parser=ParserConfig("auto", "skip"),
         output=OutputConfig(False, False),
         sources={"airport_a": source},
-        routes={"phone": RouteConfig("phone", "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml", ("airport_a",), False, RouteOutputConfig(), RenameConfig(), FilterConfig())},
+        routes={
+            "phone": RouteConfig(
+                "phone",
+                "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml",
+                ("airport_a",),
+                False,
+                RouteOutputConfig(),
+                RenameConfig(),
+                FilterConfig(),
+            )
+        },
         plugins={},
     )
 
@@ -118,7 +137,9 @@ async def test_scheduler_startup_refresh_can_be_disabled(tmp_path) -> None:
     Test that the scheduler startup refresh can be disabled.
     """
     refresher = FakeRefresher()
-    scheduler = RefreshScheduler(scheduler_config(tmp_path, startup_refresh=False), refresher)
+    scheduler = RefreshScheduler(
+        scheduler_config(tmp_path, startup_refresh=False), refresher
+    )
 
     await scheduler.start()
     await scheduler.stop()
@@ -133,7 +154,9 @@ async def test_scheduler_background_startup_refreshes_sources(tmp_path) -> None:
     Test that the scheduler performs background startup refresh for all sources.
     """
     refresher = FakeRefresher()
-    scheduler = RefreshScheduler(scheduler_config(tmp_path, startup_refresh_mode="background"), refresher)
+    scheduler = RefreshScheduler(
+        scheduler_config(tmp_path, startup_refresh_mode="background"), refresher
+    )
 
     await scheduler.start()
     await asyncio.wait_for(refresher.done.wait(), timeout=1.0)
@@ -174,7 +197,9 @@ async def test_scheduler_background_startup_cancellation_is_handled(tmp_path) ->
     Test that the scheduler handles background startup cancellation correctly.
     """
     refresher = BlockRefresher()
-    scheduler = RefreshScheduler(scheduler_config(tmp_path, startup_refresh_mode="background"), refresher)
+    scheduler = RefreshScheduler(
+        scheduler_config(tmp_path, startup_refresh_mode="background"), refresher
+    )
 
     await scheduler.start()
     await refresher.started.wait()
@@ -247,7 +272,9 @@ async def test_scheduler_interval_preserves_base_despite_jitter(tmp_path) -> Non
     await asyncio.wait_for(refresher.done.wait(), timeout=2.0)
     await scheduler.stop()
 
-    intervals = [b - a for a, b in zip(refresher.timestamps[:-1], refresher.timestamps[1:])]
+    intervals = [
+        b - a for a, b in zip(refresher.timestamps[:-1], refresher.timestamps[1:])
+    ]
     # Jitter is applied as a positive offset in [0, jitter], so individual
     # intervals vary around the base interval by up to the jitter magnitude.
     assert all(0.05 <= iv <= 0.15 for iv in intervals), intervals
@@ -329,6 +356,7 @@ async def test_scheduler_start_failure_stops_pending_tasks(tmp_path) -> None:
 
     Test that the scheduler stops pending tasks when start fails.
     """
+
     class RaiseOnStartRefresher:
         """启动时抛出异常的模拟刷新器。
 

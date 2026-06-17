@@ -28,7 +28,8 @@ def config_file(tmp_path):
         Path: 配置文件路径 / Config file path.
     """
     path = tmp_path / "config.toml"
-    path.write_text(f'''
+    path.write_text(
+        f'''
 [server]
 health_path = "/healthz"
 status_path = "/s/X6HfeBRQz6xqk9S4dTV7gQwL2nP8aYcM"
@@ -47,7 +48,9 @@ interval = "1h"
 [routes.phone]
 path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml"
 sources = ["airport_a"]
-''', encoding="utf-8")
+''',
+        encoding="utf-8",
+    )
     return path
 
 
@@ -163,7 +166,12 @@ def test_health_and_unknown_path(tmp_path) -> None:
     Test that health check and unknown paths return correct status codes.
     """
     config = load_config(config_file(tmp_path))
-    app = create_app(config, cache_store=JsonSourceCacheStore(config.cache), refresher=None, scheduler=None)
+    app = create_app(
+        config,
+        cache_store=JsonSourceCacheStore(config.cache),
+        refresher=None,
+        scheduler=None,
+    )
 
     with TestClient(app) as client:
         assert client.get("/healthz").status_code == 200
@@ -334,7 +342,9 @@ class RaisingRefresher:
 
 
 @pytest.mark.asyncio
-async def test_provider_serves_stale_cache_and_logs_background_refresh_exception(tmp_path, monkeypatch) -> None:
+async def test_provider_serves_stale_cache_and_logs_background_refresh_exception(
+    tmp_path, monkeypatch
+) -> None:
     """测试提供者在后台刷新异常时提供旧缓存并记录警告。
 
     Test that the provider serves stale cache and logs a warning on background refresh exception.
@@ -342,7 +352,9 @@ async def test_provider_serves_stale_cache_and_logs_background_refresh_exception
     from mihomo_proxy_manager import app as app_module
 
     warnings: list[str] = []
-    monkeypatch.setattr(app_module.logger, "warning", lambda msg, **kwargs: warnings.append(msg))
+    monkeypatch.setattr(
+        app_module.logger, "warning", lambda msg, **kwargs: warnings.append(msg)
+    )
 
     config = load_config(config_file(tmp_path))
     store = JsonSourceCacheStore(config.cache)
@@ -375,7 +387,9 @@ async def test_provider_serves_stale_cache_and_logs_background_refresh_exception
 
 
 @pytest.mark.asyncio
-async def test_provider_logs_awaited_refresh_exception_and_returns_503(tmp_path, monkeypatch) -> None:
+async def test_provider_logs_awaited_refresh_exception_and_returns_503(
+    tmp_path, monkeypatch
+) -> None:
     """测试提供者在等待刷新异常时记录警告并返回 503。
 
     Test that the provider logs a warning and returns 503 on awaited refresh exception.
@@ -383,7 +397,9 @@ async def test_provider_logs_awaited_refresh_exception_and_returns_503(tmp_path,
     from mihomo_proxy_manager import app as app_module
 
     warnings: list[str] = []
-    monkeypatch.setattr(app_module.logger, "warning", lambda msg, **kwargs: warnings.append(msg))
+    monkeypatch.setattr(
+        app_module.logger, "warning", lambda msg, **kwargs: warnings.append(msg)
+    )
 
     config = load_config(config_file(tmp_path))
     store = JsonSourceCacheStore(config.cache)
@@ -436,7 +452,12 @@ def test_lifespan_stops_scheduler_when_startup_fails(tmp_path) -> None:
     """
     config = load_config(config_file(tmp_path))
     scheduler = FailingScheduler()
-    app = create_app(config, cache_store=JsonSourceCacheStore(config.cache), refresher=None, scheduler=scheduler)
+    app = create_app(
+        config,
+        cache_store=JsonSourceCacheStore(config.cache),
+        refresher=None,
+        scheduler=scheduler,
+    )
 
     with pytest.raises(RuntimeError):
         with TestClient(app):

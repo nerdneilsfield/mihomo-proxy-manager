@@ -16,6 +16,7 @@ class SecurityError(ValueError):
 
     Security-related error for URL check failures and similar cases.
     """
+
     pass
 
 
@@ -192,7 +193,9 @@ def _parse_ip_literal(host: str) -> _IpAddress | None:
 _BASE64URL_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
-def assert_safe_url(url: str, *, allow_private_network: bool, resolve_dns: bool = True) -> None:
+def assert_safe_url(
+    url: str, *, allow_private_network: bool, resolve_dns: bool = True
+) -> None:
     """验证 URL 是否安全，防止 SSRF 攻击。
 
     Assert that a URL is safe, preventing SSRF attacks.

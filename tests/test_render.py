@@ -5,7 +5,13 @@ YAML renderer tests including renaming, deduplication, and meta comments.
 
 import yaml
 
-from mihomo_proxy_manager.models import ProxyRecord, RenameConfig, FilterConfig, RouteConfig, RouteOutputConfig
+from mihomo_proxy_manager.models import (
+    ProxyRecord,
+    RenameConfig,
+    FilterConfig,
+    RouteConfig,
+    RouteOutputConfig,
+)
 from mihomo_proxy_manager.render import ProviderRenderer
 
 
@@ -36,7 +42,19 @@ def test_provider_renderer_preserves_fields_and_strips_internal_metadata() -> No
     renderer = ProviderRenderer(yaml_sort_keys=False)
     body = renderer.render_sync(
         route(),
-        [ProxyRecord("airport_a", {"name": "HK:01", "type": "vmess", "server": "example.com", "port": 443, "uuid": "id", "cipher": "auto"})],
+        [
+            ProxyRecord(
+                "airport_a",
+                {
+                    "name": "HK:01",
+                    "type": "vmess",
+                    "server": "example.com",
+                    "port": 443,
+                    "uuid": "id",
+                    "cipher": "auto",
+                },
+            )
+        ],
     )
 
     loaded = yaml.safe_load(body)

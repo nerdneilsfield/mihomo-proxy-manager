@@ -37,7 +37,9 @@ def test_filters_by_name_and_type() -> None:
     """
     result = apply_transform(
         records(),
-        filter_config=FilterConfig(include="HK|JP", exclude="官网", exclude_types=("http",)),
+        filter_config=FilterConfig(
+            include="HK|JP", exclude="官网", exclude_types=("http",)
+        ),
         rename_config=RenameConfig(),
     )
 

@@ -117,7 +117,9 @@ def parse_file_mode(value: str | int) -> int:
         return value
     s = str(value).strip()
     try:
-        if s.startswith(("0o", "0O")) or (len(s) > 1 and s.startswith("0") and s.isdigit()):
+        if s.startswith(("0o", "0O")) or (
+            len(s) > 1 and s.startswith("0") and s.isdigit()
+        ):
             return int(s, 8)
         return int(s)
     except ValueError as exc:
@@ -176,7 +178,9 @@ def _rename(data: dict[str, Any]) -> RenameConfig:
     return RenameConfig(prefix=data.get("prefix", ""), suffix=data.get("suffix", ""))
 
 
-def _fetch(data: dict[str, Any], http: HttpConfig, security: SecurityConfig) -> FetchConfig:
+def _fetch(
+    data: dict[str, Any], http: HttpConfig, security: SecurityConfig
+) -> FetchConfig:
     """从原始字典构建 FetchConfig。
 
     Build a FetchConfig from a raw dictionary.
@@ -194,10 +198,14 @@ def _fetch(data: dict[str, Any], http: HttpConfig, security: SecurityConfig) -> 
     """
     headers = _table(data, "headers")
     return FetchConfig(
-        timeout=parse_duration(data.get("timeout", f"{int(http.timeout.total_seconds())}s")),
+        timeout=parse_duration(
+            data.get("timeout", f"{int(http.timeout.total_seconds())}s")
+        ),
         user_agent=data.get("user_agent", http.user_agent),
         headers={str(k): str(v) for k, v in headers.items()},
-        allow_private_network=bool(data.get("allow_private_network", security.allow_private_network_urls)),
+        allow_private_network=bool(
+            data.get("allow_private_network", security.allow_private_network_urls)
+        ),
     )
 
 
@@ -289,42 +297,68 @@ class LoadedConfig(AppConfig):
             self.server.status_path,
             min_bits=self.security.hidden_path_min_entropy_bits,
         ):
-            errors.append("status_path does not satisfy hidden path entropy requirement")
+            errors.append(
+                "status_path does not satisfy hidden path entropy requirement"
+            )
         for route in self.routes.values():
             if not route.path.startswith("/"):
                 errors.append(f"route {route.name!r} path must start with '/'")
-            if not has_path_entropy(route.path, min_bits=self.security.hidden_path_min_entropy_bits):
-                errors.append(f"route {route.name!r} path does not satisfy hidden path entropy requirement")
+            if not has_path_entropy(
+                route.path, min_bits=self.security.hidden_path_min_entropy_bits
+            ):
+                errors.append(
+                    f"route {route.name!r} path does not satisfy hidden path entropy requirement"
+                )
             key = f"route {route.name!r}"
             if route.path in paths:
                 errors.append(f"path collision for {key} with {paths[route.path]}")
             paths[route.path] = key
             for source in route.sources:
                 if source not in self.sources:
-                    errors.append(f"route {route.name!r} references missing source {source!r}")
-            for pattern_name, pattern in (("include", route.filter.include), ("exclude", route.filter.exclude)):
+                    errors.append(
+                        f"route {route.name!r} references missing source {source!r}"
+                    )
+            for pattern_name, pattern in (
+                ("include", route.filter.include),
+                ("exclude", route.filter.exclude),
+            ):
                 if pattern:
                     try:
                         re.compile(pattern)
                     except re.error as exc:
-                        errors.append(f"route {route.name!r} {pattern_name} regex is invalid: {exc}")
+                        errors.append(
+                            f"route {route.name!r} {pattern_name} regex is invalid: {exc}"
+                        )
             if route.output.format != "provider":
-                errors.append(f"route {route.name!r} output format is unsupported: {route.output.format!r}")
+                errors.append(
+                    f"route {route.name!r} output format is unsupported: {route.output.format!r}"
+                )
 
         for source in self.sources.values():
             if source.format not in {"auto", "yaml", "share-links"}:
-                errors.append(f"source {source.name!r} format is unsupported: {source.format!r}")
+                errors.append(
+                    f"source {source.name!r} format is unsupported: {source.format!r}"
+                )
             if source.parse_error not in {"skip", "fail"}:
-                errors.append(f"source {source.name!r} parse_error is unsupported: {source.parse_error!r}")
-            for pattern_name, pattern in (("include", source.filter.include), ("exclude", source.filter.exclude)):
+                errors.append(
+                    f"source {source.name!r} parse_error is unsupported: {source.parse_error!r}"
+                )
+            for pattern_name, pattern in (
+                ("include", source.filter.include),
+                ("exclude", source.filter.exclude),
+            ):
                 if pattern:
                     try:
                         re.compile(pattern)
                     except re.error as exc:
-                        errors.append(f"source {source.name!r} {pattern_name} regex is invalid: {exc}")
+                        errors.append(
+                            f"source {source.name!r} {pattern_name} regex is invalid: {exc}"
+                        )
             for plugin_name, ref in source.plugins.before_fetch.items():
                 if plugin_name not in self.plugins:
-                    errors.append(f"source {source.name!r} references missing plugin {plugin_name!r}")
+                    errors.append(
+                        f"source {source.name!r} references missing plugin {plugin_name!r}"
+                    )
                 if ref.on_failure not in {"abort", "continue"}:
                     errors.append(
                         f"source {source.name!r} plugin ref {plugin_name!r} "
@@ -332,23 +366,35 @@ class LoadedConfig(AppConfig):
                     )
             for expr in source.refresh.cron:
                 if not croniter.is_valid(expr):
-                    errors.append(f"source {source.name!r} cron expression is invalid: {expr!r}")
+                    errors.append(
+                        f"source {source.name!r} cron expression is invalid: {expr!r}"
+                    )
             if not source.url:
                 errors.append(f"source {source.name!r} URL is required")
             else:
                 try:
-                    assert_safe_url(source.url, allow_private_network=source.fetch.allow_private_network, resolve_dns=False)
+                    assert_safe_url(
+                        source.url,
+                        allow_private_network=source.fetch.allow_private_network,
+                        resolve_dns=False,
+                    )
                 except SecurityError as exc:
                     errors.append(f"source {source.name!r} URL is unsafe: {exc}")
 
         for plugin in self.plugins.values():
             if plugin.type != "http_action":
-                errors.append(f"plugin {plugin.name!r} type is unsupported: {plugin.type!r}")
+                errors.append(
+                    f"plugin {plugin.name!r} type is unsupported: {plugin.type!r}"
+                )
             if not plugin.url:
                 errors.append(f"plugin {plugin.name!r} URL is required")
             else:
                 try:
-                    assert_safe_url(plugin.url, allow_private_network=plugin.allow_private_network, resolve_dns=False)
+                    assert_safe_url(
+                        plugin.url,
+                        allow_private_network=plugin.allow_private_network,
+                        resolve_dns=False,
+                    )
                 except SecurityError as exc:
                     errors.append(f"plugin {plugin.name!r} URL is unsafe: {exc}")
 
@@ -358,7 +404,9 @@ class LoadedConfig(AppConfig):
             errors.append(f"server timezone is invalid: {self.server.timezone!r}")
 
         if self.scheduler.startup_refresh_mode not in {"background", "blocking"}:
-            errors.append(f"startup_refresh_mode is unsupported: {self.scheduler.startup_refresh_mode!r}")
+            errors.append(
+                f"startup_refresh_mode is unsupported: {self.scheduler.startup_refresh_mode!r}"
+            )
 
         self.cache.dir.mkdir(parents=True, exist_ok=True)
         if not os.access(self.cache.dir, os.W_OK):
@@ -366,7 +414,9 @@ class LoadedConfig(AppConfig):
         if self.logging_file.enabled and self.logging_file.path:
             self.logging_file.path.parent.mkdir(parents=True, exist_ok=True)
             if not os.access(self.logging_file.path.parent, os.W_OK):
-                errors.append(f"log directory is not writable: {self.logging_file.path.parent}")
+                errors.append(
+                    f"log directory is not writable: {self.logging_file.path.parent}"
+                )
 
         if config_path and config_path.exists():
             mode = stat.S_IMODE(config_path.stat().st_mode)
@@ -404,12 +454,25 @@ def load_config(path: Path, *, validate: bool = True) -> LoadedConfig:
     """
     raw = tomllib.loads(path.read_text(encoding="utf-8"))
     allowed_top_level = {
-        "server", "cache", "logging", "http", "scheduler", "security",
-        "parser", "output", "sources", "routes", "plugins",
+        "server",
+        "cache",
+        "logging",
+        "http",
+        "scheduler",
+        "security",
+        "parser",
+        "output",
+        "sources",
+        "routes",
+        "plugins",
     }
     unknown_top_level = sorted(set(raw) - allowed_top_level)
     if unknown_top_level:
-        raise ValueError("\n".join(f"unsupported top-level table {name!r}" for name in unknown_top_level))
+        raise ValueError(
+            "\n".join(
+                f"unsupported top-level table {name!r}" for name in unknown_top_level
+            )
+        )
 
     server_raw = _table(raw, "server")
     cache_raw = _table(raw, "cache")
@@ -441,14 +504,20 @@ def load_config(path: Path, *, validate: bool = True) -> LoadedConfig:
         max_redirects=int(http_raw.get("max_redirects", 3)),
     )
     security = SecurityConfig(
-        hidden_path_min_entropy_bits=int(security_raw.get("hidden_path_min_entropy_bits", 128)),
-        allow_private_network_urls=bool(security_raw.get("allow_private_network_urls", False)),
+        hidden_path_min_entropy_bits=int(
+            security_raw.get("hidden_path_min_entropy_bits", 128)
+        ),
+        allow_private_network_urls=bool(
+            security_raw.get("allow_private_network_urls", False)
+        ),
     )
     scheduler = SchedulerConfig(
         startup_refresh=bool(scheduler_raw.get("startup_refresh", True)),
         startup_refresh_mode=scheduler_raw.get("startup_refresh_mode", "background"),
         jitter=parse_duration(scheduler_raw.get("jitter", "30s")),
-        refresh_lock_timeout=parse_duration(scheduler_raw.get("refresh_lock_timeout", "35s")),
+        refresh_lock_timeout=parse_duration(
+            scheduler_raw.get("refresh_lock_timeout", "35s")
+        ),
     )
     parser = ParserConfig(
         default_format=parser_raw.get("default_format", "auto"),
@@ -456,7 +525,9 @@ def load_config(path: Path, *, validate: bool = True) -> LoadedConfig:
     )
     output = OutputConfig(
         yaml_sort_keys=bool(output_raw.get("yaml_sort_keys", False)),
-        default_include_meta_comments=bool(output_raw.get("default_include_meta_comments", False)),
+        default_include_meta_comments=bool(
+            output_raw.get("default_include_meta_comments", False)
+        ),
     )
     console_raw = _table(logging_raw, "console")
     file_raw = _table(logging_raw, "file")
@@ -486,8 +557,12 @@ def load_config(path: Path, *, validate: bool = True) -> LoadedConfig:
             url=values.get("url", ""),
             headers={str(k): str(v) for k, v in _table(values, "headers").items()},
             success_status=tuple(success_status),
-            timeout=parse_duration(values.get("timeout", f"{int(http.timeout.total_seconds())}s")),
-            allow_private_network=bool(values.get("allow_private_network", security.allow_private_network_urls)),
+            timeout=parse_duration(
+                values.get("timeout", f"{int(http.timeout.total_seconds())}s")
+            ),
+            allow_private_network=bool(
+                values.get("allow_private_network", security.allow_private_network_urls)
+            ),
             body=values.get("body"),
         )
 
@@ -516,7 +591,11 @@ def load_config(path: Path, *, validate: bool = True) -> LoadedConfig:
             require_all_sources=bool(values.get("require_all_sources", False)),
             output=RouteOutputConfig(
                 format=output_values.get("format", "provider"),
-                include_meta_comments=bool(output_values.get("include_meta_comments", output.default_include_meta_comments)),
+                include_meta_comments=bool(
+                    output_values.get(
+                        "include_meta_comments", output.default_include_meta_comments
+                    )
+                ),
             ),
             rename=_rename(_table(values, "rename")),
             filter=_filter(_table(values, "filter")),

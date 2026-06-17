@@ -6,7 +6,11 @@ HTTP fetcher safe redirect, cookie isolation, and size limit tests.
 import httpx
 import pytest
 
-from mihomo_proxy_manager.fetcher import FetchResult, SafeHttpClient, SubscriptionFetcher, _NoOpCookies
+from mihomo_proxy_manager.fetcher import (
+    SafeHttpClient,
+    SubscriptionFetcher,
+    _NoOpCookies,
+)
 from mihomo_proxy_manager.models import FetchConfig, HttpConfig
 
 
@@ -20,13 +24,16 @@ async def test_fetch_sends_conditional_headers() -> None:
     Returns:
         None. 断言 not_modified 为 True / Asserts not_modified is True.
     """
+
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["If-None-Match"] == '"abc"'
         assert request.headers["If-Modified-Since"] == "Wed, 17 Jun 2026 04:00:00 GMT"
         return httpx.Response(304)
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    fetcher = SubscriptionFetcher(client, HttpConfig(__import__("datetime").timedelta(seconds=30), "ua", 1024, 3))
+    fetcher = SubscriptionFetcher(
+        client, HttpConfig(__import__("datetime").timedelta(seconds=30), "ua", 1024, 3)
+    )
     result = await fetcher.fetch(
         "https://93.184.216.34/sub",
         FetchConfig(__import__("datetime").timedelta(seconds=30), "ua", {}, False),
@@ -47,14 +54,20 @@ async def test_fetch_rejects_oversized_response() -> None:
     Returns:
         None. 断言抛出 ValueError / Asserts ValueError is raised.
     """
+
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, content=b"x" * 1025)
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    fetcher = SubscriptionFetcher(client, HttpConfig(__import__("datetime").timedelta(seconds=30), "ua", 1024, 3))
+    fetcher = SubscriptionFetcher(
+        client, HttpConfig(__import__("datetime").timedelta(seconds=30), "ua", 1024, 3)
+    )
 
     with pytest.raises(ValueError):
-        await fetcher.fetch("https://93.184.216.34/sub", FetchConfig(__import__("datetime").timedelta(seconds=30), "ua", {}, False))
+        await fetcher.fetch(
+            "https://93.184.216.34/sub",
+            FetchConfig(__import__("datetime").timedelta(seconds=30), "ua", {}, False),
+        )
 
 
 @pytest.mark.asyncio
@@ -67,14 +80,20 @@ async def test_fetch_revalidates_redirect_target() -> None:
     Returns:
         None. 断言抛出 ValueError / Asserts ValueError is raised.
     """
+
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(302, headers={"Location": "http://127.0.0.1/sub"})
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    fetcher = SubscriptionFetcher(client, HttpConfig(__import__("datetime").timedelta(seconds=30), "ua", 1024, 3))
+    fetcher = SubscriptionFetcher(
+        client, HttpConfig(__import__("datetime").timedelta(seconds=30), "ua", 1024, 3)
+    )
 
     with pytest.raises(ValueError):
-        await fetcher.fetch("https://93.184.216.34/sub", FetchConfig(__import__("datetime").timedelta(seconds=30), "ua", {}, False))
+        await fetcher.fetch(
+            "https://93.184.216.34/sub",
+            FetchConfig(__import__("datetime").timedelta(seconds=30), "ua", {}, False),
+        )
 
 
 @pytest.mark.asyncio
@@ -96,7 +115,9 @@ async def test_redirect_302_rewrites_method_to_get_and_drops_body() -> None:
         return httpx.Response(200)
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    http_config = HttpConfig(__import__("datetime").timedelta(seconds=30), "ua", 1024, 3)
+    http_config = HttpConfig(
+        __import__("datetime").timedelta(seconds=30), "ua", 1024, 3
+    )
     safe = SafeHttpClient(client, http_config)
     response = await safe.request(
         "POST",
@@ -130,7 +151,9 @@ async def test_redirect_307_preserves_method_and_body() -> None:
         return httpx.Response(200)
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    http_config = HttpConfig(__import__("datetime").timedelta(seconds=30), "ua", 1024, 3)
+    http_config = HttpConfig(
+        __import__("datetime").timedelta(seconds=30), "ua", 1024, 3
+    )
     safe = SafeHttpClient(client, http_config)
     response = await safe.request(
         "POST",
@@ -160,13 +183,13 @@ async def test_redirect_cross_origin_strips_sensitive_and_custom_headers() -> No
     async def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request.headers)
         if request.url.host == "93.184.216.34":
-            return httpx.Response(
-                302, headers={"Location": "https://8.8.8.8/done"}
-            )
+            return httpx.Response(302, headers={"Location": "https://8.8.8.8/done"})
         return httpx.Response(200)
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    http_config = HttpConfig(__import__("datetime").timedelta(seconds=30), "ua", 1024, 3)
+    http_config = HttpConfig(
+        __import__("datetime").timedelta(seconds=30), "ua", 1024, 3
+    )
     safe = SafeHttpClient(client, http_config)
     response = await safe.request(
         "GET",
@@ -211,7 +234,9 @@ async def test_redirect_same_origin_preserves_custom_headers() -> None:
         return httpx.Response(200)
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    http_config = HttpConfig(__import__("datetime").timedelta(seconds=30), "ua", 1024, 3)
+    http_config = HttpConfig(
+        __import__("datetime").timedelta(seconds=30), "ua", 1024, 3
+    )
     safe = SafeHttpClient(client, http_config)
     response = await safe.request(
         "GET",
@@ -235,6 +260,7 @@ async def test_fetch_redacts_url_on_http_error() -> None:
     Returns:
         None. 断言异常消息中不包含原始 token / Asserts exception message does not contain the raw token.
     """
+
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500)
 
@@ -277,7 +303,9 @@ async def test_redirect_to_default_port_is_same_origin(tmp_path) -> None:
         return httpx.Response(200)
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    http_config = HttpConfig(__import__("datetime").timedelta(seconds=30), "ua", 1024, 3)
+    http_config = HttpConfig(
+        __import__("datetime").timedelta(seconds=30), "ua", 1024, 3
+    )
     safe = SafeHttpClient(client, http_config)
     response = await safe.request(
         "GET",
@@ -306,11 +334,17 @@ async def test_shared_client_does_not_leak_cookies() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request.headers)
         if request.url.path == "/a":
-            return httpx.Response(200, headers={"Set-Cookie": "session=TOKEN-FROM-A; Path=/"})
+            return httpx.Response(
+                200, headers={"Set-Cookie": "session=TOKEN-FROM-A; Path=/"}
+            )
         return httpx.Response(200)
 
-    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), cookies=_NoOpCookies())
-    http_config = HttpConfig(__import__("datetime").timedelta(seconds=30), "ua", 1024, 3)
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), cookies=_NoOpCookies()
+    )
+    http_config = HttpConfig(
+        __import__("datetime").timedelta(seconds=30), "ua", 1024, 3
+    )
     safe = SafeHttpClient(client, http_config)
     await safe.request(
         "GET",
@@ -342,13 +376,18 @@ async def test_redirect_body_ignored_without_size_limit() -> None:
     Returns:
         None. 断言最终响应为 200 且内容为 b"ok" / Asserts final response is 200 with content b"ok".
     """
+
     async def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/start":
-            return httpx.Response(302, headers={"Location": "/done"}, content=b"x" * 2048)
+            return httpx.Response(
+                302, headers={"Location": "/done"}, content=b"x" * 2048
+            )
         return httpx.Response(200, content=b"ok")
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    http_config = HttpConfig(__import__("datetime").timedelta(seconds=30), "ua", 1024, 3)
+    http_config = HttpConfig(
+        __import__("datetime").timedelta(seconds=30), "ua", 1024, 3
+    )
     safe = SafeHttpClient(client, http_config)
     response = await safe.request(
         "GET",
@@ -382,7 +421,9 @@ async def test_max_redirects_is_enforced_for_long_chains() -> None:
         return httpx.Response(200, content=b"ok")
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    http_config = HttpConfig(__import__("datetime").timedelta(seconds=30), "ua", 1024, 2)
+    http_config = HttpConfig(
+        __import__("datetime").timedelta(seconds=30), "ua", 1024, 2
+    )
     safe = SafeHttpClient(client, http_config)
 
     with pytest.raises(ValueError, match="too many redirects"):
@@ -407,11 +448,14 @@ async def test_endless_redirect_loop_is_rejected() -> None:
     Returns:
         None. 断言抛出 ValueError / Asserts ValueError is raised.
     """
+
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(302, headers={"Location": "/loop"})
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    http_config = HttpConfig(__import__("datetime").timedelta(seconds=30), "ua", 1024, 3)
+    http_config = HttpConfig(
+        __import__("datetime").timedelta(seconds=30), "ua", 1024, 3
+    )
     safe = SafeHttpClient(client, http_config)
 
     with pytest.raises(ValueError, match="too many redirects"):

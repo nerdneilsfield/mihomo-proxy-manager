@@ -9,7 +9,7 @@ import argparse
 import asyncio
 from pathlib import Path
 
-import httpx
+import httpx2 as httpx
 import uvicorn
 
 from .app import create_app

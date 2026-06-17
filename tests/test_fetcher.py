@@ -3,7 +3,7 @@
 HTTP fetcher safe redirect, cookie isolation, and size limit tests.
 """
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from mihomo_proxy_manager.fetcher import (

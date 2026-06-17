@@ -9,7 +9,7 @@ import http.cookiejar
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
 
-import httpx
+import httpx2 as httpx
 from loguru import logger
 
 from .models import FetchConfig, HttpConfig

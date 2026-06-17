@@ -11,7 +11,7 @@ import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-import httpx
+import httpx2 as httpx
 import pytest
 from starlette.testclient import TestClient
 

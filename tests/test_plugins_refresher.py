@@ -7,7 +7,7 @@ import asyncio
 from datetime import timedelta
 from typing import cast
 
-import httpx
+import httpx2 as httpx
 import pytest
 
 from mihomo_proxy_manager.cache import JsonSourceCacheStore

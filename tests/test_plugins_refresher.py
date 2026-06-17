@@ -1,11 +1,25 @@
+import asyncio
+from datetime import timedelta
+from typing import cast
+
 import httpx
 import pytest
 
-from typing import cast
-
-from mihomo_proxy_manager.models import HttpConfig, PluginConfig
-from mihomo_proxy_manager.fetcher import SafeHttpClient
+from mihomo_proxy_manager.cache import JsonSourceCacheStore
+from mihomo_proxy_manager.fetcher import FetchResult, SafeHttpClient
+from mihomo_proxy_manager.models import (
+    CacheConfig,
+    FetchConfig,
+    FilterConfig,
+    HttpConfig,
+    PluginConfig,
+    RefreshConfig,
+    RenameConfig,
+    SourceConfig,
+    SourcePluginConfig,
+)
 from mihomo_proxy_manager.plugins.http_action import HttpActionPlugin, PluginContext
+from mihomo_proxy_manager.refresher import SourceRefresher
 
 
 @pytest.mark.asyncio
@@ -57,31 +71,6 @@ async def test_http_action_redacts_secrets_in_error_message() -> None:
     assert "token=secret" not in result.message
     assert "token=***" in result.message
 
-import asyncio
-from datetime import UTC, datetime, timedelta
-
-from mihomo_proxy_manager.cache import JsonSourceCacheStore
-from mihomo_proxy_manager.models import (
-    AppConfig,
-    CacheConfig,
-    FetchConfig,
-    FilterConfig,
-    HttpConfig,
-    OutputConfig,
-    ParserConfig,
-    PluginConfig,
-    RefreshConfig,
-    RenameConfig,
-    RouteConfig,
-    RouteOutputConfig,
-    SecurityConfig,
-    ServerConfig,
-    SourceConfig,
-    SourcePluginConfig,
-    ValidationReport,
-)
-from mihomo_proxy_manager.refresher import SourceRefresher
-
 
 class StaticFetcher:
     def __init__(self, body: bytes) -> None:
@@ -89,8 +78,6 @@ class StaticFetcher:
         self.calls = 0
 
     async def fetch(self, *args, **kwargs):
-        from mihomo_proxy_manager.fetcher import FetchResult
-
         self.calls += 1
         return FetchResult(self.body, '"etag"', "Wed, 17 Jun 2026 04:00:00 GMT")
 

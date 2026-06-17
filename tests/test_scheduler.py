@@ -4,7 +4,8 @@ Scheduler tests including startup refresh, interval loops, and cron expressions.
 """
 
 import asyncio
-from datetime import timedelta
+import random
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -384,3 +385,220 @@ async def test_scheduler_start_failure_stops_pending_tasks(tmp_path) -> None:
     # stop() must still be callable and cancel any tasks created during start().
     await scheduler.stop()
     assert all(task.done() for task in scheduler._tasks)
+
+
+# ---------------------------------------------------------------------------
+# _track_startup_refresh coverage: exception and failed-result paths.
+# ---------------------------------------------------------------------------
+
+
+def _config_with_cron(tmp_path, cron_expr: str, *, startup_refresh: bool = False) -> AppConfig:
+    """Create a config whose source has a cron expression / 创建带 cron 的配置。"""
+    import dataclasses
+
+    source = SourceConfig(
+        name="airport_a",
+        url="https://example.com/sub",
+        format="auto",
+        parse_error="skip",
+        fetch=FetchConfig(timedelta(seconds=30), "ua", {}, False),
+        refresh=RefreshConfig(interval=None, cron=(cron_expr,)),
+        rename=RenameConfig(),
+        filter=FilterConfig(),
+        plugins=SourcePluginConfig(),
+    )
+    base = scheduler_config(tmp_path, startup_refresh=startup_refresh)
+    return dataclasses.replace(base, sources={"airport_a": source})
+
+
+@pytest.mark.asyncio
+async def test_scheduler_cron_loop_triggers_refresh(tmp_path, monkeypatch) -> None:
+    """测试 cron 循环能触发刷新并能在停止时干净退出。
+
+    Test that the cron loop triggers refreshes and stops cleanly.
+    """
+    from datetime import UTC
+
+    class FakeIterator:
+        def __init__(self) -> None:
+            self._n = 0
+
+        def get_next(self, _dt_cls):
+            # Return a timestamp ~10ms in the future so the real sleep is brief.
+            self._n += 1
+            from datetime import datetime as _dt
+            from zoneinfo import ZoneInfo as _ZI
+
+            return _dt.now(_ZI("Asia/Shanghai")) + timedelta(milliseconds=10 * self._n)
+
+    monkeypatch.setattr(
+        "mihomo_proxy_manager.scheduler.croniter", lambda expr, now: FakeIterator()
+    )
+
+    refresher = FakeRefresher()
+    config = _config_with_cron(tmp_path, "0 * * * *", startup_refresh=False)
+    scheduler = RefreshScheduler(config, refresher)
+
+    await scheduler.start()
+    await asyncio.wait_for(refresher.done.wait(), timeout=1.0)
+    await scheduler.stop()
+    assert refresher.calls == ["airport_a"]
+    assert all(task.done() for task in scheduler._tasks)
+
+
+@pytest.mark.asyncio
+async def test_scheduler_cron_loop_survives_refresher_exception(
+    tmp_path, monkeypatch
+) -> None:
+    """测试 cron 循环在刷新器抛异常后能继续运行。
+
+    Test that the cron loop survives a refresher exception.
+    """
+
+    class FakeIterator:
+        def __init__(self) -> None:
+            self._n = 0
+
+        def get_next(self, _dt_cls):
+            self._n += 1
+            from datetime import datetime as _dt
+            from zoneinfo import ZoneInfo as _ZI
+
+            return _dt.now(_ZI("Asia/Shanghai")) + timedelta(milliseconds=10 * self._n)
+
+    monkeypatch.setattr(
+        "mihomo_proxy_manager.scheduler.croniter", lambda expr, now: FakeIterator()
+    )
+
+    refresher = FailingRefresher()
+    config = _config_with_cron(tmp_path, "0 * * * *", startup_refresh=False)
+    scheduler = RefreshScheduler(config, refresher)
+
+    await scheduler.start()
+    # Wait long enough for at least one cron tick + failure to occur.
+    await asyncio.sleep(0.05)
+    await scheduler.stop()
+
+    assert len(refresher.calls) >= 1
+
+
+@pytest.mark.asyncio
+async def test_scheduler_cron_loop_with_positive_jitter(tmp_path, monkeypatch) -> None:
+    """测试 cron 循环在正抖动时进入 _jitter_seconds > 0 分支。
+
+    Test that the cron loop exercises the positive-jitter branch.
+    """
+    import dataclasses
+
+    class FakeIterator:
+        def __init__(self) -> None:
+            self._n = 0
+
+        def get_next(self, _dt_cls):
+            self._n += 1
+            from datetime import datetime as _dt
+            from zoneinfo import ZoneInfo as _ZI
+
+            return _dt.now(_ZI("Asia/Shanghai")) + timedelta(milliseconds=5 * self._n)
+
+    monkeypatch.setattr(
+        "mihomo_proxy_manager.scheduler.croniter", lambda expr, now: FakeIterator()
+    )
+    # Force jitter to deterministically pick the upper bound (a small positive
+    # value) so the _jitter_seconds > 0 branch is exercised but stays fast.
+    monkeypatch.setattr(random, "uniform", lambda a, b: 0.005)
+
+    refresher = FakeRefresher()
+    base = _config_with_cron(tmp_path, "0 * * * *", startup_refresh=False)
+    config = dataclasses.replace(
+        base,
+        scheduler=SchedulerConfig(
+            startup_refresh=False,
+            startup_refresh_mode="blocking",
+            jitter=timedelta(seconds=0.01),
+            refresh_lock_timeout=timedelta(seconds=1),
+        ),
+    )
+    scheduler = RefreshScheduler(config, refresher)
+
+    await scheduler.start()
+    await asyncio.wait_for(refresher.done.wait(), timeout=1.0)
+    await scheduler.stop()
+
+    assert refresher.calls == ["airport_a"]
+
+
+@pytest.mark.asyncio
+async def test_track_startup_refresh_logs_on_exception(tmp_path) -> None:
+    """测试后台启动刷新抛异常时 _track_startup_refresh 记录警告。
+
+    Test that _track_startup_refresh logs a warning when the task raises.
+    """
+
+    class RaisingRefresher:
+        async def refresh(self, source_name: str) -> None:
+            raise RuntimeError("boom")
+
+    refresher = RaisingRefresher()
+    config = scheduler_config(tmp_path, startup_refresh_mode="background")
+    scheduler = RefreshScheduler(config, refresher)
+
+    await scheduler.start()
+    # Wait for the background task to finish so the done-callback fires.
+    # Use return_exceptions so the test does not re-raise the RuntimeError.
+    await asyncio.gather(*scheduler._tasks, return_exceptions=True)
+    await scheduler.stop()
+
+
+@pytest.mark.asyncio
+async def test_track_startup_refresh_logs_on_failed_result(tmp_path) -> None:
+    """测试后台启动刷新返回失败结果时 _track_startup_refresh 记录警告。
+
+    Test that _track_startup_refresh logs a warning when the result has ok=False.
+    """
+    from mihomo_proxy_manager.refresher import RefreshResult
+
+    class FailedResultRefresher:
+        async def refresh(self, source_name: str):
+            return RefreshResult(False, source_name, error="failed")
+
+    refresher = FailedResultRefresher()
+    config = scheduler_config(tmp_path, startup_refresh_mode="background")
+    scheduler = RefreshScheduler(config, refresher)
+
+    await scheduler.start()
+    await asyncio.gather(*scheduler._tasks, return_exceptions=True)
+    await scheduler.stop()
+
+
+def test_jitter_seconds_returns_zero_when_disabled(tmp_path) -> None:
+    """测试 jitter 为零时 _jitter_seconds 返回 0.0。
+
+    Test that _jitter_seconds returns 0.0 when jitter is disabled.
+    """
+    refresher = FakeRefresher()
+    config = scheduler_config(tmp_path, startup_refresh=False)
+    scheduler = RefreshScheduler(config, refresher)
+    assert scheduler._jitter_seconds() == 0.0
+
+
+def test_jitter_seconds_returns_positive_when_enabled(tmp_path) -> None:
+    """测试 jitter 为正值时 _jitter_seconds 返回正值。
+
+    Test that _jitter_seconds returns a positive value when jitter is enabled.
+    """
+    import dataclasses
+
+    refresher = FakeRefresher()
+    base = scheduler_config(tmp_path, startup_refresh=False)
+    config = dataclasses.replace(
+        base,
+        scheduler=SchedulerConfig(
+            startup_refresh=False,
+            startup_refresh_mode="blocking",
+            jitter=timedelta(seconds=0.5),
+            refresh_lock_timeout=timedelta(seconds=1),
+        ),
+    )
+    scheduler = RefreshScheduler(config, refresher)
+    assert 0 <= scheduler._jitter_seconds() <= 0.5

@@ -56,3 +56,112 @@ async def test_http_action_redacts_secrets_in_error_message() -> None:
     assert result.message is not None
     assert "token=secret" not in result.message
     assert "token=***" in result.message
+
+import asyncio
+from datetime import UTC, datetime, timedelta
+
+from mihomo_proxy_manager.cache import JsonSourceCacheStore
+from mihomo_proxy_manager.models import (
+    AppConfig,
+    CacheConfig,
+    FetchConfig,
+    FilterConfig,
+    HttpConfig,
+    OutputConfig,
+    ParserConfig,
+    PluginConfig,
+    RefreshConfig,
+    RenameConfig,
+    RouteConfig,
+    RouteOutputConfig,
+    SecurityConfig,
+    ServerConfig,
+    SourceConfig,
+    SourcePluginConfig,
+    ValidationReport,
+)
+from mihomo_proxy_manager.refresher import SourceRefresher
+
+
+class StaticFetcher:
+    def __init__(self, body: bytes) -> None:
+        self.body = body
+        self.calls = 0
+
+    async def fetch(self, *args, **kwargs):
+        from mihomo_proxy_manager.fetcher import FetchResult
+
+        self.calls += 1
+        return FetchResult(self.body, '"etag"', "Wed, 17 Jun 2026 04:00:00 GMT")
+
+
+def source_config() -> SourceConfig:
+    return SourceConfig(
+        name="airport_a",
+        url="https://example.com/sub",
+        format="yaml",
+        parse_error="fail",
+        fetch=FetchConfig(timedelta(seconds=30), "ua", {}, False),
+        refresh=RefreshConfig(),
+        rename=RenameConfig(prefix="[{source}] "),
+        filter=FilterConfig(),
+        plugins=SourcePluginConfig(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_refresher_writes_cache(tmp_path) -> None:
+    body = b'''
+proxies:
+  - name: HK
+    type: vmess
+    server: example.com
+    port: 443
+    uuid: 00000000-0000-0000-0000-000000000000
+    cipher: auto
+'''
+    store = JsonSourceCacheStore(CacheConfig(tmp_path, 2, 0o600, timedelta(days=7)))
+    refresher = SourceRefresher(
+        sources={"airport_a": source_config()},
+        plugins={},
+        cache_store=store,
+        fetcher=StaticFetcher(body),
+        http_plugin=None,
+        refresh_lock_timeout=timedelta(seconds=1),
+    )
+
+    result = await refresher.refresh("airport_a")
+    cache = await store.get("airport_a")
+
+    assert result.ok
+    assert cache is not None
+    assert cache.proxies[0].data["name"] == "[airport_a] HK"
+
+
+@pytest.mark.asyncio
+async def test_refresher_shares_inflight_refresh(tmp_path) -> None:
+    body = b'''
+proxies:
+  - name: HK
+    type: vmess
+    server: example.com
+    port: 443
+    uuid: 00000000-0000-0000-0000-000000000000
+    cipher: auto
+'''
+    store = JsonSourceCacheStore(CacheConfig(tmp_path, 2, 0o600, timedelta(days=7)))
+    fetcher = StaticFetcher(body)
+    refresher = SourceRefresher(
+        sources={"airport_a": source_config()},
+        plugins={},
+        cache_store=store,
+        fetcher=fetcher,
+        http_plugin=None,
+        refresh_lock_timeout=timedelta(seconds=1),
+    )
+
+    first, second = await asyncio.gather(refresher.refresh("airport_a"), refresher.refresh("airport_a"))
+
+    assert first.ok
+    assert second.ok
+    assert fetcher.calls == 1

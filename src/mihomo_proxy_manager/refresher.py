@@ -1,0 +1,150 @@
+from __future__ import annotations
+
+import asyncio
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+from .cache import CURRENT_SCHEMA_VERSION, SourceCacheStore
+from .models import PluginConfig, SourceCache, SourceConfig
+from .parsers import ParseError, parse_subscription
+from .plugins.http_action import HttpActionPlugin, PluginContext
+from .security import redact_secret
+from .transform import apply_transform
+
+
+@dataclass(frozen=True)
+class RefreshResult:
+    ok: bool
+    source: str
+    node_count: int = 0
+    warning_count: int = 0
+    cache_path: str | None = None
+    error: str | None = None
+
+
+class SourceRefresher:
+    def __init__(
+        self,
+        *,
+        sources: dict[str, SourceConfig],
+        plugins: dict[str, PluginConfig],
+        cache_store: SourceCacheStore,
+        fetcher: Any,
+        http_plugin: HttpActionPlugin | None,
+        refresh_lock_timeout: timedelta,
+    ) -> None:
+        self.sources = sources
+        self.plugins = plugins
+        self.cache_store = cache_store
+        self.fetcher = fetcher
+        self.http_plugin = http_plugin
+        self.refresh_lock_timeout = refresh_lock_timeout
+        self._locks: dict[str, asyncio.Lock] = {}
+        self._inflight: dict[str, asyncio.Task[RefreshResult]] = {}
+
+    def _lock(self, source_name: str) -> asyncio.Lock:
+        self._locks.setdefault(source_name, asyncio.Lock())
+        return self._locks[source_name]
+
+    async def refresh(self, source_name: str) -> RefreshResult:
+        existing = self._inflight.get(source_name)
+        if existing is not None and not existing.done():
+            return await asyncio.wait_for(asyncio.shield(existing), timeout=self.refresh_lock_timeout.total_seconds())
+        task = asyncio.create_task(self._refresh_with_lock(source_name))
+        self._inflight[source_name] = task
+        try:
+            return await task
+        finally:
+            if self._inflight.get(source_name) is task:
+                self._inflight.pop(source_name, None)
+
+    async def _refresh_with_lock(self, source_name: str) -> RefreshResult:
+        lock = self._lock(source_name)
+        try:
+            await asyncio.wait_for(lock.acquire(), timeout=self.refresh_lock_timeout.total_seconds())
+        except TimeoutError:
+            return RefreshResult(False, source_name, error="refresh lock timeout")
+        try:
+            return await self._refresh_locked(source_name)
+        finally:
+            lock.release()
+
+    async def _refresh_locked(self, source_name: str) -> RefreshResult:
+        source = self.sources[source_name]
+        now = datetime.now(UTC)
+        self.cache_store.set_refreshing(source_name, True)
+        old_cache = await self.cache_store.get(source_name)
+        try:
+            for plugin_name, ref in source.plugins.before_fetch.items():
+                plugin_config = self.plugins[plugin_name]
+                if self.http_plugin is None:
+                    raise RuntimeError("http plugin runner is not configured")
+                result = await self.http_plugin.run(PluginContext(source_name, plugin_config))
+                if not result.ok and ref.on_failure == "abort":
+                    raise RuntimeError(result.message or f"plugin {plugin_name} failed")
+
+            fetched = await self.fetcher.fetch(
+                source.url,
+                source.fetch,
+                etag=old_cache.etag if old_cache else None,
+                last_modified=old_cache.last_modified if old_cache else None,
+            )
+            if fetched.not_modified and old_cache:
+                cache = SourceCache(
+                    source=source_name,
+                    schema_version=CURRENT_SCHEMA_VERSION,
+                    last_attempt_at=now,
+                    last_success_at=now,
+                    etag=old_cache.etag,
+                    last_modified=old_cache.last_modified,
+                    node_count=old_cache.node_count,
+                    warnings=old_cache.warnings,
+                    last_error=None,
+                    proxies=old_cache.proxies,
+                )
+                await self.cache_store.set(source_name, cache)
+                return RefreshResult(True, source_name, old_cache.node_count, len(old_cache.warnings), self.cache_store.cache_path(source_name))
+
+            parsed = parse_subscription(
+                fetched.body or b"",
+                source=source_name,
+                fmt=source.format,
+                parse_error=source.parse_error,
+            )
+            transformed = apply_transform(parsed.records, filter_config=source.filter, rename_config=source.rename)
+            if not transformed:
+                raise ParseError("no usable proxies after source transform")
+            cache = SourceCache(
+                source=source_name,
+                schema_version=CURRENT_SCHEMA_VERSION,
+                last_attempt_at=now,
+                last_success_at=now,
+                etag=fetched.etag,
+                last_modified=fetched.last_modified,
+                node_count=len(transformed),
+                warnings=tuple(parsed.warnings),
+                last_error=None,
+                proxies=tuple(transformed),
+            )
+            await self.cache_store.set(source_name, cache)
+            return RefreshResult(True, source_name, len(transformed), len(parsed.warnings), self.cache_store.cache_path(source_name))
+        except Exception as exc:
+            redacted_error = redact_secret(str(exc))
+            if old_cache:
+                failed = SourceCache(
+                    source=source_name,
+                    schema_version=CURRENT_SCHEMA_VERSION,
+                    last_attempt_at=now,
+                    last_success_at=old_cache.last_success_at,
+                    etag=old_cache.etag,
+                    last_modified=old_cache.last_modified,
+                    node_count=old_cache.node_count,
+                    warnings=old_cache.warnings,
+                    last_error=redacted_error,
+                    proxies=old_cache.proxies,
+                )
+                await self.cache_store.set(source_name, failed)
+            return RefreshResult(False, source_name, cache_path=self.cache_store.cache_path(source_name), error=redacted_error)
+        finally:
+            self.cache_store.set_refreshing(source_name, False)

@@ -23,14 +23,25 @@ def _collect_secret_values(config: AppConfig) -> list[str]:
     for plugin in config.plugins.values():
         secrets.append(plugin.url)
         secrets.extend(plugin.headers.values())
+        if isinstance(plugin.body, str):
+            secrets.append(plugin.body)
     return [secret for secret in secrets if secret]
+
+
+def _redact_value(value: object, secrets: list[str]) -> object:
+    if isinstance(value, str):
+        return redact_secret(value, extra_secrets=secrets)
+    if isinstance(value, dict):
+        return {key: _redact_value(nested, secrets) for key, nested in value.items()}
+    if isinstance(value, list):
+        return [_redact_value(item, secrets) for item in value]
+    return value
 
 
 def _redact_record(record: "Record", secrets: list[str]) -> None:
     record["message"] = redact_secret(str(record["message"]), extra_secrets=secrets)
     for key, value in list(record["extra"].items()):
-        if isinstance(value, str):
-            record["extra"][key] = redact_secret(value, extra_secrets=secrets)
+        record["extra"][key] = _redact_value(value, secrets)
 
 
 def configure_logging(config: AppConfig) -> None:

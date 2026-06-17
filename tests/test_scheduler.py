@@ -1,3 +1,4 @@
+import asyncio
 from datetime import timedelta
 
 import pytest
@@ -27,9 +28,11 @@ from mihomo_proxy_manager.scheduler import RefreshScheduler
 class FakeRefresher:
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.done = asyncio.Event()
 
     async def refresh(self, source_name: str):
         self.calls.append(source_name)
+        self.done.set()
 
 
 def scheduler_config(tmp_path, *, startup_refresh=True, startup_refresh_mode="blocking") -> AppConfig:
@@ -80,3 +83,36 @@ async def test_scheduler_startup_refresh_can_be_disabled(tmp_path) -> None:
     await scheduler.stop()
 
     assert refresher.calls == []
+
+
+@pytest.mark.asyncio
+async def test_scheduler_background_startup_refreshes_sources(tmp_path) -> None:
+    refresher = FakeRefresher()
+    scheduler = RefreshScheduler(scheduler_config(tmp_path, startup_refresh_mode="background"), refresher)
+
+    await scheduler.start()
+    await asyncio.wait_for(refresher.done.wait(), timeout=1.0)
+    await scheduler.stop()
+
+    assert refresher.calls == ["airport_a"]
+
+
+class BlockRefresher:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+
+    async def refresh(self, source_name: str) -> None:
+        self.started.set()
+        await asyncio.Event().wait()
+
+
+@pytest.mark.asyncio
+async def test_scheduler_background_startup_cancellation_is_handled(tmp_path) -> None:
+    refresher = BlockRefresher()
+    scheduler = RefreshScheduler(scheduler_config(tmp_path, startup_refresh_mode="background"), refresher)
+
+    await scheduler.start()
+    await refresher.started.wait()
+    await scheduler.stop()
+
+    # stop() must complete without propagating the CancelledError from the pending refresh.

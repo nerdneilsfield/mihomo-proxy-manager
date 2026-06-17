@@ -121,12 +121,9 @@ def _source_plugins(data: dict[str, Any]) -> SourcePluginConfig:
     before_fetch_table = _table(data, "before_fetch")
     before_fetch = {}
     for name, values in before_fetch_table.items():
+        # Validation of on_failure values is deferred to LoadedConfig.validate()
+        # so that all enum errors can be collected in a single report.
         on_failure = values.get("on_failure", "abort")
-        if on_failure not in {"abort", "continue"}:
-            raise ValueError(
-                f"invalid on_failure {on_failure!r} for plugin ref {name!r}; "
-                "must be 'abort' or 'continue'"
-            )
         before_fetch[name] = PluginRefConfig(on_failure=on_failure)
     return SourcePluginConfig(before_fetch=before_fetch)
 
@@ -178,9 +175,14 @@ class LoadedConfig(AppConfig):
                         re.compile(pattern)
                     except re.error as exc:
                         errors.append(f"source {source.name!r} {pattern_name} regex is invalid: {exc}")
-            for plugin_name in source.plugins.before_fetch:
+            for plugin_name, ref in source.plugins.before_fetch.items():
                 if plugin_name not in self.plugins:
                     errors.append(f"source {source.name!r} references missing plugin {plugin_name!r}")
+                if ref.on_failure not in {"abort", "continue"}:
+                    errors.append(
+                        f"source {source.name!r} plugin ref {plugin_name!r} "
+                        f"has invalid on_failure {ref.on_failure!r}; must be 'abort' or 'continue'"
+                    )
             for expr in source.refresh.cron:
                 if not croniter.is_valid(expr):
                     errors.append(f"source {source.name!r} cron expression is invalid: {expr!r}")

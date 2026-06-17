@@ -34,10 +34,31 @@ class FetchResult:
     not_modified: bool = False
 
 
+class _NoOpCookies(httpx.Cookies):
+    """Cookie jar that never stores or sends cookies.
+
+    httpx.AsyncClient keeps a shared cookie jar by default. Setting
+    ``cookies=None`` only starts with an empty jar; Set-Cookie responses still
+    populate it and the stored cookies are sent on later matching-host
+    requests. Replacing the client's jar with this no-op subclass isolates
+    every request from every other request.
+    """
+
+    def extract_cookies(self, response: httpx.Response) -> None:
+        return
+
+    def set_cookie_header(self, request: httpx.Request) -> None:
+        return
+
+
 class SafeHttpClient:
     def __init__(self, client: httpx.AsyncClient, http_config: HttpConfig) -> None:
         self.client = client
         self.http_config = http_config
+        # Disable the shared cookie jar for all requests made through this
+        # client. We set the private backing attribute because the public
+        # ``cookies`` setter normalizes any value back to httpx.Cookies.
+        client._cookies = _NoOpCookies()
 
     async def request(
         self,

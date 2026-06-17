@@ -221,7 +221,7 @@ async def test_shared_client_does_not_leak_cookies() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request.headers)
         if request.url.path == "/a":
-            return httpx.Response(200, headers={"Set-Cookie": "session=secret; Path=/"})
+            return httpx.Response(200, headers={"Set-Cookie": "session=TOKEN-FROM-A; Path=/"})
         return httpx.Response(200)
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler), cookies=None)
@@ -234,9 +234,11 @@ async def test_shared_client_does_not_leak_cookies() -> None:
         timeout=30.0,
         allow_private_network=False,
     )
+    # Same host, different path: the shared client cookie jar would send the
+    # cookie set by source A on the request to source B.
     await safe.request(
         "GET",
-        "https://8.8.8.8/b",
+        "https://93.184.216.34/b",
         headers={},
         timeout=30.0,
         allow_private_network=False,

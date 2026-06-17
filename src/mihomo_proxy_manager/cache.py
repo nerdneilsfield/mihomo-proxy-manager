@@ -123,10 +123,20 @@ class JsonSourceCacheStore:
             refreshing=source_name in self._refreshing,
         )
 
+    def _cleanup_stale_tmp_for_source(self, source_name: str) -> None:
+        """Remove orphaned .json.tmp files for a source if they are very stale."""
+        tmp = self._path(source_name).with_suffix(".json.tmp")
+        try:
+            if tmp.exists() and time.time() - tmp.stat().st_mtime > 300:
+                tmp.unlink()
+        except FileNotFoundError:
+            pass
+
     def _read_or_miss(self, source_name: str, path: Path) -> tuple[SourceCache | None, float | None]:
         try:
             lock = FileLock(str(self._lock_path(source_name)))
             with lock:
+                self._cleanup_stale_tmp_for_source(source_name)
                 if not path.exists():
                     return None, None
                 mtime = path.stat().st_mtime

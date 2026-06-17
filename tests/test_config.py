@@ -171,5 +171,10 @@ on_failure = "panic"
 [plugins.turn_on]
 url = "https://example.com/action"
 """
-    with pytest.raises(ValueError, match="on_failure"):
-        load_config(write_config(temp_config_path, body), validate=False)
+    config = load_config(write_config(temp_config_path, body), validate=False)
+    report = config.validate(config_path=temp_config_path)
+
+    assert not report.ok
+    joined = "\n".join(report.errors)
+    assert "on_failure" in joined
+    assert "'panic'" in joined

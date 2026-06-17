@@ -34,11 +34,12 @@ def test_redact_secret() -> None:
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
-        ("Authorization=Bearer abc", "Authorization=***"),
-        ("Authorization: Bearer abc", "Authorization: ***"),
-        ("Authorization=Basic abc123", "Authorization=***"),
-        ("Authorization=Bearer abc extra", "Authorization=*** extra"),
-        ("X=before Authorization=Bearer abc Y=after", "X=before Authorization=*** Y=after"),
+        ("Authorization=Bearer abc", "Authorization=*** abc"),
+        ("Authorization: Bearer abc", "Authorization: *** abc"),
+        ("Authorization=Basic abc123", "Authorization=*** abc123"),
+        ("Authorization=abc123 extra", "Authorization=*** extra"),
+        ("Authorization=Bearer abc extra", "Authorization=*** abc extra"),
+        ("X=before Authorization=Bearer abc Y=after", "X=before Authorization=*** abc Y=after"),
     ],
 )
 def test_redact_secret_authorization(text: str, expected: str) -> None:

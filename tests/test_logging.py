@@ -1,4 +1,11 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, cast
+
 from mihomo_proxy_manager.logging import _redact_record
+
+if TYPE_CHECKING:
+    from loguru import Record
 
 
 def test_log_record_redaction_covers_message_and_extra() -> None:
@@ -8,7 +15,7 @@ def test_log_record_redaction_covers_message_and_extra() -> None:
         "extra": {"url": "https://x.test/sub?token=secret", "path": secret_path},
     }
 
-    _redact_record(record, [secret_path])
+    _redact_record(cast("Record", record), [secret_path])
 
     rendered = str(record)
     assert "CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL" not in rendered

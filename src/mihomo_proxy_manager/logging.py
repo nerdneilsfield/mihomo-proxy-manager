@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import sys
+from typing import TYPE_CHECKING
 
 from loguru import logger
 
 from .models import AppConfig
 from .security import redact_secret
+
+if TYPE_CHECKING:
+    from loguru import Record
 
 
 def _collect_secret_values(config: AppConfig) -> list[str]:
@@ -22,7 +26,7 @@ def _collect_secret_values(config: AppConfig) -> list[str]:
     return [secret for secret in secrets if secret]
 
 
-def _redact_record(record: dict, secrets: list[str]) -> None:
+def _redact_record(record: "Record", secrets: list[str]) -> None:
     record["message"] = redact_secret(str(record["message"]), extra_secrets=secrets)
     for key, value in list(record["extra"].items()):
         if isinstance(value, str):

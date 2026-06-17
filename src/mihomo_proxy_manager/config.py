@@ -408,6 +408,28 @@ class LoadedConfig(AppConfig):
                 f"startup_refresh_mode is unsupported: {self.scheduler.startup_refresh_mode!r}"
             )
 
+        # Directory creation / writability checks are deferred to load_config()
+        # so that validate() stays side-effect free (mpm check should not
+        # mutate the filesystem).
+
+        if config_path and config_path.exists():
+            mode = stat.S_IMODE(config_path.stat().st_mode)
+            if mode & (stat.S_IRGRP | stat.S_IROTH):
+                warnings.append("config file is group/world-readable; use chmod 600")
+
+        return ValidationReport(errors=errors, warnings=warnings)
+
+    def check_filesystem(self) -> list[str]:
+        """检查并创建运行时所需的目录，返回错误列表。
+
+        Check (and create) runtime directories. Returns a list of error
+        strings. This has filesystem side effects and is therefore kept out of
+        :meth:`validate`, which must remain pure for ``mpm check``.
+
+        Returns:
+            目录不可写时的错误列表 / List of errors when directories are not writable.
+        """
+        errors: list[str] = []
         self.cache.dir.mkdir(parents=True, exist_ok=True)
         if not os.access(self.cache.dir, os.W_OK):
             errors.append(f"cache directory is not writable: {self.cache.dir}")
@@ -417,13 +439,7 @@ class LoadedConfig(AppConfig):
                 errors.append(
                     f"log directory is not writable: {self.logging_file.path.parent}"
                 )
-
-        if config_path and config_path.exists():
-            mode = stat.S_IMODE(config_path.stat().st_mode)
-            if mode & (stat.S_IRGRP | stat.S_IROTH):
-                warnings.append("config file is group/world-readable; use chmod 600")
-
-        return ValidationReport(errors=errors, warnings=warnings)
+        return errors
 
 
 def load_config(path: Path, *, validate: bool = True) -> LoadedConfig:
@@ -617,6 +633,8 @@ def load_config(path: Path, *, validate: bool = True) -> LoadedConfig:
     )
     if validate:
         report = config.validate(config_path=path)
-        if not report.ok:
-            raise ValueError("\n".join(report.errors))
+        fs_errors = config.check_filesystem()
+        all_errors = list(report.errors) + fs_errors
+        if all_errors:
+            raise ValueError("\n".join(all_errors))
     return config

@@ -487,6 +487,16 @@ include = "["
     assert "plugin 'turn_on' type is unsupported" in joined
     assert "route 'phone' output format is unsupported" in joined
     assert "route 'phone' include regex is invalid" in joined
+
+
+def test_file_mode_accepts_toml_integer(temp_config_path: Path) -> None:
+    body = minimal_config() + """
+[cache]
+file_mode = 0o600
+"""
+    config = load_config(write_config(temp_config_path, body))
+
+    assert config.cache.file_mode == 0o600
 ```
 
 - [ ] **Step 2: Run config tests and verify they fail**
@@ -780,6 +790,12 @@ def parse_size(value: str) -> int:
     return amount * {"B": 1, "KB": 1024, "MB": 1024 * 1024}[unit]
 
 
+def parse_file_mode(value: str | int) -> int:
+    if isinstance(value, int):
+        return value
+    return int(str(value), 8)
+
+
 def _table(data: dict[str, Any], key: str) -> dict[str, Any]:
     value = data.get(key, {})
     return value if isinstance(value, dict) else {}
@@ -941,7 +957,7 @@ def load_config(path: Path, *, validate: bool = True) -> LoadedConfig:
     cache = CacheConfig(
         dir=Path(cache_raw.get("dir", "data/cache")),
         write_indent=int(cache_raw.get("write_indent", 2)),
-        file_mode=int(str(cache_raw.get("file_mode", "0600")), 8),
+        file_mode=parse_file_mode(cache_raw.get("file_mode", "0600")),
         max_stale=parse_duration(cache_raw.get("max_stale", "7d")),
     )
     http = HttpConfig(
@@ -1400,6 +1416,7 @@ Create `src/mihomo_proxy_manager/transform.py`:
 from __future__ import annotations
 
 import re
+from collections import Counter
 from copy import deepcopy
 
 from .models import FilterConfig, ProxyRecord, RenameConfig
@@ -1452,14 +1469,16 @@ def apply_transform(
 
 
 def repair_duplicate_names(records: list[ProxyRecord]) -> list[ProxyRecord]:
+    remaining_original = Counter(str(record.data.get("name", "")) for record in records)
     used: set[str] = set()
     output: list[ProxyRecord] = []
     for record in records:
         data = deepcopy(record.data)
         base = str(data.get("name", ""))
+        remaining_original[base] -= 1
         candidate = base
         counter = 2
-        while candidate in used:
+        while candidate in used or (candidate != base and remaining_original[candidate] > 0):
             candidate = f"{base} #{counter}"
             counter += 1
         data["name"] = candidate
@@ -1567,12 +1586,52 @@ def test_ss_sip002_share_link() -> None:
     assert proxy["server"] == "example.com"
 
 
+def test_ss_share_link_maps_plugin_options() -> None:
+    body = (
+        b"ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTpzZWNyZXQ@example.com:443"
+        b"?plugin=obfs-local%3Bobfs%3Dhttp%3Bobfs-host%3Dwww.bing.com#SS%2001\\n"
+    )
+    result = parse_subscription(body, source="airport_a", fmt="share-links", parse_error="fail")
+
+    proxy = result.records[0].data
+    assert proxy["plugin"] == "obfs-local"
+    assert proxy["plugin-opts"] == {"obfs": "http", "obfs-host": "www.bing.com"}
+
+
 def test_vless_share_link() -> None:
     body = b"vless://00000000-0000-0000-0000-000000000000@example.com:443?encryption=none&security=tls&sni=example.com#VL%2001\\n"
     result = parse_subscription(body, source="airport_a", fmt="share-links", parse_error="fail")
 
     assert result.records[0].data["type"] == "vless"
     assert result.records[0].data["uuid"] == "00000000-0000-0000-0000-000000000000"
+
+
+def test_vless_share_link_maps_reality_and_transport_options() -> None:
+    body = (
+        b"vless://00000000-0000-0000-0000-000000000000@example.com:443"
+        b"?encryption=none&security=reality&type=tcp&sni=example.com"
+        b"&flow=xtls-rprx-vision&pbk=pubkey&sid=abcd&fp=chrome#VL%2001\\n"
+    )
+    result = parse_subscription(body, source="airport_a", fmt="share-links", parse_error="fail")
+
+    proxy = result.records[0].data
+    assert proxy["network"] == "tcp"
+    assert proxy["tls"] is True
+    assert proxy["reality-opts"] == {"public-key": "pubkey", "short-id": "abcd"}
+    assert proxy["client-fingerprint"] == "chrome"
+    assert proxy["flow"] == "xtls-rprx-vision"
+
+
+def test_trojan_share_link_maps_ws_options() -> None:
+    body = (
+        b"trojan://password@example.com:443"
+        b"?type=ws&sni=example.com&host=cdn.example.com&path=%2Fws#TR%2001\\n"
+    )
+    result = parse_subscription(body, source="airport_a", fmt="share-links", parse_error="fail")
+
+    proxy = result.records[0].data
+    assert proxy["network"] == "ws"
+    assert proxy["ws-opts"] == {"path": "/ws", "headers": {"Host": "cdn.example.com"}}
 
 
 def test_hysteria2_share_link() -> None:
@@ -1708,6 +1767,70 @@ def _name(fragment: str, fallback: str) -> str:
     return unquote(fragment) if fragment else fallback
 
 
+def _query(parsed) -> dict[str, str]:
+    return {key: values[-1] for key, values in parse_qs(parsed.query).items()}
+
+
+def _add_ss_plugin(proxy: dict[str, object], plugin_value: str | None) -> None:
+    if not plugin_value:
+        return
+    parts = [item for item in plugin_value.split(";") if item]
+    if not parts:
+        return
+    proxy["plugin"] = parts[0]
+    opts: dict[str, str] = {}
+    for part in parts[1:]:
+        if "=" in part:
+            key, value = part.split("=", 1)
+            opts[key] = value
+    if opts:
+        proxy["plugin-opts"] = opts
+
+
+def _apply_transport_options(proxy: dict[str, object], query: dict[str, str]) -> None:
+    network = query.get("type") or query.get("network")
+    if network:
+        proxy["network"] = network
+    if "sni" in query:
+        proxy["sni"] = query["sni"]
+        proxy["servername"] = query["sni"]
+    if "alpn" in query:
+        proxy["alpn"] = query["alpn"].split(",")
+    if "security" in query:
+        proxy["security"] = query["security"]
+        if query["security"] in {"tls", "reality"}:
+            proxy["tls"] = True
+    if "flow" in query:
+        proxy["flow"] = query["flow"]
+    if "allowInsecure" in query or "insecure" in query:
+        proxy["skip-cert-verify"] = query.get("allowInsecure", query.get("insecure")) in {"1", "true", "True"}
+
+    public_key = query.get("publicKey") or query.get("pbk")
+    short_id = query.get("shortId") or query.get("sid")
+    if public_key or short_id:
+        opts: dict[str, str] = {}
+        if public_key:
+            opts["public-key"] = public_key
+        if short_id:
+            opts["short-id"] = short_id
+        proxy["reality-opts"] = opts
+
+    fingerprint = query.get("client-fingerprint") or query.get("fingerprint") or query.get("fp")
+    if fingerprint:
+        proxy["client-fingerprint"] = fingerprint
+
+    if proxy.get("network") == "ws":
+        ws_opts: dict[str, object] = {}
+        if "path" in query:
+            ws_opts["path"] = query["path"]
+        if "host" in query:
+            ws_opts["headers"] = {"Host": query["host"]}
+        if ws_opts:
+            proxy["ws-opts"] = ws_opts
+    if proxy.get("network") == "grpc" and "serviceName" in query:
+        proxy["grpc-opts"] = {"grpc-service-name": query["serviceName"]}
+
+
 def _parse_vmess(link: str) -> dict[str, object]:
     raw = link.removeprefix("vmess://")
     data = json.loads(_b64decode(raw))
@@ -1731,6 +1854,7 @@ def _parse_vmess(link: str) -> dict[str, object]:
 
 def _parse_ss(link: str) -> dict[str, object]:
     parsed = urlparse(link)
+    query = _query(parsed)
     if parsed.hostname and parsed.username:
         userinfo = unquote(parsed.username)
         try:
@@ -1738,7 +1862,7 @@ def _parse_ss(link: str) -> dict[str, object]:
         except Exception:
             decoded = userinfo
         cipher, password = decoded.split(":", 1)
-        return {
+        proxy = {
             "name": _name(parsed.fragment, parsed.hostname),
             "type": "ss",
             "server": parsed.hostname,
@@ -1746,12 +1870,14 @@ def _parse_ss(link: str) -> dict[str, object]:
             "cipher": cipher,
             "password": password,
         }
+        _add_ss_plugin(proxy, query.get("plugin"))
+        return proxy
     raw = link.removeprefix("ss://").split("#", 1)[0]
     decoded = _b64decode(raw).decode()
     method_password, endpoint = decoded.rsplit("@", 1)
     cipher, password = method_password.split(":", 1)
     server, port = endpoint.rsplit(":", 1)
-    return {
+    proxy = {
         "name": _name(parsed.fragment, server),
         "type": "ss",
         "server": server,
@@ -1759,13 +1885,15 @@ def _parse_ss(link: str) -> dict[str, object]:
         "cipher": cipher,
         "password": password,
     }
+    _add_ss_plugin(proxy, query.get("plugin"))
+    return proxy
 
 
 def _parse_url_link(link: str) -> dict[str, object]:
     if link.startswith("ss://"):
         return _parse_ss(link)
     parsed = urlparse(link)
-    query = {key: values[-1] for key, values in parse_qs(parsed.query).items()}
+    query = _query(parsed)
     scheme = parsed.scheme.lower()
     proxy_type = "hysteria2" if scheme in {"hysteria2", "hy2"} else scheme
     proxy: dict[str, object] = {
@@ -1784,16 +1912,7 @@ def _parse_url_link(link: str) -> dict[str, object]:
     elif scheme in {"hysteria2", "hy2"}:
         proxy.update({"password": username or password})
 
-    if "sni" in query:
-        proxy["sni"] = query["sni"]
-    if "alpn" in query:
-        proxy["alpn"] = query["alpn"].split(",")
-    if "security" in query:
-        proxy["security"] = query["security"]
-    if "flow" in query:
-        proxy["flow"] = query["flow"]
-    if "allowInsecure" in query or "insecure" in query:
-        proxy["skip-cert-verify"] = query.get("allowInsecure", query.get("insecure")) in {"1", "true", "True"}
+    _apply_transport_options(proxy, query)
     return proxy
 
 
@@ -1920,6 +2039,7 @@ git commit -m "feat: parse mihomo yaml and share links"
 Create `tests/test_cache.py`:
 
 ```python
+import asyncio
 from datetime import UTC, datetime
 
 import pytest
@@ -1959,6 +2079,28 @@ async def test_unknown_schema_version_is_rejected(tmp_path) -> None:
 
     with pytest.raises(ValueError):
         await store.get("airport_a")
+
+
+@pytest.mark.asyncio
+async def test_cache_reloads_when_file_changes_from_another_process(tmp_path) -> None:
+    config = CacheConfig(tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7))
+    server_store = JsonSourceCacheStore(config)
+    cli_store = JsonSourceCacheStore(config)
+    old_cache = SourceCache(
+        "airport_a", 1, datetime(2026, 6, 17, tzinfo=UTC), datetime(2026, 6, 17, tzinfo=UTC),
+        None, None, 1, (), None, (ProxyRecord("airport_a", {"name": "old", "type": "vmess"}),),
+    )
+    new_cache = SourceCache(
+        "airport_a", 1, datetime(2026, 6, 18, tzinfo=UTC), datetime(2026, 6, 18, tzinfo=UTC),
+        None, None, 1, (), None, (ProxyRecord("airport_a", {"name": "new", "type": "vmess"}),),
+    )
+
+    await server_store.set("airport_a", old_cache)
+    assert (await server_store.get("airport_a")).proxies[0].data["name"] == "old"
+    await asyncio.sleep(0.01)
+    await cli_store.set("airport_a", new_cache)
+
+    assert (await server_store.get("airport_a")).proxies[0].data["name"] == "new"
 ```
 
 - [ ] **Step 2: Run cache tests and verify they fail**
@@ -1998,6 +2140,8 @@ class SourceCacheStore(Protocol):
     async def get(self, source_name: str) -> SourceCache | None: ...
     async def set(self, source_name: str, cache: SourceCache) -> None: ...
     async def status(self, source_name: str) -> SourceStatus: ...
+    def set_refreshing(self, source_name: str, refreshing: bool) -> None: ...
+    def cache_path(self, source_name: str) -> str | None: ...
 
 
 def _dt(value: str | None) -> datetime | None:
@@ -2013,6 +2157,7 @@ class JsonSourceCacheStore:
         self.config = config
         self.config.dir.mkdir(parents=True, exist_ok=True)
         self._memory: dict[str, SourceCache] = {}
+        self._memory_mtime: dict[str, float] = {}
         self._refreshing: set[str] = set()
 
     def _path(self, source_name: str) -> Path:
@@ -2023,6 +2168,9 @@ class JsonSourceCacheStore:
         safe_name = quote(source_name, safe="")
         return self.config.dir / f"{safe_name}.lock"
 
+    def cache_path(self, source_name: str) -> str | None:
+        return str(self._path(source_name))
+
     def set_refreshing(self, source_name: str, refreshing: bool) -> None:
         if refreshing:
             self._refreshing.add(source_name)
@@ -2030,18 +2178,23 @@ class JsonSourceCacheStore:
             self._refreshing.discard(source_name)
 
     async def get(self, source_name: str) -> SourceCache | None:
-        if source_name in self._memory:
-            return self._memory[source_name]
         path = self._path(source_name)
         if not path.exists():
+            self._memory.pop(source_name, None)
+            self._memory_mtime.pop(source_name, None)
             return None
+        mtime = path.stat().st_mtime
+        if source_name in self._memory and self._memory_mtime.get(source_name) == mtime:
+            return self._memory[source_name]
         cache = await asyncio.to_thread(self._read_file, path)
         self._memory[source_name] = cache
+        self._memory_mtime[source_name] = mtime
         return cache
 
     async def set(self, source_name: str, cache: SourceCache) -> None:
         await asyncio.to_thread(self._write_file, source_name, cache)
         self._memory[source_name] = cache
+        self._memory_mtime[source_name] = self._path(source_name).stat().st_mtime
 
     async def status(self, source_name: str) -> SourceStatus:
         cache = await self.get(source_name)
@@ -2617,8 +2770,7 @@ class SourceRefresher:
     async def _refresh_locked(self, source_name: str) -> RefreshResult:
         source = self.sources[source_name]
         now = datetime.now(UTC)
-        if hasattr(self.cache_store, "set_refreshing"):
-            self.cache_store.set_refreshing(source_name, True)
+        self.cache_store.set_refreshing(source_name, True)
         old_cache = await self.cache_store.get(source_name)
         try:
             for plugin_name, ref in source.plugins.before_fetch.items():
@@ -2649,7 +2801,7 @@ class SourceRefresher:
                     proxies=old_cache.proxies,
                 )
                 await self.cache_store.set(source_name, cache)
-                return RefreshResult(True, source_name, old_cache.node_count, len(old_cache.warnings), self._cache_path(source_name))
+                return RefreshResult(True, source_name, old_cache.node_count, len(old_cache.warnings), self.cache_store.cache_path(source_name))
 
             parsed = parse_subscription(
                 fetched.body or b"",
@@ -2673,7 +2825,7 @@ class SourceRefresher:
                 proxies=tuple(transformed),
             )
             await self.cache_store.set(source_name, cache)
-            return RefreshResult(True, source_name, len(transformed), len(parsed.warnings), self._cache_path(source_name))
+            return RefreshResult(True, source_name, len(transformed), len(parsed.warnings), self.cache_store.cache_path(source_name))
         except Exception as exc:
             redacted_error = redact_secret(str(exc))
             if old_cache:
@@ -2690,15 +2842,9 @@ class SourceRefresher:
                     proxies=old_cache.proxies,
                 )
                 await self.cache_store.set(source_name, failed)
-            return RefreshResult(False, source_name, cache_path=self._cache_path(source_name), error=redacted_error)
+            return RefreshResult(False, source_name, cache_path=self.cache_store.cache_path(source_name), error=redacted_error)
         finally:
-            if hasattr(self.cache_store, "set_refreshing"):
-                self.cache_store.set_refreshing(source_name, False)
-
-    def _cache_path(self, source_name: str) -> str | None:
-        if hasattr(self.cache_store, "_path"):
-            return str(self.cache_store._path(source_name))
-        return None
+            self.cache_store.set_refreshing(source_name, False)
 ```
 
 - [ ] **Step 4: Run refresher tests**
@@ -2775,7 +2921,7 @@ def test_provider_renderer_repairs_duplicate_names() -> None:
     )
 
     names = [item["name"] for item in yaml.safe_load(body)["proxies"]]
-    assert names == ["[phone] HK", "[phone] HK #2", "[phone] HK #2 #2"]
+    assert names == ["[phone] HK", "[phone] HK #3", "[phone] HK #2"]
 ```
 
 - [ ] **Step 2: Run renderer tests and verify they fail**
@@ -2883,6 +3029,9 @@ max_stale = "7d"
 [sources.airport_a]
 url = "https://example.com/sub"
 
+[sources.airport_a.refresh]
+interval = "1h"
+
 [routes.phone]
 path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml"
 sources = ["airport_a"]
@@ -2963,6 +3112,37 @@ async def test_provider_serves_stale_valid_cache_and_triggers_refresh(tmp_path) 
 
     assert response.status_code == 200
     assert refresher.called == ["airport_a"]
+
+
+@pytest.mark.asyncio
+async def test_provider_uses_last_attempt_to_avoid_refresh_storm(tmp_path) -> None:
+    config = load_config(config_file(tmp_path))
+    store = JsonSourceCacheStore(config.cache)
+    old_success = datetime.now(UTC) - timedelta(hours=2)
+    recent_attempt = datetime.now(UTC)
+    await store.set(
+        "airport_a",
+        SourceCache(
+            "airport_a",
+            1,
+            recent_attempt,
+            old_success,
+            None,
+            None,
+            1,
+            (),
+            "recent failure",
+            (ProxyRecord("airport_a", {"name": "HK", "type": "vmess"}),),
+        ),
+    )
+    refresher = FakeRefresher()
+    app = create_app(config, cache_store=store, refresher=refresher, scheduler=None)
+
+    with TestClient(app) as client:
+        response = client.get("/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml")
+
+    assert response.status_code == 200
+    assert refresher.called == []
 ```
 
 - [ ] **Step 2: Run app tests and verify they fail**
@@ -3015,6 +3195,7 @@ from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
 from croniter import croniter
+from loguru import logger
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route
@@ -3033,17 +3214,34 @@ def _is_due(cache, source: SourceConfig, timezone: str) -> bool:
     if not cache or not cache.last_success_at:
         return True
     now = datetime.now(UTC)
-    if source.refresh.interval and now - cache.last_success_at >= source.refresh.interval:
+    reference = cache.last_attempt_at or cache.last_success_at
+    if source.refresh.interval and now - reference >= source.refresh.interval:
         return True
     if source.refresh.cron:
         tz = ZoneInfo(timezone)
-        last_success = cache.last_success_at.astimezone(tz)
+        last_attempt = reference.astimezone(tz)
         now_tz = now.astimezone(tz)
         for expr in source.refresh.cron:
             previous = croniter(expr, now_tz).get_prev(datetime)
-            if previous > last_success:
+            if previous > last_attempt:
                 return True
     return False
+
+
+def _track_background_refresh(task: asyncio.Task, source_name: str) -> None:
+    try:
+        result = task.result()
+    except asyncio.CancelledError:
+        return
+    except Exception as exc:
+        logger.warning("background refresh failed for source {source}: {error}", source=source_name, error=exc)
+        return
+    if result is not None and not getattr(result, "ok", True):
+        logger.warning(
+            "background refresh failed for source {source}: {error}",
+            source=source_name,
+            error=getattr(result, "error", None),
+        )
 
 
 def create_app(config: AppConfig, *, cache_store: SourceCacheStore, refresher, scheduler) -> Starlette:
@@ -3075,7 +3273,8 @@ def create_app(config: AppConfig, *, cache_store: SourceCacheStore, refresher, s
 
         for source_name in due:
             if refresher is not None:
-                asyncio.create_task(refresher.refresh(source_name))
+                task = asyncio.create_task(refresher.refresh(source_name))
+                task.add_done_callback(lambda item, name=source_name: _track_background_refresh(item, name))
         if due:
             await asyncio.sleep(0)
 
@@ -3091,8 +3290,8 @@ def create_app(config: AppConfig, *, cache_store: SourceCacheStore, refresher, s
                     elif route.require_all_sources:
                         return PlainTextResponse("route unavailable", status_code=503)
             else:
-                for task in tasks:
-                    task.add_done_callback(lambda _: None)
+                for source_name, task in zip(missing, tasks, strict=False):
+                    task.add_done_callback(lambda item, name=source_name: _track_background_refresh(item, name))
 
         if not records:
             return PlainTextResponse("route unavailable", status_code=503)
@@ -3140,6 +3339,7 @@ git commit -m "feat: expose provider routes"
 - Create: `src/mihomo_proxy_manager/scheduler.py`
 - Create: `src/mihomo_proxy_manager/logging.py`
 - Create: `tests/test_scheduler.py`
+- Create: `tests/test_logging.py`
 - Modify: `src/mihomo_proxy_manager/cli.py`
 - Test: `tests/test_cli_smoke.py`
 
@@ -3275,7 +3475,40 @@ async def test_scheduler_startup_refresh_can_be_disabled(tmp_path) -> None:
     assert refresher.calls == []
 ```
 
-- [ ] **Step 4: Implement scheduler**
+- [ ] **Step 4: Write logging redaction tests**
+
+Create `tests/test_logging.py`:
+
+```python
+from mihomo_proxy_manager.logging import _redact_record
+
+
+def test_log_record_redaction_covers_message_and_extra() -> None:
+    secret_path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml"
+    record = {
+        "message": f"GET {secret_path} https://x.test/sub?token=secret Authorization=Bearer abc",
+        "extra": {"url": "https://x.test/sub?token=secret", "path": secret_path},
+    }
+
+    _redact_record(record, [secret_path])
+
+    rendered = str(record)
+    assert "CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL" not in rendered
+    assert "token=secret" not in rendered
+    assert "Bearer abc" not in rendered
+```
+
+- [ ] **Step 5: Run scheduler and logging tests and verify logging test fails**
+
+Run:
+
+```bash
+uv run pytest tests/test_scheduler.py tests/test_logging.py -v
+```
+
+Expected: FAIL because `scheduler.py` and `logging.py` do not exist yet.
+
+- [ ] **Step 6: Implement scheduler**
 
 Create `src/mihomo_proxy_manager/scheduler.py`:
 
@@ -3340,7 +3573,7 @@ class RefreshScheduler:
             await self.refresher.refresh(source_name)
 ```
 
-- [ ] **Step 5: Implement loguru setup**
+- [ ] **Step 7: Implement loguru setup**
 
 Create `src/mihomo_proxy_manager/logging.py`:
 
@@ -3352,10 +3585,34 @@ import sys
 from loguru import logger
 
 from .models import AppConfig
+from .security import redact_secret
+
+
+def _collect_secret_values(config: AppConfig) -> list[str]:
+    secrets: list[str] = []
+    if config.server.status_path:
+        secrets.append(config.server.status_path)
+    secrets.extend(route.path for route in config.routes.values())
+    for source in config.sources.values():
+        secrets.append(source.url)
+        secrets.extend(source.fetch.headers.values())
+    for plugin in config.plugins.values():
+        secrets.append(plugin.url)
+        secrets.extend(plugin.headers.values())
+    return [secret for secret in secrets if secret]
+
+
+def _redact_record(record: dict, secrets: list[str]) -> None:
+    record["message"] = redact_secret(str(record["message"]), extra_secrets=secrets)
+    for key, value in list(record["extra"].items()):
+        if isinstance(value, str):
+            record["extra"][key] = redact_secret(value, extra_secrets=secrets)
 
 
 def configure_logging(config: AppConfig) -> None:
+    secrets = _collect_secret_values(config)
     logger.remove()
+    logger.configure(patcher=lambda record: _redact_record(record, secrets))
     if config.logging_console.enabled:
         logger.add(sys.stderr, level=config.logging_console.level, colorize=config.logging_console.colorize)
     if config.logging_file.enabled and config.logging_file.path:
@@ -3369,7 +3626,7 @@ def configure_logging(config: AppConfig) -> None:
         )
 ```
 
-- [ ] **Step 6: Complete CLI serve and refresh**
+- [ ] **Step 8: Complete CLI serve and refresh**
 
 Replace `src/mihomo_proxy_manager/cli.py` with:
 
@@ -3491,22 +3748,23 @@ def main(argv: list[str] | None = None) -> int:
     return 2
 ```
 
-- [ ] **Step 7: Run CLI, scheduler tests, and config check**
+- [ ] **Step 9: Run CLI, scheduler, logging tests, and config check**
 
 Run:
 
 ```bash
 uv run pytest tests/test_cli_smoke.py -v
 uv run pytest tests/test_scheduler.py -v
+uv run pytest tests/test_logging.py -v
 uv run mpm check -c examples/config.toml
 ```
 
 Expected: tests PASS; `mpm check` prints `OK: configuration is valid`.
 
-- [ ] **Step 8: Commit scheduler and CLI**
+- [ ] **Step 10: Commit scheduler, logging, and CLI**
 
 ```bash
-git add src/mihomo_proxy_manager/scheduler.py src/mihomo_proxy_manager/logging.py src/mihomo_proxy_manager/cli.py tests/test_cli_smoke.py tests/test_scheduler.py
+git add src/mihomo_proxy_manager/scheduler.py src/mihomo_proxy_manager/logging.py src/mihomo_proxy_manager/cli.py tests/test_cli_smoke.py tests/test_scheduler.py tests/test_logging.py
 git commit -m "feat: add scheduler and service cli"
 ```
 

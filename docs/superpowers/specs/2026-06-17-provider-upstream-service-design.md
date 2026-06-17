@@ -174,12 +174,14 @@ Validate at least:
 - `startup_refresh_mode`, `parse_error`, plugin `on_failure`, output `format`, and plugin `type` are supported.
 - Required source fields such as `url` exist.
 - Source and plugin URLs use supported schemes, defaulting to `http` and `https` only.
-- Source and plugin URLs do not target private, loopback, link-local, multicast, or otherwise reserved networks unless that specific source or plugin sets `allow_private_network = true`.
+- Source and plugin URL IP literals do not target private, loopback, link-local, multicast, or otherwise reserved networks unless that specific source or plugin sets `allow_private_network = true`. `mpm check` must not perform DNS resolution.
 - Logging file path parent can be created or is writable.
 - Cache directory can be created or is writable.
 - Config and cache files should be readable only by the service account. `mpm check` should warn when the config file is group/world-readable.
 
 TOML parse failure is a structural error and can stop immediately. Other validation failures should be listed together.
+
+Runtime fetch and plugin execution must repeat URL safety checks with DNS resolution before each outbound request and each redirect hop. This preserves the no-network behavior of `mpm check` while still blocking hostnames that resolve to private, loopback, link-local, multicast, or otherwise reserved addresses.
 
 ## CLI
 
@@ -220,7 +222,7 @@ Route request:
 
 If a source has stale but still-valid cache and a refresh is due, route requests should return the stale cache and trigger refresh asynchronously. A cache is still-valid only while `now - last_success_at <= cache.max_stale`. After `max_stale`, the source is treated as unavailable unless a refresh succeeds.
 
-Route freshness checks must use cache metadata and configuration directly, not scheduler-only in-memory state. This keeps restart behavior predictable when JSON cache files exist but scheduler state has not yet been rebuilt.
+Route freshness checks must use cache metadata and configuration directly, not scheduler-only in-memory state. This keeps restart behavior predictable when JSON cache files exist but scheduler state has not yet been rebuilt. Refresh due checks should use `last_attempt_at` when available, falling back to `last_success_at`, so repeated route requests after a recent failed refresh do not trigger a refresh storm.
 
 ## Scheduler
 
@@ -262,10 +264,13 @@ Example cache file:
   "last_error": null,
   "proxies": [
     {
-      "name": "[airport_a] HK 01",
-      "type": "vmess",
-      "server": "example.com",
-      "port": 443
+      "source": "airport_a",
+      "data": {
+        "name": "[airport_a] HK 01",
+        "type": "vmess",
+        "server": "example.com",
+        "port": 443
+      }
     }
   ]
 }
@@ -274,7 +279,7 @@ Example cache file:
 Cache writes must avoid corrupted partial files by writing to a temporary file and atomically replacing the old cache file.
 Cache files should be created with `cache.file_mode`, defaulting to owner-read/write only. Cache operations should use a per-source file lock so `mpm refresh` and a running server cannot write the same cache file concurrently from different processes.
 
-The cache interface is the canonical read and write API. The MVP may implement it as an in-memory read-through cache backed by JSON files, but callers should not reach directly into memory dictionaries or the filesystem. Future Redis-backed cache implementations should satisfy the same interface.
+The cache interface is the canonical read and write API. The MVP may implement it as an in-memory read-through cache backed by JSON files, but callers should not reach directly into memory dictionaries or the filesystem. If the MVP keeps in-memory entries, it must detect backing-file changes or otherwise invalidate entries so a running server can observe cache files updated by `mpm refresh`. Future Redis-backed cache implementations should satisfy the same interface.
 
 Cache schema changes should increment `schema_version`. Unknown future schema versions are invalid. Older supported versions can be migrated during load or rejected with a clear validation/runtime error.
 
@@ -317,7 +322,7 @@ For YAML input, preserve proxy dictionaries and validate at least `name` and `ty
 
 For YAML input, also run per-type required-field validation for supported proxy types. For example, `ss` requires `server`, `port`, `cipher`, and `password`; `vmess` requires `server`, `port`, `uuid`, and `cipher`; `trojan` requires `server`, `port`, and `password`. Missing required fields follow the source `parse_error` policy.
 
-For share links, convert to Mihomo proxy dictionaries. Field mapping is part of the parser contract and must be covered by tests for each supported scheme. If a field cannot be mapped reliably, record a warning and preserve a usable proxy only when required fields are still present. `format = "auto"` detection order:
+For share links, convert to Mihomo proxy dictionaries. Field mapping is part of the parser contract and must be covered by tests for each supported scheme. MVP mappings must include required identity fields plus common transport and security options such as `type`/`network`, `sni`, `alpn`, TLS/Reality public-key and short-id fields, client fingerprint, VLESS `flow`, WebSocket `host`/`path`, gRPC service name, and Shadowsocks plugin options. If a field cannot be mapped reliably, record a warning and preserve a usable proxy only when required fields are still present. `format = "auto"` detection order:
 
 1. Parse as YAML and use `proxies` when present.
 2. Parse as plain text share links.
@@ -354,7 +359,7 @@ Renaming:
 
 Route-level transforms should retain each proxy's internal source name while aggregating, so `{source}` remains available for templates. Internal metadata must be removed before rendering YAML.
 
-The service does not deduplicate by server, port, credentials, or final name. It only ensures final node names are unique for valid Mihomo output. If final names collide after all transforms, append ` #2`, ` #3`, and so on. Name repair must be iterative: if `name #2` already exists, try `name #3` until the final name is unique.
+The service does not deduplicate by server, port, credentials, or final name. It only ensures final node names are unique for valid Mihomo output. If final names collide after all transforms, append ` #2`, ` #3`, and so on. Name repair must be iterative and must avoid consuming original final names that belong to later records. For example, `["HK", "HK", "HK #2"]` must render as `["HK", "HK #3", "HK #2"]`.
 
 ## Rendering
 
@@ -402,7 +407,7 @@ Use `loguru` with independent console and file sinks.
 - Console sink defaults to colored `INFO`.
 - File sink defaults to `DEBUG`.
 - File sink supports rotation, retention, and compression.
-- Logs must redact sensitive headers, tokens, upstream subscription URLs with credentials or secret query parameters, hidden route paths, and plugin secret values.
+- Logs must redact sensitive headers, tokens, upstream subscription URLs with credentials or secret query parameters, hidden route paths, and plugin secret values. Redaction must be applied at the logging sink or global logger patch layer, not only at individual call sites.
 
 ## Error Handling
 
@@ -452,6 +457,8 @@ class SourceCacheStore:
     async def get(self, source_name: str) -> SourceCache | None: ...
     async def set(self, source_name: str, cache: SourceCache) -> None: ...
     async def status(self, source_name: str) -> SourceStatus: ...
+    def set_refreshing(self, source_name: str, refreshing: bool) -> None: ...
+    def cache_path(self, source_name: str) -> str | None: ...
 
 class Plugin:
     async def run(self, context: PluginContext) -> PluginResult: ...

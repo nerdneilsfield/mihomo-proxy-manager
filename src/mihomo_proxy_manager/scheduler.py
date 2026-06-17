@@ -170,7 +170,12 @@ class RefreshScheduler:
                     source=source_name,
                     error=exc,
                 )
-            next_target += interval_seconds
+            # Rebase next_target to avoid accumulation drift: if the refresh
+            # took longer than the interval, skip the missed cycles instead of
+            # busy-looping to catch up.
+            now = loop.time()
+            while next_target <= now:
+                next_target += interval_seconds
 
     async def _cron_loop(self, source_name: str, expr: str) -> None:
         """Cron 表达式刷新循环。

@@ -10,7 +10,7 @@ import uvicorn
 from .app import create_app
 from .cache import JsonSourceCacheStore
 from .config import load_config
-from .fetcher import SafeHttpClient, SubscriptionFetcher
+from .fetcher import SafeHttpClient, SubscriptionFetcher, _NoOpCookies
 from .logging import configure_logging
 from .plugins.http_action import HttpActionPlugin
 from .refresher import SourceRefresher
@@ -53,7 +53,7 @@ async def _build_runtime(config_path: str):
     config = load_config(config_file)
     configure_logging(config)
     cache_store = JsonSourceCacheStore(config.cache)
-    client = httpx.AsyncClient(cookies=None)
+    client = httpx.AsyncClient(cookies=_NoOpCookies())
     fetcher = SubscriptionFetcher(client, config.http)
     plugin = HttpActionPlugin(SafeHttpClient(client, config.http))
     refresher = SourceRefresher(

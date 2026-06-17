@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from mihomo_proxy_manager.fetcher import FetchResult, SafeHttpClient, SubscriptionFetcher
+from mihomo_proxy_manager.fetcher import FetchResult, SafeHttpClient, SubscriptionFetcher, _NoOpCookies
 from mihomo_proxy_manager.models import FetchConfig, HttpConfig
 
 
@@ -224,7 +224,7 @@ async def test_shared_client_does_not_leak_cookies() -> None:
             return httpx.Response(200, headers={"Set-Cookie": "session=TOKEN-FROM-A; Path=/"})
         return httpx.Response(200)
 
-    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), cookies=None)
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), cookies=_NoOpCookies())
     http_config = HttpConfig(__import__("datetime").timedelta(seconds=30), "ua", 1024, 3)
     safe = SafeHttpClient(client, http_config)
     await safe.request(

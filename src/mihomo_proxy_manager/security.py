@@ -14,7 +14,7 @@ _IpAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
 _SECRET_QUERY_KEYS = {"token", "secret", "key", "apikey", "api_key", "access_token"}
 _AUTHORIZATION_RE = re.compile(
-    r"(?i)(Authorization[=:]\s*)([^\s]+)"
+    r"(?i)(Authorization[=:]\s*)(Bearer\s+\S+|Basic\s+\S+|\S+)"
 )
 _BEARER_RE = re.compile(r"(?i)\bBearer\s+\S+")
 

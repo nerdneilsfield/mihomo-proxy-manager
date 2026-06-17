@@ -41,6 +41,18 @@ async def test_unknown_schema_version_is_treated_as_miss(tmp_path, caplog) -> No
 
 
 @pytest.mark.asyncio
+async def test_legacy_schema_version_zero_is_treated_as_miss(tmp_path) -> None:
+    path = tmp_path / "airport_a.json"
+    path.write_text(
+        '{"schema_version": 0, "source": "airport_a", "proxies": []}',
+        encoding="utf-8",
+    )
+    store = JsonSourceCacheStore(CacheConfig(tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7)))
+
+    assert await store.get("airport_a") is None
+
+
+@pytest.mark.asyncio
 async def test_cache_reloads_when_file_changes_from_another_process(tmp_path) -> None:
     config = CacheConfig(tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7))
     server_store = JsonSourceCacheStore(config)

@@ -46,6 +46,42 @@ def test_required_field_validation() -> None:
     assert "missing required field" in missing[0]
 
 
+@pytest.mark.parametrize(
+    ("proxy_type", "missing_field", "proxy"),
+    [
+        ("ss", "password", {"name": "x", "type": "ss", "server": "s", "port": 443, "cipher": "aes"}),
+        ("vless", "uuid", {"name": "x", "type": "vless", "server": "s", "port": 443}),
+        ("trojan", "password", {"name": "x", "type": "trojan", "server": "s", "port": 443}),
+        ("hysteria2", "password", {"name": "x", "type": "hysteria2", "server": "s", "port": 443}),
+        ("http", "port", {"name": "x", "type": "http", "server": "s"}),
+        ("socks5", "port", {"name": "x", "type": "socks5", "server": "s"}),
+    ],
+)
+def test_validate_required_fields_per_type(
+    proxy_type: str, missing_field: str, proxy: dict[str, object]
+) -> None:
+    warnings = validate_required_fields(proxy)
+    assert any(f"missing required field {missing_field!r}" in w for w in warnings)
+
+
+@pytest.mark.parametrize("proxy_type", ["ss", "vless", "trojan", "hysteria2", "http", "socks5"])
+def test_validate_required_fields_complete_proxy_has_no_warnings(proxy_type: str) -> None:
+    proxy: dict[str, object] = {
+        "name": "x",
+        "type": proxy_type,
+        "server": "s",
+        "port": 443,
+    }
+    if proxy_type in {"ss"}:
+        proxy["cipher"] = "aes"
+        proxy["password"] = "p"
+    if proxy_type == "vless":
+        proxy["uuid"] = "00000000-0000-0000-0000-000000000000"
+    if proxy_type in {"trojan", "hysteria2"}:
+        proxy["password"] = "p"
+    assert validate_required_fields(proxy) == []
+
+
 def test_plain_share_links() -> None:
     body = b"trojan://password@example.com:443?sni=example.com#TR%2001\n"
     result = parse_subscription(body, source="airport_a", fmt="share-links", parse_error="fail")

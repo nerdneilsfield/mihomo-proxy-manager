@@ -119,3 +119,20 @@ def test_redact_secret_standalone_bearer() -> None:
     assert redact_secret("log line with Bearer abc123") == "log line with Bearer ***"
     assert redact_secret("Bearer first and Bearer second") == "Bearer *** and Bearer ***"
     assert "Bearer secret" not in redact_secret("some Bearer secret here")
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://224.0.0.1/foo",
+        "http://239.255.255.255/foo",
+        "http://240.0.0.1/foo",
+        "http://255.255.255.255/foo",
+        "http://0.0.0.0/foo",
+        "http://[::]/foo",
+        "http://[ff02::1]/foo",
+    ],
+)
+def test_rejects_multicast_reserved_and_unspecified_addresses(url: str) -> None:
+    with pytest.raises(SecurityError):
+        assert_safe_url(url, allow_private_network=False, resolve_dns=False)

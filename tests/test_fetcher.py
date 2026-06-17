@@ -267,3 +267,49 @@ async def test_redirect_body_ignored_without_size_limit() -> None:
 
     assert response.status_code == 200
     assert response.content == b"ok"
+
+
+@pytest.mark.asyncio
+async def test_max_redirects_is_enforced_for_long_chains() -> None:
+    requests: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.url.path)
+        step = int(request.url.path.strip("/"))
+        if step < 3:
+            return httpx.Response(302, headers={"Location": f"/{step + 1}"})
+        return httpx.Response(200, content=b"ok")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    http_config = HttpConfig(__import__("datetime").timedelta(seconds=30), "ua", 1024, 2)
+    safe = SafeHttpClient(client, http_config)
+
+    with pytest.raises(ValueError, match="too many redirects"):
+        await safe.request(
+            "GET",
+            "https://93.184.216.34/0",
+            headers={},
+            timeout=30.0,
+            allow_private_network=False,
+        )
+
+    assert len(requests) == 3  # initial + two allowed redirects
+
+
+@pytest.mark.asyncio
+async def test_endless_redirect_loop_is_rejected() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(302, headers={"Location": "/loop"})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    http_config = HttpConfig(__import__("datetime").timedelta(seconds=30), "ua", 1024, 3)
+    safe = SafeHttpClient(client, http_config)
+
+    with pytest.raises(ValueError, match="too many redirects"):
+        await safe.request(
+            "GET",
+            "https://93.184.216.34/loop",
+            headers={},
+            timeout=30.0,
+            allow_private_network=False,
+        )

@@ -50,7 +50,14 @@ class SourceRefresher:
     async def refresh(self, source_name: str) -> RefreshResult:
         existing = self._inflight.get(source_name)
         if existing is not None and not existing.done():
-            return await asyncio.wait_for(asyncio.shield(existing), timeout=self.refresh_lock_timeout.total_seconds())
+            try:
+                return await asyncio.wait_for(asyncio.shield(existing), timeout=self.refresh_lock_timeout.total_seconds())
+            except TimeoutError:
+                return RefreshResult(
+                    False,
+                    source_name,
+                    error="in-flight refresh timed out; stale cache may be used if still within max_stale",
+                )
         task = asyncio.create_task(self._refresh_with_lock(source_name))
         self._inflight[source_name] = task
         try:
@@ -64,7 +71,11 @@ class SourceRefresher:
         try:
             await asyncio.wait_for(lock.acquire(), timeout=self.refresh_lock_timeout.total_seconds())
         except TimeoutError:
-            return RefreshResult(False, source_name, error="refresh lock timeout")
+            return RefreshResult(
+                False,
+                source_name,
+                error="refresh lock timeout; stale cache may be used if still within max_stale",
+            )
         try:
             return await self._refresh_locked(source_name)
         finally:

@@ -78,8 +78,9 @@ class SafeHttpClient:
                             for key, value in current_headers.items()
                             if key.lower() not in {"content-length", "content-type", "transfer-encoding"}
                         }
-                    # Consume the redirect body before following so the connection is released cleanly.
-                    await response.aread()
+                    # Do not buffer the redirect body; closing the stream releases the
+                    # connection without consuming potentially large response content.
+                    await response.aclose()
                     current = next_url
                     continue
                 content = bytearray()

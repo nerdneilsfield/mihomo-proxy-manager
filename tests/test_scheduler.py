@@ -116,3 +116,55 @@ async def test_scheduler_background_startup_cancellation_is_handled(tmp_path) ->
     await scheduler.stop()
 
     # stop() must complete without propagating the CancelledError from the pending refresh.
+
+
+class TimingRefresher:
+    def __init__(self) -> None:
+        self.timestamps: list[float] = []
+        self.done = asyncio.Event()
+
+    async def refresh(self, source_name: str) -> None:
+        self.timestamps.append(asyncio.get_running_loop().time())
+        if len(self.timestamps) >= 4:
+            self.done.set()
+
+
+@pytest.mark.asyncio
+async def test_scheduler_interval_preserves_base_despite_jitter(tmp_path) -> None:
+    import dataclasses
+
+    source = SourceConfig(
+        name="airport_a",
+        url="https://example.com/sub",
+        format="auto",
+        parse_error="skip",
+        fetch=FetchConfig(timedelta(seconds=30), "ua", {}, False),
+        refresh=RefreshConfig(interval=timedelta(seconds=0.1), cron=()),
+        rename=RenameConfig(),
+        filter=FilterConfig(),
+        plugins=SourcePluginConfig(),
+    )
+    base_config = scheduler_config(tmp_path, startup_refresh=False)
+    config = dataclasses.replace(
+        base_config,
+        sources={"airport_a": source},
+        scheduler=SchedulerConfig(
+            startup_refresh=False,
+            startup_refresh_mode="blocking",
+            jitter=timedelta(seconds=0.05),
+            refresh_lock_timeout=timedelta(seconds=1),
+        ),
+    )
+    refresher = TimingRefresher()
+    scheduler = RefreshScheduler(config, refresher)
+
+    await scheduler.start()
+    await asyncio.wait_for(refresher.done.wait(), timeout=2.0)
+    await scheduler.stop()
+
+    intervals = [b - a for a, b in zip(refresher.timestamps[:-1], refresher.timestamps[1:])]
+    # Jitter is centered around the target, so the base interval should be preserved
+    # even though individual intervals vary.
+    assert all(0.04 <= iv <= 0.16 for iv in intervals), intervals
+    average = sum(intervals) / len(intervals)
+    assert 0.08 <= average <= 0.12, average

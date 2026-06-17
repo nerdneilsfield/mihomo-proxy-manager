@@ -237,3 +237,17 @@ def test_parse_ss_legacy_with_query_directly() -> None:
     proxy = _parse_ss(link)
     assert proxy["plugin"] == "obfs-local"
     assert proxy["plugin-opts"] == {"obfs": "tls"}
+
+
+def test_ss_legacy_share_link_falls_back_to_standard_base64() -> None:
+    """Providers may emit standard Base64 (+ and /) instead of URL-safe (- and _)."""
+    payload = base64.b64encode(b"aes-256-gcm:???@example.com:443").decode()
+    assert "+" in payload or "/" in payload
+    body = f"ss://{payload}#SS%2001".encode()
+    result = parse_subscription(body, source="airport_a", fmt="share-links", parse_error="fail")
+
+    proxy = result.records[0].data
+    assert proxy["type"] == "ss"
+    assert proxy["cipher"] == "aes-256-gcm"
+    assert proxy["password"] == "???"
+    assert proxy["server"] == "example.com"

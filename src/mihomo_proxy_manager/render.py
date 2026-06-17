@@ -22,6 +22,7 @@ class ProviderRenderer:
             prefix = (
                 f"# generated_at: {datetime.now(UTC).isoformat()}\n"
                 f"# route: {route.name}\n"
+                f"# sources: {len(route.sources)}\n"
                 f"# nodes: {len(proxies)}\n"
             ).encode("utf-8")
             return prefix + body

@@ -13,6 +13,7 @@ from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route
 
 from .cache import SourceCacheStore
+from .logging import _collect_secret_values
 from .models import AppConfig, ProxyRecord, SourceCache, SourceConfig
 from .render import ProviderRenderer
 from .status import build_status
@@ -78,12 +79,13 @@ def create_app(
     renderer = ProviderRenderer(yaml_sort_keys=config.output.yaml_sort_keys)
     route_by_path = {route.path: route for route in config.routes.values()}
     background_tasks: set[asyncio.Task[Any]] = set()
+    secrets = _collect_secret_values(config)
 
     async def health(request):
         return JSONResponse({"ok": True})
 
     async def status(request):
-        return JSONResponse(await build_status(cache_store, list(config.sources)))
+        return JSONResponse(await build_status(cache_store, list(config.sources), extra_secrets=secrets))
 
     def _spawn_background_refresh(source_name: str) -> None:
         if refresher is None:
@@ -117,8 +119,29 @@ def create_app(
 
         if missing and refresher is not None:
             tasks = [asyncio.create_task(refresher.refresh(name)) for name in missing]
+            task_by_source = dict(zip(missing, tasks, strict=False))
             if route.require_all_sources or not records:
-                await asyncio.wait(tasks, timeout=config.server.route_refresh_wait.total_seconds())
+                done, pending = await asyncio.wait(
+                    tasks, timeout=config.server.route_refresh_wait.total_seconds()
+                )
+                for source_name, task in task_by_source.items():
+                    if task in pending:
+                        background_tasks.add(task)
+                        task.add_done_callback(background_tasks.discard)
+                        task.add_done_callback(
+                            lambda item, name=source_name: _track_background_refresh(item, name)
+                        )
+                        continue
+                    try:
+                        task.result()
+                    except asyncio.TimeoutError:
+                        logger.warning("route refresh timed out for source {source}", source=source_name)
+                    except Exception as exc:
+                        logger.warning(
+                            "route refresh failed for source {source}: {error}",
+                            source=source_name,
+                            error=exc,
+                        )
                 records.clear()
                 for source_name in route.sources:
                     cache = await cache_store.get(source_name)

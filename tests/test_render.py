@@ -43,3 +43,16 @@ def test_provider_renderer_repairs_duplicate_names() -> None:
 
     names = [item["name"] for item in yaml.safe_load(body)["proxies"]]
     assert names == ["[phone] HK", "[phone] HK #3", "[phone] HK #2"]
+
+
+def test_provider_renderer_includes_sources_in_meta_comments() -> None:
+    renderer = ProviderRenderer(yaml_sort_keys=False)
+    body = renderer.render_sync(
+        route(include_meta_comments=True),
+        [ProxyRecord("airport_a", {"name": "HK", "type": "vmess"})],
+    )
+
+    text = body.decode("utf-8")
+    assert "# sources: 1" in text
+    assert "# nodes: 1" in text
+    assert "# route: phone" in text

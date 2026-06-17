@@ -152,3 +152,32 @@ proxies:
     assert first.ok
     assert second.ok
     assert fetcher.calls == 1
+
+
+class SlowFetcher:
+    async def fetch(self, *args, **kwargs):
+        await asyncio.sleep(10)
+        return FetchResult(b"", None, None)
+
+
+@pytest.mark.asyncio
+async def test_refresher_inflight_timeout_allows_stale_cache_fallback(tmp_path) -> None:
+    store = JsonSourceCacheStore(CacheConfig(tmp_path, 2, 0o600, timedelta(days=7)))
+    refresher = SourceRefresher(
+        sources={"airport_a": source_config()},
+        plugins={},
+        cache_store=store,
+        fetcher=SlowFetcher(),
+        http_plugin=None,
+        refresh_lock_timeout=timedelta(seconds=0.01),
+    )
+
+    first = asyncio.create_task(refresher.refresh("airport_a"))
+    await asyncio.sleep(0)
+    second = await refresher.refresh("airport_a")
+
+    assert not second.ok
+    assert "stale cache" in (second.error or "").lower()
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first

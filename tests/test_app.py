@@ -220,3 +220,101 @@ async def test_background_refresh_failure_without_error_is_handled(tmp_path) -> 
 
     assert response.status_code == 200
     assert refresher.called == ["airport_a"]
+
+
+class RaisingRefresher:
+    def __init__(self) -> None:
+        self.called: list[str] = []
+
+    async def refresh(self, source_name: str):
+        self.called.append(source_name)
+        raise RuntimeError("boom")
+
+
+@pytest.mark.asyncio
+async def test_provider_serves_stale_cache_and_logs_background_refresh_exception(tmp_path, monkeypatch) -> None:
+    from mihomo_proxy_manager import app as app_module
+
+    warnings: list[str] = []
+    monkeypatch.setattr(app_module.logger, "warning", lambda msg, **kwargs: warnings.append(msg))
+
+    config = load_config(config_file(tmp_path))
+    store = JsonSourceCacheStore(config.cache)
+    old_success = datetime.now(UTC) - timedelta(hours=2)
+    await store.set(
+        "airport_a",
+        SourceCache(
+            "airport_a",
+            1,
+            old_success,
+            old_success,
+            None,
+            None,
+            1,
+            (),
+            None,
+            (ProxyRecord("airport_a", {"name": "HK", "type": "vmess"}),),
+        ),
+    )
+    refresher = RaisingRefresher()
+    app = create_app(config, cache_store=store, refresher=refresher, scheduler=None)
+
+    with TestClient(app) as client:
+        response = client.get("/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml")
+
+    assert response.status_code == 200
+    assert "proxies:" in response.text
+    assert refresher.called == ["airport_a"]
+    assert any("background refresh failed" in msg for msg in warnings)
+
+
+@pytest.mark.asyncio
+async def test_provider_logs_awaited_refresh_exception_and_returns_503(tmp_path, monkeypatch) -> None:
+    from mihomo_proxy_manager import app as app_module
+
+    warnings: list[str] = []
+    monkeypatch.setattr(app_module.logger, "warning", lambda msg, **kwargs: warnings.append(msg))
+
+    config = load_config(config_file(tmp_path))
+    store = JsonSourceCacheStore(config.cache)
+    refresher = RaisingRefresher()
+    app = create_app(config, cache_store=store, refresher=refresher, scheduler=None)
+
+    with TestClient(app) as client:
+        response = client.get("/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml")
+
+    assert response.status_code == 503
+    assert refresher.called == ["airport_a"]
+    assert any("route refresh failed" in msg for msg in warnings)
+
+
+@pytest.mark.asyncio
+async def test_status_endpoint_redacts_route_path_in_last_error(tmp_path) -> None:
+    config = load_config(config_file(tmp_path))
+    store = JsonSourceCacheStore(config.cache)
+    now = datetime.now(UTC)
+    route_path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml"
+    await store.set(
+        "airport_a",
+        SourceCache(
+            "airport_a",
+            1,
+            now,
+            now,
+            None,
+            None,
+            0,
+            (),
+            f"failed to fetch {route_path}",
+            (),
+        ),
+    )
+    app = create_app(config, cache_store=store, refresher=None, scheduler=None)
+
+    with TestClient(app) as client:
+        response = client.get("/s/X6HfeBRQz6xqk9S4dTV7gQwL2nP8aYcM")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert route_path not in data["sources"][0]["last_error"]
+    assert "***" in data["sources"][0]["last_error"]

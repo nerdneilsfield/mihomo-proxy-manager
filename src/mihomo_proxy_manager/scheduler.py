@@ -61,8 +61,12 @@ class RefreshScheduler:
     async def _interval_loop(self, source_name: str, interval_seconds: float) -> None:
         loop = asyncio.get_running_loop()
         next_target = loop.time() + interval_seconds
+        jitter_seconds = self.config.scheduler.jitter.total_seconds()
         while not self._stopping.is_set():
-            delay = max(0.0, next_target - loop.time() + self._jitter_seconds())
+            # Apply jitter as a one-time offset around the target so the base
+            # interval stays aligned and does not drift across cycles.
+            jitter = random.uniform(-jitter_seconds / 2, jitter_seconds / 2) if jitter_seconds > 0 else 0.0
+            delay = max(0.0, next_target + jitter - loop.time())
             await asyncio.sleep(delay)
             if self._stopping.is_set():
                 return

@@ -185,3 +185,27 @@ async def test_fetch_redacts_url_on_http_error() -> None:
     message = str(exc_info.value)
     assert "token=secret" not in message
     assert "token=***" in message or "example.com" in message
+
+
+@pytest.mark.asyncio
+async def test_redirect_body_ignored_without_size_limit() -> None:
+    """Redirect bodies must not be buffered or subject to max_response_size."""
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/start":
+            return httpx.Response(302, headers={"Location": "/done"}, content=b"x" * 2048)
+        return httpx.Response(200, content=b"ok")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    http_config = HttpConfig(__import__("datetime").timedelta(seconds=30), "ua", 1024, 3)
+    safe = SafeHttpClient(client, http_config)
+    response = await safe.request(
+        "GET",
+        "https://93.184.216.34/start",
+        headers={},
+        timeout=30.0,
+        allow_private_network=False,
+    )
+
+    assert response.status_code == 200
+    assert response.content == b"ok"

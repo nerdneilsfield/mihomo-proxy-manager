@@ -11,7 +11,13 @@ from mihomo_proxy_manager.security import redact_secret
 
 def _b64decode(value: str) -> bytes:
     padding = "=" * (-len(value) % 4)
-    return base64.urlsafe_b64decode((value + padding).encode())
+    padded = (value + padding).encode()
+    try:
+        return base64.urlsafe_b64decode(padded)
+    except Exception:
+        # Some providers emit standard Base64 (+ and /) instead of the URL-safe
+        # variant (- and _). Fall back to the standard alphabet.
+        return base64.b64decode(padded)
 
 
 def _name(fragment: str, fallback: str) -> str:

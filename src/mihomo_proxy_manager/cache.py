@@ -93,7 +93,19 @@ class JsonSourceCacheStore:
         self._memory_mtime: dict[str, float] = {}
         self._refreshing: set[str] = set()
         self._dir_created: bool = False
-        self._lock = asyncio.Lock()
+        # Per-source async locks so that reads/writes for different sources do
+        # not serialise against each other. The file-level FileLock still
+        # guards cross-process access.
+        self._locks: dict[str, asyncio.Lock] = {}
+        # Dedicated lock guarding the one-time directory initialisation.
+        self._dir_lock = asyncio.Lock()
+
+    def _lock_for(self, source_name: str) -> asyncio.Lock:
+        """获取或创建指定源的异步锁。
+
+        Get or create the async lock for the given source.
+        """
+        return self._locks.setdefault(source_name, asyncio.Lock())
 
     async def _ensure_dir(self) -> None:
         """确保缓存目录存在，并清理过期临时文件 / Ensure the cache directory exists and clean up stale temp files.
@@ -103,10 +115,13 @@ class JsonSourceCacheStore:
         """
         if self._dir_created:
             return
-        await asyncio.to_thread(self.config.dir.mkdir, parents=True, exist_ok=True)
-        await asyncio.to_thread(self._cleanup_tmp_files)
-        self._dir_created = True
-        logger.debug("cache dir initialized: dir={dir}", dir=str(self.config.dir))
+        async with self._dir_lock:
+            if self._dir_created:
+                return
+            await asyncio.to_thread(self.config.dir.mkdir, parents=True, exist_ok=True)
+            await asyncio.to_thread(self._cleanup_tmp_files)
+            self._dir_created = True
+            logger.debug("cache dir initialized: dir={dir}", dir=str(self.config.dir))
 
     def _cleanup_tmp_files(self) -> None:
         """清理超过 60 秒未修改的 .json.tmp 临时文件 / Clean up .json.tmp temp files not modified for over 60 seconds.
@@ -183,8 +198,8 @@ class JsonSourceCacheStore:
         Returns:
             缓存对象，如果缓存不存在或已损坏则返回 None / Cache object, or None if cache is missing or corrupted.
         """
-        async with self._lock:
-            await self._ensure_dir()
+        await self._ensure_dir()
+        async with self._lock_for(source_name):
             path = self._path(source_name)
             try:
                 cache, mtime = await asyncio.to_thread(
@@ -229,7 +244,7 @@ class JsonSourceCacheStore:
             source_name: 源名称 / Source name.
             cache: 要写入的缓存对象 / Cache object to write.
         """
-        async with self._lock:
+        async with self._lock_for(source_name):
             await self._ensure_dir()
             mtime = await asyncio.to_thread(self._write_file, source_name, cache)
             self._memory[source_name] = cache

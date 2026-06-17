@@ -70,9 +70,12 @@ def parse_file_mode(value: str | int) -> int:
     if isinstance(value, int):
         return value
     s = str(value).strip()
-    if s.startswith(("0o", "0O")) or (len(s) > 1 and s.startswith("0") and s.isdigit()):
-        return int(s, 8)
-    return int(s)
+    try:
+        if s.startswith(("0o", "0O")) or (len(s) > 1 and s.startswith("0") and s.isdigit()):
+            return int(s, 8)
+        return int(s)
+    except ValueError as exc:
+        raise ValueError(f"invalid file mode {value!r}") from exc
 
 
 def _table(data: dict[str, Any], key: str) -> dict[str, Any]:

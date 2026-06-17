@@ -16,6 +16,7 @@ _SECRET_QUERY_KEYS = {"token", "secret", "key", "apikey", "api_key", "access_tok
 _AUTHORIZATION_RE = re.compile(
     r"(?i)(Authorization[=:]\s*)(Bearer\s+\S+|.+)"
 )
+_BEARER_RE = re.compile(r"(?i)\bBearer\s+\S+")
 
 # Hostnames that are commonly used for private/loopback/link-local addresses.
 # These are rejected even when DNS resolution is disabled to keep ``mpm check``
@@ -54,10 +55,67 @@ def _resolve_host(host: str) -> list[_IpAddress]:
 
 
 def _is_blocked_hostname(hostname: str) -> bool:
-    lowered = hostname.lower()
+    lowered = hostname.lower().rstrip(".")
     if lowered in _PRIVATE_HOSTNAMES:
         return True
     return any(lowered.endswith(suffix) for suffix in _PRIVATE_HOSTNAME_SUFFIXES)
+
+
+def _parse_ip_literal(host: str) -> _IpAddress | None:
+    """Best-effort parse of canonical and non-canonical IP literals.
+
+    Handles trailing dots, decimal/hex/octal integers, dotted forms with fewer
+    than four octets, and IPv6 addresses written as 32 hex digits. Returns the
+    parsed address or ``None`` if the value does not look like an IP literal.
+    """
+    host = host.rstrip(".")
+
+    try:
+        return ipaddress.ip_address(host)
+    except ValueError:
+        pass
+
+    # IPv6 address written as 32 hex digits (e.g. loopback as 32 zeros + 1).
+    if len(host) == 32 and all(c in "0123456789abcdefABCDEF" for c in host):
+        try:
+            return ipaddress.ip_address(int(host, 16))
+        except ValueError:
+            pass
+
+    # Hexadecimal integer forms such as 0x7f000001.
+    if host.startswith(("0x", "0X")):
+        try:
+            return ipaddress.ip_address(int(host, 16))
+        except ValueError:
+            pass
+
+    # Octal integer forms such as 017700000001.
+    if host.startswith("0") and len(host) > 1 and host[1:].isdigit():
+        try:
+            return ipaddress.ip_address(int(host, 8))
+        except ValueError:
+            pass
+
+    # Plain decimal integer forms such as 2130706433.
+    if host.isdigit() and not host.startswith("0"):
+        try:
+            return ipaddress.ip_address(int(host))
+        except ValueError:
+            pass
+
+    # Dotted decimal forms with fewer than four octets such as 127.1 or 10.0.1.
+    parts = host.split(".")
+    if 2 <= len(parts) <= 4 and all(part.isdigit() for part in parts):
+        try:
+            addr = 0
+            for part in parts[:-1]:
+                addr = (addr << 8) | int(part)
+            addr = (addr << (8 * (5 - len(parts)))) | int(parts[-1])
+            return ipaddress.ip_address(addr)
+        except ValueError:
+            pass
+
+    return None
 
 
 _BASE64URL_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -71,14 +129,22 @@ def assert_safe_url(url: str, *, allow_private_network: bool, resolve_dns: bool 
         raise SecurityError("URL host is required")
     if allow_private_network:
         return
-    try:
-        ips = [ipaddress.ip_address(parsed.hostname)]
-    except ValueError:
-        if _is_blocked_hostname(parsed.hostname):
-            raise SecurityError(f"URL host is blocked: {parsed.hostname}")
-        if not resolve_dns:
-            return
-        ips = _resolve_host(parsed.hostname)
+
+    host = parsed.hostname.rstrip(".")
+
+    ip_literal = _parse_ip_literal(host)
+    if ip_literal is not None:
+        if not _is_public_ip(ip_literal):
+            raise SecurityError(f"URL resolves to non-public address: {ip_literal}")
+        return
+
+    if _is_blocked_hostname(host):
+        raise SecurityError(f"URL host is blocked: {host}")
+
+    if not resolve_dns:
+        return
+
+    ips = _resolve_host(host)
     for ip in ips:
         if not _is_public_ip(ip):
             raise SecurityError(f"URL resolves to non-public address: {ip}")
@@ -101,6 +167,7 @@ def redact_url(url: str) -> str:
 
 def redact_secret(text: str, *, extra_secrets: list[str] | None = None) -> str:
     redacted = _AUTHORIZATION_RE.sub(r"\1***", text)
+    redacted = _BEARER_RE.sub(r"Bearer ***", redacted)
     redacted = re.sub(
         r"([?&](?:token|secret|key|apikey|api_key|access_token)=)[^&\s]+",
         r"\1***",

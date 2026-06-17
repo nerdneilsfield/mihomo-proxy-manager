@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from mihomo_proxy_manager.config import load_config, parse_duration, parse_file_mode, parse_size
 
 
@@ -118,6 +120,11 @@ def test_parse_file_mode() -> None:
     assert parse_file_mode("0o600") == 0o600
     assert parse_file_mode(384) == 384
     assert parse_file_mode("600") == 600
+
+
+def test_parse_file_mode_invalid_octal_raises_clear_error() -> None:
+    with pytest.raises(ValueError, match="invalid file mode"):
+        parse_file_mode("09")
 
 
 def test_cron_accepts_single_string(temp_config_path: Path) -> None:

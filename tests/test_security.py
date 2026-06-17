@@ -67,3 +67,37 @@ def test_rejects_blocked_hostnames_without_dns(hostname: str) -> None:
 
 def test_allows_public_hostname_without_dns() -> None:
     assert_safe_url("https://example.com/foo", allow_private_network=False, resolve_dns=False)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://2130706433/foo",
+        "http://0x7f000001/foo",
+        "http://017700000001/foo",
+        "http://127.1/foo",
+        "http://0000000000000000000000000000000001/foo",
+        "http://127.0.0.1./foo",
+        "http://10.1/foo",
+        "http://192.168.1/foo",
+        "http://172.16.0.1/foo",
+        "http://172.31.255.255/foo",
+        "http://[::1]/foo",
+        "http://[fc00::1]/foo",
+        "http://[fe80::1]/foo",
+    ],
+)
+def test_rejects_noncanonical_private_ip_literals_without_dns(url: str) -> None:
+    with pytest.raises(SecurityError):
+        assert_safe_url(url, allow_private_network=False, resolve_dns=False)
+
+
+def test_allows_public_noncanonical_ip_literals_without_dns() -> None:
+    # 134744072 == 8.8.8.8
+    assert_safe_url("http://134744072/foo", allow_private_network=False, resolve_dns=False)
+
+
+def test_redact_secret_standalone_bearer() -> None:
+    assert redact_secret("log line with Bearer abc123") == "log line with Bearer ***"
+    assert redact_secret("Bearer first and Bearer second") == "Bearer *** and Bearer ***"
+    assert "Bearer secret" not in redact_secret("some Bearer secret here")

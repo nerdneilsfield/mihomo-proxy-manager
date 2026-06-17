@@ -34,10 +34,16 @@ def _dt_s(value: datetime | None) -> str | None:
 class JsonSourceCacheStore:
     def __init__(self, config: CacheConfig) -> None:
         self.config = config
-        self.config.dir.mkdir(parents=True, exist_ok=True)
         self._memory: dict[str, SourceCache] = {}
         self._memory_mtime: dict[str, float] = {}
         self._refreshing: set[str] = set()
+        self._dir_created: bool = False
+
+    async def _ensure_dir(self) -> None:
+        if self._dir_created:
+            return
+        await asyncio.to_thread(self.config.dir.mkdir, parents=True, exist_ok=True)
+        self._dir_created = True
 
     def _path(self, source_name: str) -> Path:
         safe_name = quote(source_name, safe="")
@@ -57,6 +63,7 @@ class JsonSourceCacheStore:
             self._refreshing.discard(source_name)
 
     async def get(self, source_name: str) -> SourceCache | None:
+        await self._ensure_dir()
         path = self._path(source_name)
         cache, mtime = await asyncio.to_thread(self._read_or_miss, path)
         if cache is None:
@@ -71,6 +78,7 @@ class JsonSourceCacheStore:
         return cache
 
     async def set(self, source_name: str, cache: SourceCache) -> None:
+        await self._ensure_dir()
         mtime = await asyncio.to_thread(self._write_file, source_name, cache)
         self._memory[source_name] = cache
         self._memory_mtime[source_name] = mtime
@@ -89,10 +97,14 @@ class JsonSourceCacheStore:
         )
 
     def _read_or_miss(self, path: Path) -> tuple[SourceCache | None, float | None]:
-        if not path.exists():
+        try:
+            if not path.exists():
+                return None, None
+            mtime = path.stat().st_mtime
+            return self._read_file(path), mtime
+        except FileNotFoundError:
+            # Treat a file removed between exists()/stat()/read_text() as a cache miss.
             return None, None
-        mtime = path.stat().st_mtime
-        return self._read_file(path), mtime
 
     def _read_file(self, path: Path) -> SourceCache:
         try:

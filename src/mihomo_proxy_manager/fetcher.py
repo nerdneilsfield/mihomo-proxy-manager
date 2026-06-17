@@ -1,12 +1,24 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
 from .models import FetchConfig, HttpConfig
-from .security import assert_safe_url
+from .security import assert_safe_url, redact_secret, redact_url
+
+
+# Headers considered safe to forward across origins on a redirect. Per-source
+# custom headers are stripped unless they are in this allowlist.
+_SAFE_CROSS_ORIGIN_HEADERS = frozenset(
+    {"user-agent", "accept", "accept-language", "accept-encoding"}
+)
+
+
+def _origin(url: str) -> tuple[str, str | None, int | None]:
+    parsed = urlparse(url)
+    return (parsed.scheme, parsed.hostname, parsed.port)
 
 
 @dataclass(frozen=True)
@@ -50,7 +62,14 @@ class SafeHttpClient:
                     location = response.headers.get("Location")
                     if not location:
                         raise ValueError("redirect response missing Location")
-                    current = urljoin(current, location)
+                    next_url = urljoin(current, location)
+                    if _origin(next_url) != _origin(current):
+                        # Cross-origin redirect: strip sensitive and per-source custom headers.
+                        current_headers = {
+                            key: value
+                            for key, value in current_headers.items()
+                            if key.lower() in _SAFE_CROSS_ORIGIN_HEADERS
+                        }
                     if response.status_code in {301, 302, 303}:
                         current_method = "GET"
                         current_body = None
@@ -59,6 +78,9 @@ class SafeHttpClient:
                             for key, value in current_headers.items()
                             if key.lower() not in {"content-length", "content-type", "transfer-encoding"}
                         }
+                    # Consume the redirect body before following so the connection is released cleanly.
+                    await response.aread()
+                    current = next_url
                     continue
                 content = bytearray()
                 async for chunk in response.aiter_bytes():
@@ -102,5 +124,10 @@ class SubscriptionFetcher:
         )
         if response.status_code == 304:
             return FetchResult(None, etag, last_modified, True)
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise ValueError(
+                f"fetch failed for {redact_url(url)}: {redact_secret(str(exc))}"
+            ) from exc
         return FetchResult(response.content, response.headers.get("ETag"), response.headers.get("Last-Modified"))

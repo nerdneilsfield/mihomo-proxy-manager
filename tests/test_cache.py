@@ -84,3 +84,41 @@ async def test_malformed_cache_missing_source_raises_value_error(tmp_path) -> No
 
     with pytest.raises(ValueError, match="malformed cache file"):
         await store.get("airport_a")
+
+
+async def test_cache_dir_is_created_lazily(tmp_path) -> None:
+    config = CacheConfig(
+        tmp_path / "lazy",
+        2,
+        0o600,
+        max_stale=__import__("datetime").timedelta(days=7),
+    )
+    store = JsonSourceCacheStore(config)
+    assert not config.dir.exists()
+
+    cache = SourceCache(
+        "airport_a",
+        1,
+        datetime(2026, 6, 17, tzinfo=UTC),
+        datetime(2026, 6, 17, tzinfo=UTC),
+        None,
+        None,
+        1,
+        (),
+        None,
+        (ProxyRecord("airport_a", {"name": "HK", "type": "vmess"}),),
+    )
+    await store.set("airport_a", cache)
+    assert config.dir.exists()
+
+
+def test_read_or_miss_treats_race_condition_as_miss(tmp_path) -> None:
+    from unittest.mock import MagicMock
+
+    config = CacheConfig(tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7))
+    store = JsonSourceCacheStore(config)
+    path = MagicMock()
+    path.exists.return_value = True
+    path.stat.side_effect = FileNotFoundError()
+
+    assert store._read_or_miss(path) == (None, None)

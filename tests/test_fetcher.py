@@ -98,3 +98,90 @@ async def test_redirect_307_preserves_method_and_body() -> None:
 
     assert response.status_code == 200
     assert requests == [("POST", b'{"x":1}'), ("POST", b'{"x":1}')]
+
+
+@pytest.mark.asyncio
+async def test_redirect_cross_origin_strips_sensitive_and_custom_headers() -> None:
+    requests: list[httpx.Headers] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.headers)
+        if request.url.host == "93.184.216.34":
+            return httpx.Response(
+                302, headers={"Location": "https://8.8.8.8/done"}
+            )
+        return httpx.Response(200)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    http_config = HttpConfig(__import__("datetime").timedelta(seconds=30), "ua", 1024, 3)
+    safe = SafeHttpClient(client, http_config)
+    response = await safe.request(
+        "GET",
+        "https://93.184.216.34/start",
+        headers={
+            "Authorization": "Bearer secret",
+            "Cookie": "session=secret",
+            "X-Custom-Token": "secret",
+            "User-Agent": "custom-ua",
+        },
+        timeout=30.0,
+        allow_private_network=False,
+    )
+
+    assert response.status_code == 200
+    assert requests[0]["Authorization"] == "Bearer secret"
+    assert requests[0]["Cookie"] == "session=secret"
+    assert requests[0]["X-Custom-Token"] == "secret"
+
+    assert "Authorization" not in requests[1]
+    assert "Cookie" not in requests[1]
+    assert "X-Custom-Token" not in requests[1]
+    assert requests[1]["User-Agent"] == "custom-ua"
+
+
+@pytest.mark.asyncio
+async def test_redirect_same_origin_preserves_custom_headers() -> None:
+    requests: list[httpx.Headers] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.headers)
+        if request.url.path == "/start":
+            return httpx.Response(307, headers={"Location": "/done"})
+        return httpx.Response(200)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    http_config = HttpConfig(__import__("datetime").timedelta(seconds=30), "ua", 1024, 3)
+    safe = SafeHttpClient(client, http_config)
+    response = await safe.request(
+        "GET",
+        "https://93.184.216.34/start",
+        headers={"X-Custom-Token": "secret"},
+        timeout=30.0,
+        allow_private_network=False,
+    )
+
+    assert response.status_code == 200
+    assert requests[1]["X-Custom-Token"] == "secret"
+
+
+@pytest.mark.asyncio
+async def test_fetch_redacts_url_on_http_error() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    fetcher = SubscriptionFetcher(
+        client,
+        HttpConfig(__import__("datetime").timedelta(seconds=30), "ua", 1024, 3),
+    )
+
+    url = "https://example.com/sub?token=secret"
+    with pytest.raises(ValueError) as exc_info:
+        await fetcher.fetch(
+            url,
+            FetchConfig(__import__("datetime").timedelta(seconds=30), "ua", {}, False),
+        )
+
+    message = str(exc_info.value)
+    assert "token=secret" not in message
+    assert "token=***" in message or "example.com" in message

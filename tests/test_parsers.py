@@ -166,10 +166,52 @@ def test_auto_rejects_invalid_base64() -> None:
 
 
 def test_auto_includes_yaml_error_when_all_formats_fail() -> None:
-    with pytest.raises(ParseError, match="yaml failed") as exc_info:
+    with pytest.raises(ParseError, match="YAML was not a valid subscription") as exc_info:
         parse_subscription(b"{", source="airport_a", fmt="auto", parse_error="skip")
 
-    assert "YAML" not in str(exc_info.value) or "yaml failed" in str(exc_info.value)
+    assert "base64" in str(exc_info.value)
+
+
+def test_parse_yaml_rejects_non_utf8_body() -> None:
+    with pytest.raises(ParseError, match="failed to parse YAML"):
+        parse_subscription(b"\xff\xfe\xfd", source="airport_a", fmt="yaml", parse_error="fail")
+
+
+def test_auto_yaml_validation_fail_does_not_fallback() -> None:
+    body = b"""
+proxies:
+  - name: bad
+    type: ss
+    server: example.com
+"""
+    with pytest.raises(ParseError) as exc_info:
+        parse_subscription(body, source="airport_a", fmt="auto", parse_error="fail")
+
+    assert "missing required field" in str(exc_info.value)
+    assert "base64" not in str(exc_info.value).lower()
+
+
+def test_legacy_ss_link_with_ipv6_endpoint() -> None:
+    payload = base64.urlsafe_b64encode(b"chacha20-ietf-poly1305:secret@[2001:db8::1]:443").decode()
+    link = f"ss://{payload}#SS%20IPv6"
+    proxy = _parse_ss(link)
+
+    assert proxy["server"] == "2001:db8::1"
+    assert proxy["port"] == 443
+    assert proxy["cipher"] == "chacha20-ietf-poly1305"
+    assert proxy["password"] == "secret"
+
+
+def test_share_links_warning_redacts_exception_detail() -> None:
+    # A vmess link with an invalid base64 payload produces an exception message that
+    # could contain the raw link/token. The warning must redact/truncate it.
+    body = b"vmess://secret-token-that-should-not-leak\n"
+    with pytest.raises(ParseError) as exc_info:
+        parse_subscription(body, source="airport_a", fmt="share-links", parse_error="skip")
+
+    message = str(exc_info.value)
+    assert "secret-token-that-should-not-leak" not in message
+    assert "failed to parse share link" in message
 
 
 def test_legacy_ss_link_with_plugin_query() -> None:

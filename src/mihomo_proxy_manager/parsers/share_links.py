@@ -6,6 +6,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from mihomo_proxy_manager.models import ProxyRecord
 from mihomo_proxy_manager.parsers.yaml import validate_required_fields
+from mihomo_proxy_manager.security import redact_secret
 
 
 def _b64decode(value: str) -> bytes:
@@ -126,12 +127,23 @@ def _parse_ss(link: str) -> dict[str, object]:
     decoded = _b64decode(raw).decode()
     method_password, endpoint = decoded.rsplit("@", 1)
     cipher, password = method_password.split(":", 1)
-    server, port = endpoint.rsplit(":", 1)
+    if endpoint.startswith("["):
+        bracket_end = endpoint.rfind("]")
+        if bracket_end == -1:
+            raise ValueError("malformed IPv6 endpoint: missing closing bracket")
+        server = endpoint[1:bracket_end]
+        port_part = endpoint[bracket_end + 1 :]
+        if not port_part.startswith(":"):
+            raise ValueError("malformed IPv6 endpoint: port required after ']'")
+        port = int(port_part[1:])
+    else:
+        server, port_str = endpoint.rsplit(":", 1)
+        port = int(port_str)
     proxy: dict[str, object] = {
         "name": _name(parsed.fragment, server),
         "type": "ss",
         "server": server,
-        "port": int(port),
+        "port": port,
         "cipher": cipher,
         "password": password,
     }
@@ -185,5 +197,7 @@ def parse_share_links_text(text: str, *, source: str) -> tuple[list[ProxyRecord]
                 continue
             records.append(ProxyRecord(source=source, data=proxy))
         except Exception as exc:
-            warnings.append(f"failed to parse share link {line[:16]!r}: {exc}")
+            # Do not embed the raw link or exception text that may contain tokens/secrets.
+            detail = redact_secret(str(exc))[:200]
+            warnings.append(f"failed to parse share link: {detail}")
     return records, warnings

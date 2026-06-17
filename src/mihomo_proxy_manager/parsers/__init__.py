@@ -5,6 +5,8 @@ import binascii
 from dataclasses import dataclass
 from typing import Literal
 
+from yaml import YAMLError
+
 from mihomo_proxy_manager.models import ProxyRecord
 
 from .share_links import parse_share_links_text
@@ -50,11 +52,15 @@ def parse_subscription(
     if fmt in {"auto", "yaml"}:
         try:
             records, warnings = parse_yaml_subscription(body, source=source)
-            return _finalize(records, warnings, parse_error=parse_error)
-        except Exception as exc:
+        except (UnicodeDecodeError, YAMLError, ValueError) as exc:
+            # YAML decoding/structural failures allow fallback when format is auto.
             if fmt == "yaml":
-                raise
+                raise ParseError(f"failed to parse YAML subscription: {exc}") from exc
             yaml_error = exc
+        else:
+            # A structurally valid YAML subscription is considered the final format;
+            # parse_error="fail" validation warnings must propagate instead of falling back.
+            return _finalize(records, warnings, parse_error=parse_error)
 
     share_links_text: str | None = None
     share_links_warnings: list[str] = []
@@ -74,21 +80,20 @@ def parse_subscription(
         try:
             text = _try_base64_text(body)
         except (binascii.Error, ValueError, UnicodeDecodeError) as exc:
-            parts = [f"body is not valid base64 share-links: {exc}"]
+            parts = ["body is not valid base64-encoded share-links"]
             if share_links_warnings:
-                parts.append("; ".join(share_links_warnings))
+                parts.append("plain-text share-links did not produce usable records")
             if yaml_error is not None:
-                parts.append(f"yaml failed: {yaml_error}")
+                parts.append(f"YAML was not a valid subscription: {yaml_error}")
             raise ParseError("; ".join(parts)) from exc
         records, warnings = parse_share_links_text(text, source=source)
-        try:
+        if records or warnings:
             return _finalize(records, warnings, parse_error=parse_error)
-        except ParseError as exc:
-            parts = [str(exc)]
-            if share_links_warnings:
-                parts.append("; ".join(share_links_warnings))
-            if yaml_error is not None:
-                parts.append(f"yaml failed: {yaml_error}")
-            raise ParseError("; ".join(parts)) from exc
+        parts = ["base64-decoded share-links did not produce usable records"]
+        if share_links_warnings:
+            parts.append("plain-text share-links did not produce usable records")
+        if yaml_error is not None:
+            parts.append(f"YAML was not a valid subscription: {yaml_error}")
+        raise ParseError("; ".join(parts))
 
     raise ParseError("unsupported subscription format")

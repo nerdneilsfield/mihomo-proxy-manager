@@ -48,6 +48,12 @@ def _redact_value(value: object, secrets: list[str]) -> object:
 
     Recursively redact sensitive information from a value.
 
+    Exception instances are rendered via ``str(value)`` and redacted; without
+    this, ``logger.warning("... {error}", error=exc)`` would bypass the
+    patcher because loguru only stringifies extras at format time, leaving the
+    raw ``Exception`` object to be converted by the formatter after the patcher
+    has already run. See security.py:redact_secret for the redaction rules.
+
     Args:
         value: 需要脱敏的值 / The value to redact.
         secrets: 敏感字符串列表 / List of sensitive strings.
@@ -57,6 +63,8 @@ def _redact_value(value: object, secrets: list[str]) -> object:
     """
     if isinstance(value, str):
         return redact_secret(value, extra_secrets=secrets)
+    if isinstance(value, BaseException):
+        return redact_secret(str(value), extra_secrets=secrets)
     if isinstance(value, dict):
         return {key: _redact_value(nested, secrets) for key, nested in value.items()}
     if isinstance(value, list):

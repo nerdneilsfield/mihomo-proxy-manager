@@ -1,4 +1,4 @@
-.PHONY: help install test typecheck check serve refresh clean all
+.PHONY: help install test typecheck lint format check serve refresh clean all
 
 CONFIG ?= examples/config.toml
 
@@ -15,16 +15,19 @@ test: ## Run the full test suite
 test-fast: ## Run tests, stop on first failure
 	uv run pytest -x -q
 
-test-cov: ## Run tests with coverage
-	uv run pytest --cov=src/mihomo_proxy_manager --cov-report=term-missing
+test-cov: ## Run tests with coverage (term + html)
+	uv run pytest --cov=src/mihomo_proxy_manager --cov-report=term-missing --cov-report=html
 
 typecheck: ## Run ty type checker
 	uv run ty check
 
+lint: ## Lint with ruff (if installed)
+	uv run ruff check src tests || echo "ruff not installed; skipping"
+
 check: ## Validate example config (offline)
 	uv run mpm check -c $(CONFIG)
 
-all: test typecheck check ## Run tests + typecheck + config check
+all: test typecheck lint check ## Run tests + typecheck + lint + config check
 
 ##@ Runtime
 

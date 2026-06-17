@@ -30,7 +30,11 @@ def _decode_text(body: bytes) -> str:
 def _try_base64_text(body: bytes) -> str:
     raw = body.strip()
     padding = b"=" * (-len(raw) % 4)
-    return base64.b64decode(raw + padding).decode("utf-8-sig")
+    padded = raw + padding
+    try:
+        return base64.urlsafe_b64decode(padded).decode("utf-8-sig")
+    except (binascii.Error, ValueError):
+        return base64.b64decode(padded).decode("utf-8-sig")
 
 
 def _finalize(records: list[ProxyRecord], warnings: list[str], *, parse_error: Literal["skip", "fail"]) -> ParseResult:

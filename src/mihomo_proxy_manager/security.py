@@ -14,7 +14,7 @@ _IpAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
 _SECRET_QUERY_KEYS = {"token", "secret", "key", "apikey", "api_key", "access_token"}
 _AUTHORIZATION_RE = re.compile(
-    r"(?i)(Authorization[=:]\s*)(Bearer\s+\S+|.+)"
+    r"(?i)(Authorization[=:]\s*)([^\s]+(?:\s+[^\s]+)?)"
 )
 _BEARER_RE = re.compile(r"(?i)\bBearer\s+\S+")
 
@@ -103,17 +103,32 @@ def _parse_ip_literal(host: str) -> _IpAddress | None:
         except ValueError:
             pass
 
-    # Dotted decimal forms with fewer than four octets such as 127.1 or 10.0.1.
-    parts = host.split(".")
-    if 2 <= len(parts) <= 4 and all(part.isdigit() for part in parts):
+    # Dotted forms supporting decimal/hex/octal per octet, including short
+    # forms such as 127.1, 0x7f.1, or 0177.1.
+    def _parse_octet(part: str) -> int:
         try:
-            addr = 0
-            for part in parts[:-1]:
-                addr = (addr << 8) | int(part)
-            addr = (addr << (8 * (5 - len(parts)))) | int(parts[-1])
-            return ipaddress.ip_address(addr)
+            return int(part, 0)
         except ValueError:
-            pass
+            # int(part, 0) accepts explicit '0o' octal but may reject leading-zero
+            # octal literals in newer Python versions; handle them explicitly.
+            if part.startswith("0") and part.isdigit():
+                return int(part, 8)
+            raise
+
+    parts = host.split(".")
+    if 2 <= len(parts) <= 4:
+        try:
+            values = [_parse_octet(part) for part in parts]
+        except ValueError:
+            values = []
+        if values and all(0 <= value <= 255 for value in values):
+            if len(parts) == 4:
+                return ipaddress.IPv4Address(".".join(str(value) for value in values))
+            addr = 0
+            for value in values[:-1]:
+                addr = (addr << 8) | value
+            addr = (addr << (8 * (5 - len(parts)))) | values[-1]
+            return ipaddress.IPv4Address(addr)
 
     return None
 

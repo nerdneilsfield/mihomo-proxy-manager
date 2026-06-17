@@ -18,7 +18,12 @@ _SAFE_CROSS_ORIGIN_HEADERS = frozenset(
 
 def _origin(url: str) -> tuple[str, str | None, int | None]:
     parsed = urlparse(url)
-    return (parsed.scheme, parsed.hostname, parsed.port)
+    port = parsed.port
+    if port is None and parsed.scheme == "http":
+        port = 80
+    elif port is None and parsed.scheme == "https":
+        port = 443
+    return (parsed.scheme, parsed.hostname, port)
 
 
 @dataclass(frozen=True)

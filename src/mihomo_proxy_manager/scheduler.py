@@ -63,14 +63,19 @@ class RefreshScheduler:
         next_target = loop.time() + interval_seconds
         jitter_seconds = self.config.scheduler.jitter.total_seconds()
         while not self._stopping.is_set():
-            # Apply jitter as a one-time offset around the target so the base
-            # interval stays aligned and does not drift across cycles.
-            jitter = random.uniform(-jitter_seconds / 2, jitter_seconds / 2) if jitter_seconds > 0 else 0.0
+            jitter = random.uniform(0, jitter_seconds) if jitter_seconds > 0 else 0.0
             delay = max(0.0, next_target + jitter - loop.time())
             await asyncio.sleep(delay)
             if self._stopping.is_set():
                 return
-            await self.refresher.refresh(source_name)
+            try:
+                await self.refresher.refresh(source_name)
+            except Exception as exc:
+                logger.warning(
+                    "scheduled refresh failed for source {source}: {error}",
+                    source=source_name,
+                    error=exc,
+                )
             next_target += interval_seconds
 
     async def _cron_loop(self, source_name: str, expr: str) -> None:
@@ -88,4 +93,11 @@ class RefreshScheduler:
             if self._stopping.is_set():
                 return
             await asyncio.sleep(self._jitter_seconds())
-            await self.refresher.refresh(source_name)
+            try:
+                await self.refresher.refresh(source_name)
+            except Exception as exc:
+                logger.warning(
+                    "scheduled refresh failed for source {source}: {error}",
+                    source=source_name,
+                    error=exc,
+                )

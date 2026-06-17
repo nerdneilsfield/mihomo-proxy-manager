@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -286,6 +287,55 @@ async def test_provider_logs_awaited_refresh_exception_and_returns_503(tmp_path,
     assert response.status_code == 503
     assert refresher.called == ["airport_a"]
     assert any("route refresh failed" in msg for msg in warnings)
+
+
+class FailingScheduler:
+    def __init__(self) -> None:
+        self.stop_called = False
+
+    async def start(self) -> None:
+        raise RuntimeError("startup refresh failed")
+
+    async def stop(self) -> None:
+        self.stop_called = True
+
+
+def test_lifespan_stops_scheduler_when_startup_fails(tmp_path) -> None:
+    config = load_config(config_file(tmp_path))
+    scheduler = FailingScheduler()
+    app = create_app(config, cache_store=JsonSourceCacheStore(config.cache), refresher=None, scheduler=scheduler)
+
+    with pytest.raises(RuntimeError):
+        with TestClient(app):
+            pass
+
+    assert scheduler.stop_called
+
+
+class SleepRefresher:
+    def __init__(self) -> None:
+        self.cancelled = False
+
+    async def refresh(self, source_name: str) -> None:
+        try:
+            await asyncio.sleep(10)
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+
+
+@pytest.mark.asyncio
+async def test_lifespan_cancels_background_refreshes_on_shutdown(tmp_path) -> None:
+    config = load_config(config_file(tmp_path))
+    store = JsonSourceCacheStore(config.cache)
+    refresher = SleepRefresher()
+    app = create_app(config, cache_store=store, refresher=refresher, scheduler=None)
+
+    with TestClient(app) as client:
+        response = client.get("/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml")
+
+    assert response.status_code == 503
+    assert refresher.cancelled
 
 
 @pytest.mark.asyncio

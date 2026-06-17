@@ -97,6 +97,24 @@ def test_allows_public_noncanonical_ip_literals_without_dns() -> None:
     assert_safe_url("http://134744072/foo", allow_private_network=False, resolve_dns=False)
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://0x7f.0.0.1/foo",
+        "http://0177.0.0.1/foo",
+        "http://0x7f.1/foo",
+        "http://0177.1/foo",
+    ],
+)
+def test_rejects_hex_octal_private_ip_literals_without_dns(url: str) -> None:
+    with pytest.raises(SecurityError):
+        assert_safe_url(url, allow_private_network=False, resolve_dns=False)
+
+
+def test_allows_public_hex_octal_ip_literals_without_dns() -> None:
+    assert_safe_url("http://0x8.0x8.0x8.0x8/foo", allow_private_network=False, resolve_dns=False)
+
+
 def test_redact_secret_standalone_bearer() -> None:
     assert redact_secret("log line with Bearer abc123") == "log line with Bearer ***"
     assert redact_secret("Bearer first and Bearer second") == "Bearer *** and Bearer ***"

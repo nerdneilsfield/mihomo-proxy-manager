@@ -53,7 +53,7 @@ async def _build_runtime(config_path: str):
     config = load_config(config_file)
     configure_logging(config)
     cache_store = JsonSourceCacheStore(config.cache)
-    client = httpx.AsyncClient()
+    client = httpx.AsyncClient(cookies=None)
     fetcher = SubscriptionFetcher(client, config.http)
     plugin = HttpActionPlugin(SafeHttpClient(client, config.http))
     refresher = SourceRefresher(
@@ -94,7 +94,7 @@ def _cmd_refresh(config_path: str, source_name: str) -> int:
             if result.ok:
                 print(f"OK: refreshed {result.source}: nodes={result.node_count} warnings={result.warning_count} cache={result.cache_path}")
                 return 0
-            print(f"ERROR: refresh failed for {result.source}: cache={result.cache_path} error={result.error}")
+            print(f"ERROR: refresh failed for {result.source}: nodes={result.node_count} warnings={result.warning_count} cache={result.cache_path} error={result.error}")
             return 1
         finally:
             await client.aclose()

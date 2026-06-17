@@ -163,8 +163,69 @@ async def test_scheduler_interval_preserves_base_despite_jitter(tmp_path) -> Non
     await scheduler.stop()
 
     intervals = [b - a for a, b in zip(refresher.timestamps[:-1], refresher.timestamps[1:])]
-    # Jitter is centered around the target, so the base interval should be preserved
-    # even though individual intervals vary.
-    assert all(0.04 <= iv <= 0.16 for iv in intervals), intervals
+    # Jitter is applied as a positive offset in [0, jitter], so individual
+    # intervals vary around the base interval by up to the jitter magnitude.
+    assert all(0.05 <= iv <= 0.15 for iv in intervals), intervals
     average = sum(intervals) / len(intervals)
     assert 0.08 <= average <= 0.12, average
+
+
+class FailingRefresher:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def refresh(self, source_name: str) -> None:
+        self.calls.append(source_name)
+        raise RuntimeError("refresh failed")
+
+
+@pytest.mark.asyncio
+async def test_scheduler_interval_loop_survives_refresher_exception(tmp_path) -> None:
+    import dataclasses
+
+    source = SourceConfig(
+        name="airport_a",
+        url="https://example.com/sub",
+        format="auto",
+        parse_error="skip",
+        fetch=FetchConfig(timedelta(seconds=30), "ua", {}, False),
+        refresh=RefreshConfig(interval=timedelta(seconds=0.05), cron=()),
+        rename=RenameConfig(),
+        filter=FilterConfig(),
+        plugins=SourcePluginConfig(),
+    )
+    base_config = scheduler_config(tmp_path, startup_refresh=False)
+    config = dataclasses.replace(
+        base_config,
+        sources={"airport_a": source},
+        scheduler=SchedulerConfig(
+            startup_refresh=False,
+            startup_refresh_mode="blocking",
+            jitter=timedelta(seconds=0),
+            refresh_lock_timeout=timedelta(seconds=1),
+        ),
+    )
+    refresher = FailingRefresher()
+    scheduler = RefreshScheduler(config, refresher)
+
+    await scheduler.start()
+    await asyncio.sleep(0.15)
+    await scheduler.stop()
+
+    assert len(refresher.calls) >= 2
+
+
+@pytest.mark.asyncio
+async def test_scheduler_start_failure_stops_pending_tasks(tmp_path) -> None:
+    class RaiseOnStartRefresher:
+        async def refresh(self, source_name: str) -> None:
+            raise RuntimeError("startup refresh failed")
+
+    refresher = RaiseOnStartRefresher()
+    scheduler = RefreshScheduler(scheduler_config(tmp_path), refresher)
+
+    with pytest.raises(RuntimeError):
+        await scheduler.start()
+    # stop() must still be callable and cancel any tasks created during start().
+    await scheduler.stop()
+    assert all(task.done() for task in scheduler._tasks)

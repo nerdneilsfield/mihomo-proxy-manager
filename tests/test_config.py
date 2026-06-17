@@ -149,3 +149,27 @@ success_status = 204
 def test_file_logging_defaults_to_disabled(temp_config_path: Path) -> None:
     config = load_config(write_config(temp_config_path, minimal_config()))
     assert not config.logging_file.enabled
+
+
+def test_validation_rejects_missing_source_url(temp_config_path: Path) -> None:
+    body = minimal_config().replace(
+        '[sources.airport_a]\nurl = "https://example.com/sub"',
+        '[sources.airport_a]',
+    )
+    config = load_config(write_config(temp_config_path, body), validate=False)
+    report = config.validate(config_path=temp_config_path)
+
+    assert not report.ok
+    assert "source 'airport_a' URL is required" in "\n".join(report.errors)
+
+
+def test_source_plugin_on_failure_must_be_abort_or_continue(temp_config_path: Path) -> None:
+    body = minimal_config() + """
+[sources.airport_a.plugins.before_fetch.turn_on]
+on_failure = "panic"
+
+[plugins.turn_on]
+url = "https://example.com/action"
+"""
+    with pytest.raises(ValueError, match="on_failure"):
+        load_config(write_config(temp_config_path, body), validate=False)

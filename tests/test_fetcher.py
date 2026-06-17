@@ -188,6 +188,64 @@ async def test_fetch_redacts_url_on_http_error() -> None:
 
 
 @pytest.mark.asyncio
+async def test_redirect_to_default_port_is_same_origin(tmp_path) -> None:
+    requests: list[httpx.Headers] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.headers)
+        if request.url.path == "/start":
+            return httpx.Response(
+                302, headers={"Location": "http://93.184.216.34:80/done"}
+            )
+        return httpx.Response(200)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    http_config = HttpConfig(__import__("datetime").timedelta(seconds=30), "ua", 1024, 3)
+    safe = SafeHttpClient(client, http_config)
+    response = await safe.request(
+        "GET",
+        "http://93.184.216.34/start",
+        headers={"X-Custom-Token": "secret"},
+        timeout=30.0,
+        allow_private_network=False,
+    )
+
+    assert response.status_code == 200
+    assert requests[1]["X-Custom-Token"] == "secret"
+
+
+@pytest.mark.asyncio
+async def test_shared_client_does_not_leak_cookies() -> None:
+    requests: list[httpx.Headers] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.headers)
+        if request.url.path == "/a":
+            return httpx.Response(200, headers={"Set-Cookie": "session=secret; Path=/"})
+        return httpx.Response(200)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), cookies=None)
+    http_config = HttpConfig(__import__("datetime").timedelta(seconds=30), "ua", 1024, 3)
+    safe = SafeHttpClient(client, http_config)
+    await safe.request(
+        "GET",
+        "https://93.184.216.34/a",
+        headers={},
+        timeout=30.0,
+        allow_private_network=False,
+    )
+    await safe.request(
+        "GET",
+        "https://8.8.8.8/b",
+        headers={},
+        timeout=30.0,
+        allow_private_network=False,
+    )
+
+    assert "Cookie" not in requests[1]
+
+
+@pytest.mark.asyncio
 async def test_redirect_body_ignored_without_size_limit() -> None:
     """Redirect bodies must not be buffered or subject to max_response_size."""
 

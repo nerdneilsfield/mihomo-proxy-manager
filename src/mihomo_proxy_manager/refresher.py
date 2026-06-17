@@ -49,9 +49,14 @@ class SourceRefresher:
 
     async def refresh(self, source_name: str) -> RefreshResult:
         existing = self._inflight.get(source_name)
-        if existing is not None and not existing.done():
+        if existing is not None:
+            if existing.done():
+                return existing.result()
             try:
-                return await asyncio.wait_for(asyncio.shield(existing), timeout=self.refresh_lock_timeout.total_seconds())
+                return await asyncio.wait_for(
+                    asyncio.shield(existing),
+                    timeout=self.refresh_lock_timeout.total_seconds(),
+                )
             except TimeoutError:
                 return RefreshResult(
                     False,
@@ -60,11 +65,8 @@ class SourceRefresher:
                 )
         task = asyncio.create_task(self._refresh_with_lock(source_name))
         self._inflight[source_name] = task
-        try:
-            return await task
-        finally:
-            if self._inflight.get(source_name) is task:
-                self._inflight.pop(source_name, None)
+        task.add_done_callback(lambda t, name=source_name: self._inflight.pop(name, None))
+        return await task
 
     async def _refresh_with_lock(self, source_name: str) -> RefreshResult:
         lock = self._lock(source_name)
@@ -84,9 +86,10 @@ class SourceRefresher:
     async def _refresh_locked(self, source_name: str) -> RefreshResult:
         source = self.sources[source_name]
         now = datetime.now(UTC)
-        self.cache_store.set_refreshing(source_name, True)
-        old_cache = await self.cache_store.get(source_name)
+        old_cache: SourceCache | None = None
         try:
+            self.cache_store.set_refreshing(source_name, True)
+            old_cache = await self.cache_store.get(source_name)
             for plugin_name, ref in source.plugins.before_fetch.items():
                 plugin_config = self.plugins[plugin_name]
                 if self.http_plugin is None:

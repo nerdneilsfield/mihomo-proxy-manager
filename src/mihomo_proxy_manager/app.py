@@ -134,8 +134,6 @@ def create_app(
                         continue
                     try:
                         task.result()
-                    except asyncio.TimeoutError:
-                        logger.warning("route refresh timed out for source {source}", source=source_name)
                     except Exception as exc:
                         logger.warning(
                             "route refresh failed for source {source}: {error}",
@@ -169,9 +167,19 @@ def create_app(
     @contextlib.asynccontextmanager
     async def lifespan(app: Starlette):
         if scheduler:
-            await scheduler.start()
-        yield
-        if scheduler:
-            await scheduler.stop()
+            try:
+                await scheduler.start()
+            except Exception:
+                await scheduler.stop()
+                raise
+        try:
+            yield
+        finally:
+            if scheduler:
+                await scheduler.stop()
+            if background_tasks:
+                for task in list(background_tasks):
+                    task.cancel()
+                await asyncio.gather(*background_tasks, return_exceptions=True)
 
     return Starlette(routes=routes, lifespan=lifespan)

@@ -31,13 +31,13 @@ async def test_cache_roundtrip_and_permissions(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_unknown_schema_version_is_rejected(tmp_path) -> None:
+@pytest.mark.asyncio
+async def test_unknown_schema_version_is_treated_as_miss(tmp_path, caplog) -> None:
     path = tmp_path / "airport_a.json"
     path.write_text('{"schema_version": 99, "source": "airport_a"}', encoding="utf-8")
     store = JsonSourceCacheStore(CacheConfig(tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7)))
 
-    with pytest.raises(ValueError):
-        await store.get("airport_a")
+    assert await store.get("airport_a") is None
 
 
 @pytest.mark.asyncio
@@ -67,23 +67,21 @@ async def test_cache_reloads_when_file_changes_from_another_process(tmp_path) ->
 
 
 @pytest.mark.asyncio
-async def test_malformed_cache_json_raises_value_error(tmp_path) -> None:
+async def test_malformed_cache_json_is_treated_as_miss(tmp_path) -> None:
     path = tmp_path / "airport_a.json"
     path.write_text("not json", encoding="utf-8")
     store = JsonSourceCacheStore(CacheConfig(tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7)))
 
-    with pytest.raises(ValueError, match="malformed cache file"):
-        await store.get("airport_a")
+    assert await store.get("airport_a") is None
 
 
 @pytest.mark.asyncio
-async def test_malformed_cache_missing_source_raises_value_error(tmp_path) -> None:
+async def test_malformed_cache_missing_source_is_treated_as_miss(tmp_path) -> None:
     path = tmp_path / "airport_a.json"
     path.write_text('{"schema_version": 1}', encoding="utf-8")
     store = JsonSourceCacheStore(CacheConfig(tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7)))
 
-    with pytest.raises(ValueError, match="malformed cache file"):
-        await store.get("airport_a")
+    assert await store.get("airport_a") is None
 
 
 async def test_cache_dir_is_created_lazily(tmp_path) -> None:
@@ -121,4 +119,82 @@ def test_read_or_miss_treats_race_condition_as_miss(tmp_path) -> None:
     path.exists.return_value = True
     path.stat.side_effect = FileNotFoundError()
 
-    assert store._read_or_miss(path) == (None, None)
+    assert store._read_or_miss("airport_a", path) == (None, None)
+
+
+@pytest.mark.asyncio
+async def test_get_does_not_overwrite_newer_memory_with_older_disk(tmp_path) -> None:
+    import time
+
+    config = CacheConfig(tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7))
+    store = JsonSourceCacheStore(config)
+    new_cache = SourceCache(
+        "airport_a",
+        1,
+        datetime(2026, 6, 18, tzinfo=UTC),
+        datetime(2026, 6, 18, tzinfo=UTC),
+        None,
+        None,
+        1,
+        (),
+        None,
+        (ProxyRecord("airport_a", {"name": "new", "type": "vmess"}),),
+    )
+    old_cache = SourceCache(
+        "airport_a",
+        1,
+        datetime(2026, 6, 17, tzinfo=UTC),
+        datetime(2026, 6, 17, tzinfo=UTC),
+        None,
+        None,
+        1,
+        (),
+        None,
+        (ProxyRecord("airport_a", {"name": "old", "type": "vmess"}),),
+    )
+
+    await store.set("airport_a", old_cache)
+    # Pretend a concurrent set already updated memory to the newer cache.
+    store._memory["airport_a"] = new_cache
+    store._memory_mtime["airport_a"] = time.time() + 10
+
+    loaded = await store.get("airport_a")
+    assert loaded is not None
+    assert loaded.proxies[0].data["name"] == "new"
+
+
+@pytest.mark.asyncio
+async def test_write_removes_stale_tmp_file(tmp_path) -> None:
+    config = CacheConfig(tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7))
+    store = JsonSourceCacheStore(config)
+    stale_tmp = tmp_path / "airport_a.json.tmp"
+    stale_tmp.write_text("stale", encoding="utf-8")
+    cache = SourceCache(
+        "airport_a",
+        1,
+        datetime(2026, 6, 17, tzinfo=UTC),
+        datetime(2026, 6, 17, tzinfo=UTC),
+        None,
+        None,
+        1,
+        (),
+        None,
+        (ProxyRecord("airport_a", {"name": "HK", "type": "vmess"}),),
+    )
+
+    await store.set("airport_a", cache)
+
+    assert not stale_tmp.exists()
+    assert (tmp_path / "airport_a.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_startup_cleans_stale_tmp_files(tmp_path) -> None:
+    config = CacheConfig(tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7))
+    stale_tmp = tmp_path / "airport_a.json.tmp"
+    stale_tmp.write_text("stale", encoding="utf-8")
+    store = JsonSourceCacheStore(config)
+
+    await store._ensure_dir()
+
+    assert not stale_tmp.exists()

@@ -239,6 +239,26 @@ def test_parse_ss_legacy_with_query_directly() -> None:
     assert proxy["plugin-opts"] == {"obfs": "tls"}
 
 
+def test_urlsafe_base64_share_links() -> None:
+    vmess = {
+        "v": "2",
+        "ps": "VM 02",
+        "add": "example.com",
+        "port": "443",
+        "id": "00000000-0000-0000-0000-000000000000",
+        "aid": "0",
+        "scy": "auto",
+        "tls": "tls",
+    }
+    link = "vmess://" + base64.b64encode(json.dumps(vmess).encode()).decode()
+    encoded = base64.urlsafe_b64encode(link.encode())
+
+    result = parse_subscription(encoded, source="airport_a", fmt="auto", parse_error="fail")
+
+    assert result.records[0].data["type"] == "vmess"
+    assert result.records[0].data["name"] == "VM 02"
+
+
 def test_ss_legacy_share_link_falls_back_to_standard_base64() -> None:
     """Providers may emit standard Base64 (+ and /) instead of URL-safe (- and _)."""
     payload = base64.b64encode(b"aes-256-gcm:???@example.com:443").decode()

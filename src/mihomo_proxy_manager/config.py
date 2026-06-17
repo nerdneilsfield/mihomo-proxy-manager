@@ -119,10 +119,15 @@ def _refresh(data: dict[str, Any]) -> RefreshConfig:
 
 def _source_plugins(data: dict[str, Any]) -> SourcePluginConfig:
     before_fetch_table = _table(data, "before_fetch")
-    before_fetch = {
-        name: PluginRefConfig(on_failure=values.get("on_failure", "abort"))
-        for name, values in before_fetch_table.items()
-    }
+    before_fetch = {}
+    for name, values in before_fetch_table.items():
+        on_failure = values.get("on_failure", "abort")
+        if on_failure not in {"abort", "continue"}:
+            raise ValueError(
+                f"invalid on_failure {on_failure!r} for plugin ref {name!r}; "
+                "must be 'abort' or 'continue'"
+            )
+        before_fetch[name] = PluginRefConfig(on_failure=on_failure)
     return SourcePluginConfig(before_fetch=before_fetch)
 
 
@@ -179,18 +184,24 @@ class LoadedConfig(AppConfig):
             for expr in source.refresh.cron:
                 if not croniter.is_valid(expr):
                     errors.append(f"source {source.name!r} cron expression is invalid: {expr!r}")
-            try:
-                assert_safe_url(source.url, allow_private_network=source.fetch.allow_private_network, resolve_dns=False)
-            except SecurityError as exc:
-                errors.append(f"source {source.name!r} URL is unsafe: {exc}")
+            if not source.url:
+                errors.append(f"source {source.name!r} URL is required")
+            else:
+                try:
+                    assert_safe_url(source.url, allow_private_network=source.fetch.allow_private_network, resolve_dns=False)
+                except SecurityError as exc:
+                    errors.append(f"source {source.name!r} URL is unsafe: {exc}")
 
         for plugin in self.plugins.values():
             if plugin.type != "http_action":
                 errors.append(f"plugin {plugin.name!r} type is unsupported: {plugin.type!r}")
-            try:
-                assert_safe_url(plugin.url, allow_private_network=plugin.allow_private_network, resolve_dns=False)
-            except SecurityError as exc:
-                errors.append(f"plugin {plugin.name!r} URL is unsafe: {exc}")
+            if not plugin.url:
+                errors.append(f"plugin {plugin.name!r} URL is required")
+            else:
+                try:
+                    assert_safe_url(plugin.url, allow_private_network=plugin.allow_private_network, resolve_dns=False)
+                except SecurityError as exc:
+                    errors.append(f"plugin {plugin.name!r} URL is unsafe: {exc}")
 
         try:
             ZoneInfo(self.server.timezone)

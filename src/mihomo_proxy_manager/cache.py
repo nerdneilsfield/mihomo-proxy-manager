@@ -9,6 +9,7 @@ from typing import Any, Protocol
 from urllib.parse import quote
 
 from filelock import FileLock
+from loguru import logger
 
 from .models import CacheConfig, ProxyRecord, SourceCache, SourceStatus
 
@@ -38,12 +39,21 @@ class JsonSourceCacheStore:
         self._memory_mtime: dict[str, float] = {}
         self._refreshing: set[str] = set()
         self._dir_created: bool = False
+        self._lock = asyncio.Lock()
 
     async def _ensure_dir(self) -> None:
         if self._dir_created:
             return
         await asyncio.to_thread(self.config.dir.mkdir, parents=True, exist_ok=True)
+        await asyncio.to_thread(self._cleanup_tmp_files)
         self._dir_created = True
+
+    def _cleanup_tmp_files(self) -> None:
+        for tmp in self.config.dir.glob("*.json.tmp"):
+            try:
+                tmp.unlink()
+            except FileNotFoundError:
+                pass
 
     def _path(self, source_name: str) -> Path:
         safe_name = quote(source_name, safe="")
@@ -63,25 +73,38 @@ class JsonSourceCacheStore:
             self._refreshing.discard(source_name)
 
     async def get(self, source_name: str) -> SourceCache | None:
-        await self._ensure_dir()
-        path = self._path(source_name)
-        cache, mtime = await asyncio.to_thread(self._read_or_miss, path)
-        if cache is None:
-            self._memory.pop(source_name, None)
-            self._memory_mtime.pop(source_name, None)
-            return None
-        assert mtime is not None
-        if source_name in self._memory and self._memory_mtime.get(source_name) == mtime:
-            return self._memory[source_name]
-        self._memory[source_name] = cache
-        self._memory_mtime[source_name] = mtime
-        return cache
+        async with self._lock:
+            await self._ensure_dir()
+            path = self._path(source_name)
+            try:
+                cache, mtime = await asyncio.to_thread(self._read_or_miss, source_name, path)
+            except (ValueError, KeyError) as exc:
+                logger.warning(
+                    "corrupted cache file for source {source}: {error}; treating as miss",
+                    source=source_name,
+                    error=exc,
+                )
+                self._memory.pop(source_name, None)
+                self._memory_mtime.pop(source_name, None)
+                return None
+            if cache is None:
+                self._memory.pop(source_name, None)
+                self._memory_mtime.pop(source_name, None)
+                return None
+            assert mtime is not None
+            memory_mtime = self._memory_mtime.get(source_name)
+            if memory_mtime is not None and mtime <= memory_mtime:
+                return self._memory[source_name]
+            self._memory[source_name] = cache
+            self._memory_mtime[source_name] = mtime
+            return cache
 
     async def set(self, source_name: str, cache: SourceCache) -> None:
-        await self._ensure_dir()
-        mtime = await asyncio.to_thread(self._write_file, source_name, cache)
-        self._memory[source_name] = cache
-        self._memory_mtime[source_name] = mtime
+        async with self._lock:
+            await self._ensure_dir()
+            mtime = await asyncio.to_thread(self._write_file, source_name, cache)
+            self._memory[source_name] = cache
+            self._memory_mtime[source_name] = mtime
 
     async def status(self, source_name: str) -> SourceStatus:
         cache = await self.get(source_name)
@@ -96,12 +119,14 @@ class JsonSourceCacheStore:
             refreshing=source_name in self._refreshing,
         )
 
-    def _read_or_miss(self, path: Path) -> tuple[SourceCache | None, float | None]:
+    def _read_or_miss(self, source_name: str, path: Path) -> tuple[SourceCache | None, float | None]:
         try:
-            if not path.exists():
-                return None, None
-            mtime = path.stat().st_mtime
-            return self._read_file(path), mtime
+            lock = FileLock(str(self._lock_path(source_name)))
+            with lock:
+                if not path.exists():
+                    return None, None
+                mtime = path.stat().st_mtime
+                return self._read_file(path), mtime
         except FileNotFoundError:
             # Treat a file removed between exists()/stat()/read_text() as a cache miss.
             return None, None
@@ -149,6 +174,7 @@ class JsonSourceCacheStore:
         tmp = path.with_suffix(".json.tmp")
         lock = FileLock(str(self._lock_path(source_name)))
         with lock:
+            tmp.unlink(missing_ok=True)
             tmp.write_text(json.dumps(self._to_json(cache), ensure_ascii=False, indent=self.config.write_indent), encoding="utf-8")
             os.chmod(tmp, self.config.file_mode)
             os.replace(tmp, path)

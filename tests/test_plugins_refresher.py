@@ -19,7 +19,7 @@ from mihomo_proxy_manager.models import (
     SourcePluginConfig,
 )
 from mihomo_proxy_manager.plugins.http_action import HttpActionPlugin, PluginContext
-from mihomo_proxy_manager.refresher import SourceRefresher
+from mihomo_proxy_manager.refresher import RefreshResult, SourceRefresher
 
 
 @pytest.mark.asyncio
@@ -178,6 +178,89 @@ async def test_refresher_inflight_timeout_allows_stale_cache_fallback(tmp_path) 
 
     assert not second.ok
     assert "stale cache" in (second.error or "").lower()
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+
+
+class RaisingCacheStore(JsonSourceCacheStore):
+    async def get(self, source_name: str):
+        raise RuntimeError("cache corrupted")
+
+
+@pytest.mark.asyncio
+async def test_refresher_clears_refreshing_flag_when_cache_get_fails(tmp_path) -> None:
+    store = RaisingCacheStore(CacheConfig(tmp_path, 2, 0o600, timedelta(days=7)))
+    refresher = SourceRefresher(
+        sources={"airport_a": source_config()},
+        plugins={},
+        cache_store=store,
+        fetcher=StaticFetcher(b""),
+        http_plugin=None,
+        refresh_lock_timeout=timedelta(seconds=1),
+    )
+
+    result = await refresher.refresh("airport_a")
+
+    assert not result.ok
+    assert source_config().name not in store._refreshing
+
+
+@pytest.mark.asyncio
+async def test_refresher_returns_done_inflight_result_without_extra_fetch(tmp_path) -> None:
+    body = b'''
+proxies:
+  - name: HK
+    type: vmess
+    server: example.com
+    port: 443
+    uuid: 00000000-0000-0000-0000-000000000000
+    cipher: auto
+'''
+    store = JsonSourceCacheStore(CacheConfig(tmp_path, 2, 0o600, timedelta(days=7)))
+    fetcher = StaticFetcher(body)
+    refresher = SourceRefresher(
+        sources={"airport_a": source_config()},
+        plugins={},
+        cache_store=store,
+        fetcher=fetcher,
+        http_plugin=None,
+        refresh_lock_timeout=timedelta(seconds=1),
+    )
+
+    async def done_refresh() -> RefreshResult:
+        return await refresher.refresh("airport_a")
+
+    done_task = asyncio.create_task(done_refresh())
+    await asyncio.sleep(0)
+    refresher._inflight["airport_a"] = done_task
+    second = await refresher.refresh("airport_a")
+
+    assert second.ok
+    assert fetcher.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_refresher_caller_cancellation_keeps_inflight_task(tmp_path) -> None:
+    store = JsonSourceCacheStore(CacheConfig(tmp_path, 2, 0o600, timedelta(days=7)))
+    refresher = SourceRefresher(
+        sources={"airport_a": source_config()},
+        plugins={},
+        cache_store=store,
+        fetcher=SlowFetcher(),
+        http_plugin=None,
+        refresh_lock_timeout=timedelta(seconds=1),
+    )
+
+    first = asyncio.create_task(refresher.refresh("airport_a"))
+    await asyncio.sleep(0)
+    waiter = asyncio.create_task(refresher.refresh("airport_a"))
+    await asyncio.sleep(0)
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+
+    assert "airport_a" in refresher._inflight
     first.cancel()
     with pytest.raises(asyncio.CancelledError):
         await first

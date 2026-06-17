@@ -5,7 +5,7 @@ Scheduler tests including startup refresh, interval loops, and cron expressions.
 
 import asyncio
 import random
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import pytest
 
@@ -417,7 +417,6 @@ async def test_scheduler_cron_loop_triggers_refresh(tmp_path, monkeypatch) -> No
 
     Test that the cron loop triggers refreshes and stops cleanly.
     """
-    from datetime import UTC
 
     class FakeIterator:
         def __init__(self) -> None:

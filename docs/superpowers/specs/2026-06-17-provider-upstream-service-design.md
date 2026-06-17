@@ -49,7 +49,7 @@ host = "0.0.0.0"
 port = 8080
 timezone = "Asia/Shanghai"
 health_path = "/healthz"
-status_path = "/s/X6HfeBRQz6xqk9S4dTV7gQ"
+status_path = "/s/X6HfeBRQz6xqk9S4dTV7gQwL2nP8aYcM"
 route_refresh_wait = "10s"
 
 [cache]
@@ -140,7 +140,7 @@ timeout = "10s"
 Authorization = "Bearer xxx"
 
 [routes.phone]
-path = "/p/CsYWr0BGzGQQmwq2X5eG5Q.yaml"
+path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml"
 sources = ["airport_a"]
 require_all_sources = false
 

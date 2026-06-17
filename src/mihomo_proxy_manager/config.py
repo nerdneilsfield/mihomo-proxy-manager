@@ -7,10 +7,11 @@ import tomllib
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from croniter import croniter
+
+from .security import SecurityError, assert_safe_url, has_path_entropy
 
 from .models import (
     AppConfig,
@@ -121,9 +122,16 @@ class LoadedConfig(AppConfig):
             if self.server.status_path in paths:
                 errors.append("health_path and status_path collide")
             paths[self.server.status_path] = "status_path"
+        if self.server.status_path and not has_path_entropy(
+            self.server.status_path,
+            min_bits=self.security.hidden_path_min_entropy_bits,
+        ):
+            errors.append("status_path does not satisfy hidden path entropy requirement")
         for route in self.routes.values():
             if not route.path.startswith("/"):
                 errors.append(f"route {route.name!r} path must start with '/'")
+            if not has_path_entropy(route.path, min_bits=self.security.hidden_path_min_entropy_bits):
+                errors.append(f"route {route.name!r} path does not satisfy hidden path entropy requirement")
             key = f"route {route.name!r}"
             if route.path in paths:
                 errors.append(f"path collision for {key} with {paths[route.path]}")
@@ -157,20 +165,18 @@ class LoadedConfig(AppConfig):
             for expr in source.refresh.cron:
                 if not croniter.is_valid(expr):
                     errors.append(f"source {source.name!r} cron expression is invalid: {expr!r}")
-            parsed = urlparse(source.url)
-            if parsed.scheme not in {"http", "https"}:
-                errors.append(f"source {source.name!r} has unsupported URL scheme {parsed.scheme!r}")
-            if not parsed.hostname:
-                errors.append(f"source {source.name!r} URL host is required")
+            try:
+                assert_safe_url(source.url, allow_private_network=source.fetch.allow_private_network, resolve_dns=False)
+            except SecurityError as exc:
+                errors.append(f"source {source.name!r} URL is unsafe: {exc}")
 
         for plugin in self.plugins.values():
             if plugin.type != "http_action":
                 errors.append(f"plugin {plugin.name!r} type is unsupported: {plugin.type!r}")
-            parsed = urlparse(plugin.url)
-            if parsed.scheme not in {"http", "https"}:
-                errors.append(f"plugin {plugin.name!r} has unsupported URL scheme {parsed.scheme!r}")
-            if not parsed.hostname:
-                errors.append(f"plugin {plugin.name!r} URL host is required")
+            try:
+                assert_safe_url(plugin.url, allow_private_network=plugin.allow_private_network, resolve_dns=False)
+            except SecurityError as exc:
+                errors.append(f"plugin {plugin.name!r} URL is unsafe: {exc}")
 
         try:
             ZoneInfo(self.server.timezone)

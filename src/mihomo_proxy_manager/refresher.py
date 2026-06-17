@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from loguru import logger
+
 from .cache import CURRENT_SCHEMA_VERSION, SourceCacheStore
 from .models import PluginConfig, SourceCache, SourceConfig
 from .parsers import ParseError, parse_subscription
@@ -98,13 +100,22 @@ class SourceRefresher:
         existing = self._inflight.get(source_name)
         if existing is not None:
             if existing.done():
+                logger.debug(
+                    "refresh reusing done inflight: source={source}", source=source_name
+                )
                 return existing.result()
+            logger.debug(
+                "refresh waiting on inflight: source={source}", source=source_name
+            )
             try:
                 return await asyncio.wait_for(
                     asyncio.shield(existing),
                     timeout=self.refresh_lock_timeout.total_seconds(),
                 )
             except TimeoutError:
+                logger.warning(
+                    "refresh inflight timeout: source={source}", source=source_name
+                )
                 return RefreshResult(
                     False,
                     source_name,
@@ -112,7 +123,9 @@ class SourceRefresher:
                 )
         task = asyncio.create_task(self._refresh_with_lock(source_name))
         self._inflight[source_name] = task
-        task.add_done_callback(lambda t, name=source_name: self._inflight.pop(name, None))
+        task.add_done_callback(
+            lambda t, name=source_name: self._inflight.pop(name, None)
+        )
         return await task
 
     async def _refresh_with_lock(self, source_name: str) -> RefreshResult:
@@ -128,8 +141,11 @@ class SourceRefresher:
         """
         lock = self._lock(source_name)
         try:
-            await asyncio.wait_for(lock.acquire(), timeout=self.refresh_lock_timeout.total_seconds())
+            await asyncio.wait_for(
+                lock.acquire(), timeout=self.refresh_lock_timeout.total_seconds()
+            )
         except TimeoutError:
+            logger.warning("refresh lock timeout: source={source}", source=source_name)
             return RefreshResult(
                 False,
                 source_name,
@@ -154,16 +170,42 @@ class SourceRefresher:
         source = self.sources[source_name]
         now = datetime.now(UTC)
         old_cache: SourceCache | None = None
+        logger.info(
+            "refresh start: source={source} format={fmt}",
+            source=source_name,
+            fmt=source.format,
+        )
         try:
             self.cache_store.set_refreshing(source_name, True)
             old_cache = await self.cache_store.get(source_name)
+            has_cache = old_cache is not None
+            logger.debug(
+                "refresh cache check: source={source} has_cache={has_cache} old_nodes={old_nodes}",
+                source=source_name,
+                has_cache=has_cache,
+                old_nodes=old_cache.node_count if old_cache else 0,
+            )
             for plugin_name, ref in source.plugins.before_fetch.items():
                 plugin_config = self.plugins[plugin_name]
                 if self.http_plugin is None:
                     raise RuntimeError("http plugin runner is not configured")
-                result = await self.http_plugin.run(PluginContext(source_name, plugin_config))
+                logger.debug(
+                    "refresh plugin: source={source} plugin={plugin} on_failure={on_failure}",
+                    source=source_name,
+                    plugin=plugin_name,
+                    on_failure=ref.on_failure,
+                )
+                result = await self.http_plugin.run(
+                    PluginContext(source_name, plugin_config)
+                )
                 if not result.ok and ref.on_failure == "abort":
                     raise RuntimeError(result.message or f"plugin {plugin_name} failed")
+                logger.debug(
+                    "refresh plugin done: source={source} plugin={plugin} ok={ok}",
+                    source=source_name,
+                    plugin=plugin_name,
+                    ok=result.ok,
+                )
 
             fetched = await self.fetcher.fetch(
                 source.url,
@@ -172,6 +214,11 @@ class SourceRefresher:
                 last_modified=old_cache.last_modified if old_cache else None,
             )
             if fetched.not_modified and old_cache:
+                logger.info(
+                    "refresh not-modified: source={source} nodes={nodes}",
+                    source=source_name,
+                    nodes=old_cache.node_count,
+                )
                 cache = SourceCache(
                     source=source_name,
                     schema_version=CURRENT_SCHEMA_VERSION,
@@ -185,7 +232,13 @@ class SourceRefresher:
                     proxies=old_cache.proxies,
                 )
                 await self.cache_store.set(source_name, cache)
-                return RefreshResult(True, source_name, old_cache.node_count, len(old_cache.warnings), self.cache_store.cache_path(source_name))
+                return RefreshResult(
+                    True,
+                    source_name,
+                    old_cache.node_count,
+                    len(old_cache.warnings),
+                    self.cache_store.cache_path(source_name),
+                )
 
             parsed = parse_subscription(
                 fetched.body or b"",
@@ -193,7 +246,21 @@ class SourceRefresher:
                 fmt=source.format,
                 parse_error=source.parse_error,
             )
-            transformed = apply_transform(parsed.records, filter_config=source.filter, rename_config=source.rename)
+            logger.debug(
+                "refresh parsed: source={source} raw_nodes={raw} warnings={warnings}",
+                source=source_name,
+                raw=len(parsed.records),
+                warnings=len(parsed.warnings),
+            )
+            transformed = apply_transform(
+                parsed.records, filter_config=source.filter, rename_config=source.rename
+            )
+            logger.debug(
+                "refresh transformed: source={source} nodes={nodes} (filtered {filtered})",
+                source=source_name,
+                nodes=len(transformed),
+                filtered=len(parsed.records) - len(transformed),
+            )
             if not transformed:
                 raise ParseError("no usable proxies after source transform")
             cache = SourceCache(
@@ -209,9 +276,26 @@ class SourceRefresher:
                 proxies=tuple(transformed),
             )
             await self.cache_store.set(source_name, cache)
-            return RefreshResult(True, source_name, len(transformed), len(parsed.warnings), self.cache_store.cache_path(source_name))
+            logger.info(
+                "refresh success: source={source} nodes={nodes} warnings={warnings}",
+                source=source_name,
+                nodes=len(transformed),
+                warnings=len(parsed.warnings),
+            )
+            return RefreshResult(
+                True,
+                source_name,
+                len(transformed),
+                len(parsed.warnings),
+                self.cache_store.cache_path(source_name),
+            )
         except Exception as exc:
             redacted_error = redact_secret(str(exc))
+            logger.warning(
+                "refresh failed: source={source} error={error}",
+                source=source_name,
+                error=redacted_error,
+            )
             if old_cache:
                 failed = SourceCache(
                     source=source_name,
@@ -226,6 +310,11 @@ class SourceRefresher:
                     proxies=old_cache.proxies,
                 )
                 await self.cache_store.set(source_name, failed)
-            return RefreshResult(False, source_name, cache_path=self.cache_store.cache_path(source_name), error=redacted_error)
+            return RefreshResult(
+                False,
+                source_name,
+                cache_path=self.cache_store.cache_path(source_name),
+                error=redacted_error,
+            )
         finally:
             self.cache_store.set_refreshing(source_name, False)

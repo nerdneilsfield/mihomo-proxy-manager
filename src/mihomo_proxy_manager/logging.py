@@ -78,19 +78,28 @@ def _redact_record(record: "Record", secrets: list[str]) -> None:
         record["extra"][key] = _redact_value(value, secrets)
 
 
-def configure_logging(config: AppConfig) -> None:
+def configure_logging(config: AppConfig, *, debug: bool = False) -> None:
     """配置 Loguru 日志系统，包含敏感信息脱敏。
 
     Configure the Loguru logging system with sensitive information redaction.
 
     Args:
         config: 应用配置 / Application configuration.
+        debug: 是否强制控制台输出为 DEBUG 级别（用于 --debug 命令行覆盖） /
+            Force console level to DEBUG (for --debug CLI override).
     """
     secrets = _collect_secret_values(config)
     logger.remove()
     logger.configure(patcher=lambda record: _redact_record(record, secrets))
     if config.logging_console.enabled:
-        logger.add(sys.stderr, level=config.logging_console.level, colorize=config.logging_console.colorize)
+        level = "DEBUG" if debug else config.logging_console.level
+        logger.add(
+            sys.stderr,
+            level=level,
+            colorize=config.logging_console.colorize,
+            backtrace=True,
+            diagnose=False,
+        )
     if config.logging_file.enabled and config.logging_file.path:
         config.logging_file.path.parent.mkdir(parents=True, exist_ok=True)
         logger.add(
@@ -99,4 +108,6 @@ def configure_logging(config: AppConfig) -> None:
             rotation=config.logging_file.rotation,
             retention=config.logging_file.retention,
             compression=config.logging_file.compression,
+            backtrace=True,
+            diagnose=False,
         )

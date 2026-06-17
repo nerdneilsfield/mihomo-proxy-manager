@@ -62,7 +62,9 @@ class _Scheduler(Protocol):
         """
 
 
-def _is_still_valid(cache: SourceCache | None, max_stale: timedelta) -> TypeGuard[SourceCache]:
+def _is_still_valid(
+    cache: SourceCache | None, max_stale: timedelta
+) -> TypeGuard[SourceCache]:
     """检查缓存是否仍在最大过期时间内有效。
 
     Check whether the cache is still valid within the maximum staleness duration.
@@ -125,7 +127,11 @@ def _track_background_refresh(task: asyncio.Task[Any], source_name: str) -> None
     except asyncio.CancelledError:
         return
     except Exception as exc:
-        logger.warning("background refresh failed for source {source}: {error}", source=source_name, error=exc)
+        logger.warning(
+            "background refresh failed for source {source}: {error}",
+            source=source_name,
+            error=exc,
+        )
         return
     if result is not None and not getattr(result, "ok", True):
         error = getattr(result, "error", None) or "unknown error"
@@ -189,7 +195,9 @@ def create_app(
         Returns:
             包含各源刷新状态的 JSON 响应 / A JSON response containing the refresh status of each source.
         """
-        return JSONResponse(await build_status(cache_store, list(config.sources), extra_secrets=secrets))
+        return JSONResponse(
+            await build_status(cache_store, list(config.sources), extra_secrets=secrets)
+        )
 
     def _spawn_background_refresh(source_name: str) -> None:
         """在后台触发源的刷新。
@@ -204,7 +212,9 @@ def create_app(
         task = asyncio.create_task(refresher.refresh(source_name))
         background_tasks.add(task)
         task.add_done_callback(background_tasks.discard)
-        task.add_done_callback(lambda item, name=source_name: _track_background_refresh(item, name))
+        task.add_done_callback(
+            lambda item, name=source_name: _track_background_refresh(item, name)
+        )
 
     async def provider(request):
         """Provider 端点，返回合并后的代理 YAML。
@@ -225,6 +235,7 @@ def create_app(
         """
         route = route_by_path.get(request.url.path)
         if route is None:
+            logger.debug("provider 404: path={path}", path=request.url.path)
             return PlainTextResponse("not found", status_code=404)
 
         records: list[ProxyRecord] = []
@@ -238,6 +249,14 @@ def create_app(
                     due.append(source_name)
             else:
                 missing.append(source_name)
+        logger.debug(
+            "provider request: route={route} sources={sources} valid={valid} missing={missing} due={due}",
+            route=route.name,
+            sources=len(route.sources),
+            valid=len(route.sources) - len(missing),
+            missing=missing,
+            due=due,
+        )
 
         for source_name in due:
             _spawn_background_refresh(source_name)
@@ -245,6 +264,12 @@ def create_app(
             await asyncio.sleep(0)
 
         if missing and refresher is not None:
+            logger.debug(
+                "provider triggering missing refresh: route={route} missing={missing} require_all={require_all}",
+                route=route.name,
+                missing=missing,
+                require_all=route.require_all_sources,
+            )
             tasks = [asyncio.create_task(refresher.refresh(name)) for name in missing]
             task_by_source = dict(zip(missing, tasks, strict=False))
             if route.require_all_sources or not records:
@@ -256,7 +281,9 @@ def create_app(
                         background_tasks.add(task)
                         task.add_done_callback(background_tasks.discard)
                         task.add_done_callback(
-                            lambda item, name=source_name: _track_background_refresh(item, name)
+                            lambda item, name=source_name: _track_background_refresh(
+                                item, name
+                            )
                         )
                         continue
                     try:
@@ -273,17 +300,35 @@ def create_app(
                     if _is_still_valid(cache, config.cache.max_stale):
                         records.extend(cache.proxies)
                     elif route.require_all_sources:
+                        logger.warning(
+                            "provider 503 (require_all): route={route} unavailable_source={source}",
+                            route=route.name,
+                            source=source_name,
+                        )
                         return PlainTextResponse("route unavailable", status_code=503)
             else:
                 for source_name, task in zip(missing, tasks, strict=False):
                     background_tasks.add(task)
                     task.add_done_callback(background_tasks.discard)
-                    task.add_done_callback(lambda item, name=source_name: _track_background_refresh(item, name))
+                    task.add_done_callback(
+                        lambda item, name=source_name: _track_background_refresh(
+                            item, name
+                        )
+                    )
 
         if not records:
+            logger.warning(
+                "provider 503: route={route} no records available", route=route.name
+            )
             return PlainTextResponse("route unavailable", status_code=503)
 
         body = await renderer.render(route, records)
+        logger.info(
+            "provider served: route={route} nodes={nodes} bytes={bytes}",
+            route=route.name,
+            nodes=len(records),
+            bytes=len(body),
+        )
         return Response(body, media_type="application/yaml; charset=utf-8")
 
     routes = [Route(config.server.health_path, health)]

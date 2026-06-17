@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
 
 import httpx
+from loguru import logger
 
 from .models import FetchConfig, HttpConfig
 from .security import assert_safe_url, redact_secret, redact_url
@@ -55,6 +56,7 @@ class FetchResult:
         last_modified: 响应 Last-Modified 头 / Response Last-Modified header value.
         not_modified: 服务端返回 304 未修改时为 True / True when server returned 304 Not Modified.
     """
+
     body: bytes | None
     etag: str | None
     last_modified: str | None
@@ -145,8 +147,18 @@ class SafeHttpClient:
         current_method = method
         current_body = body
         current_headers = dict(headers)
-        for _ in range(self.http_config.max_redirects + 1):
-            assert_safe_url(current, allow_private_network=allow_private_network, resolve_dns=True)
+        redacted_initial = redact_url(url)
+        logger.debug(
+            "http request start: method={method} url={url} timeout={timeout}s allow_private={allow_private}",
+            method=method,
+            url=redacted_initial,
+            timeout=timeout,
+            allow_private=allow_private_network,
+        )
+        for attempt in range(self.http_config.max_redirects + 1):
+            assert_safe_url(
+                current, allow_private_network=allow_private_network, resolve_dns=True
+            )
             async with self.client.stream(
                 current_method,
                 current,
@@ -160,7 +172,16 @@ class SafeHttpClient:
                     if not location:
                         raise ValueError("redirect response missing Location")
                     next_url = urljoin(current, location)
-                    if _origin(next_url) != _origin(current):
+                    cross_origin = _origin(next_url) != _origin(current)
+                    logger.debug(
+                        "http redirect: status={status} hop={hop} cross_origin={cross_origin} from={from_url} to={to_url}",
+                        status=response.status_code,
+                        hop=attempt + 1,
+                        cross_origin=cross_origin,
+                        from_url=redact_url(current),
+                        to_url=redact_url(next_url),
+                    )
+                    if cross_origin:
                         # Cross-origin redirect: strip sensitive and per-source custom headers.
                         current_headers = {
                             key: value
@@ -173,7 +194,12 @@ class SafeHttpClient:
                         current_headers = {
                             key: value
                             for key, value in current_headers.items()
-                            if key.lower() not in {"content-length", "content-type", "transfer-encoding"}
+                            if key.lower()
+                            not in {
+                                "content-length",
+                                "content-type",
+                                "transfer-encoding",
+                            }
                         }
                     # Do not buffer the redirect body; closing the stream releases the
                     # connection without consuming potentially large response content.
@@ -185,6 +211,13 @@ class SafeHttpClient:
                     content.extend(chunk)
                     if len(content) > self.http_config.max_response_size:
                         raise ValueError("upstream response exceeds max_response_size")
+                logger.debug(
+                    "http response: status={status} bytes={bytes} url={url} hops={hops}",
+                    status=response.status_code,
+                    bytes=len(content),
+                    url=redact_url(current),
+                    hops=attempt,
+                )
                 return httpx.Response(
                     response.status_code,
                     headers=response.headers,
@@ -244,6 +277,15 @@ class SubscriptionFetcher:
         if last_modified:
             headers["If-Modified-Since"] = last_modified
 
+        redacted_url = redact_url(url)
+        conditional = bool(etag or last_modified)
+        logger.debug(
+            "subscription fetch: url={url} conditional={conditional} etag={etag} last_modified={last_modified}",
+            url=redacted_url,
+            conditional=conditional,
+            etag=etag is not None,
+            last_modified=last_modified is not None,
+        )
         response = await self.safe_http.request(
             "GET",
             url,
@@ -252,11 +294,27 @@ class SubscriptionFetcher:
             allow_private_network=fetch_config.allow_private_network,
         )
         if response.status_code == 304:
+            logger.info("subscription not modified (304): url={url}", url=redacted_url)
             return FetchResult(None, etag, last_modified, True)
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
+            logger.warning(
+                "subscription fetch failed: url={url} status={status}",
+                url=redacted_url,
+                status=response.status_code,
+            )
             raise ValueError(
                 f"fetch failed for {redact_url(url)}: {redact_secret(str(exc))}"
             ) from exc
-        return FetchResult(response.content, response.headers.get("ETag"), response.headers.get("Last-Modified"))
+        logger.info(
+            "subscription fetched: url={url} status={status} bytes={bytes}",
+            url=redacted_url,
+            status=response.status_code,
+            bytes=len(response.content),
+        )
+        return FetchResult(
+            response.content,
+            response.headers.get("ETag"),
+            response.headers.get("Last-Modified"),
+        )

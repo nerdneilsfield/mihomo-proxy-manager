@@ -36,6 +36,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     serve = subparsers.add_parser("serve", help="run the provider service")
     serve.add_argument("-c", "--config", required=True)
+    serve.add_argument(
+        "--debug", action="store_true", help="force console log level to DEBUG"
+    )
 
     check = subparsers.add_parser("check", help="validate configuration")
     check.add_argument("-c", "--config", required=True)
@@ -43,6 +46,9 @@ def build_parser() -> argparse.ArgumentParser:
     refresh = subparsers.add_parser("refresh", help="refresh one source")
     refresh.add_argument("-c", "--config", required=True)
     refresh.add_argument("source")
+    refresh.add_argument(
+        "--debug", action="store_true", help="force console log level to DEBUG"
+    )
 
     return parser
 
@@ -73,7 +79,7 @@ def _cmd_check(config_path: str) -> int:
     return 1
 
 
-async def _build_runtime(config_path: str):
+async def _build_runtime(config_path: str, *, debug: bool = False):
     """构建运行时组件：配置、缓存、HTTP 客户端和刷新器。
 
     Build runtime components: config, cache store, HTTP client, and refresher.
@@ -81,6 +87,7 @@ async def _build_runtime(config_path: str):
     Args:
         config_path: 配置文件路径。
             Path to the configuration file.
+        debug: 是否强制控制台日志为 DEBUG 级别 / Force console log level to DEBUG.
 
     Returns:
         tuple: 包含 (config, cache_store, client, refresher) 的元组。
@@ -88,7 +95,7 @@ async def _build_runtime(config_path: str):
     """
     config_file = Path(config_path)
     config = load_config(config_file)
-    configure_logging(config)
+    configure_logging(config, debug=debug)
     cache_store = JsonSourceCacheStore(config.cache)
     client = httpx.AsyncClient(cookies=_NoOpCookies())
     fetcher = SubscriptionFetcher(client, config.http)
@@ -104,7 +111,7 @@ async def _build_runtime(config_path: str):
     return config, cache_store, client, refresher
 
 
-def _cmd_serve(config_path: str) -> int:
+def _cmd_serve(config_path: str, *, debug: bool = False) -> int:
     """启动 HTTP 服务。
 
     Start the HTTP service.
@@ -112,17 +119,25 @@ def _cmd_serve(config_path: str) -> int:
     Args:
         config_path: 配置文件路径。
             Path to the configuration file.
+        debug: 是否强制控制台日志为 DEBUG 级别 / Force console log level to DEBUG.
 
     Returns:
         int: 服务正常退出时返回 0。
             0 when the server exits normally.
     """
+
     async def run() -> int:
-        config, cache_store, client, refresher = await _build_runtime(config_path)
+        config, cache_store, client, refresher = await _build_runtime(
+            config_path, debug=debug
+        )
         scheduler = RefreshScheduler(config, refresher)
-        app = create_app(config, cache_store=cache_store, refresher=refresher, scheduler=scheduler)
+        app = create_app(
+            config, cache_store=cache_store, refresher=refresher, scheduler=scheduler
+        )
         try:
-            server_config = uvicorn.Config(app, host=config.server.host, port=config.server.port, access_log=False)
+            server_config = uvicorn.Config(
+                app, host=config.server.host, port=config.server.port, access_log=False
+            )
             server = uvicorn.Server(server_config)
             await server.serve()
             return 0
@@ -132,7 +147,7 @@ def _cmd_serve(config_path: str) -> int:
     return asyncio.run(run())
 
 
-def _cmd_refresh(config_path: str, source_name: str) -> int:
+def _cmd_refresh(config_path: str, source_name: str, *, debug: bool = False) -> int:
     """刷新指定数据源并打印结果。
 
     Refresh the specified source and print the result.
@@ -142,22 +157,30 @@ def _cmd_refresh(config_path: str, source_name: str) -> int:
             Path to the configuration file.
         source_name: 要刷新的数据源名称。
             Name of the source to refresh.
+        debug: 是否强制控制台日志为 DEBUG 级别 / Force console log level to DEBUG.
 
     Returns:
         int: 刷新成功返回 0，失败或找不到数据源返回 1。
             0 on success, 1 if the source is unknown or refresh fails.
     """
+
     async def run() -> int:
-        config, _cache_store, client, refresher = await _build_runtime(config_path)
+        config, _cache_store, client, refresher = await _build_runtime(
+            config_path, debug=debug
+        )
         try:
             if source_name not in config.sources:
                 print(f"ERROR: unknown source {source_name!r}")
                 return 1
             result = await refresher.refresh(source_name)
             if result.ok:
-                print(f"OK: refreshed {result.source}: nodes={result.node_count} warnings={result.warning_count} cache={result.cache_path}")
+                print(
+                    f"OK: refreshed {result.source}: nodes={result.node_count} warnings={result.warning_count} cache={result.cache_path}"
+                )
                 return 0
-            print(f"ERROR: refresh failed for {result.source}: nodes={result.node_count} warnings={result.warning_count} cache={result.cache_path} error={result.error}")
+            print(
+                f"ERROR: refresh failed for {result.source}: nodes={result.node_count} warnings={result.warning_count} cache={result.cache_path} error={result.error}"
+            )
             return 1
         finally:
             await client.aclose()
@@ -183,8 +206,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "check":
         return _cmd_check(args.config)
     if args.command == "serve":
-        return _cmd_serve(args.config)
+        return _cmd_serve(args.config, debug=args.debug)
     if args.command == "refresh":
-        return _cmd_refresh(args.config, args.source)
+        return _cmd_refresh(args.config, args.source, debug=args.debug)
     parser.error("unreachable command")
     return 2

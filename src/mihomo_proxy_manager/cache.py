@@ -106,6 +106,7 @@ class JsonSourceCacheStore:
         await asyncio.to_thread(self.config.dir.mkdir, parents=True, exist_ok=True)
         await asyncio.to_thread(self._cleanup_tmp_files)
         self._dir_created = True
+        logger.debug("cache dir initialized: dir={dir}", dir=str(self.config.dir))
 
     def _cleanup_tmp_files(self) -> None:
         """清理超过 60 秒未修改的 .json.tmp 临时文件 / Clean up .json.tmp temp files not modified for over 60 seconds.
@@ -186,7 +187,9 @@ class JsonSourceCacheStore:
             await self._ensure_dir()
             path = self._path(source_name)
             try:
-                cache, mtime = await asyncio.to_thread(self._read_or_miss, source_name, path)
+                cache, mtime = await asyncio.to_thread(
+                    self._read_or_miss, source_name, path
+                )
             except (ValueError, KeyError) as exc:
                 logger.warning(
                     "corrupted cache file for source {source}: {error}; treating as miss",
@@ -197,13 +200,24 @@ class JsonSourceCacheStore:
                 self._memory_mtime.pop(source_name, None)
                 return None
             if cache is None:
+                logger.debug("cache miss: source={source}", source=source_name)
                 self._memory.pop(source_name, None)
                 self._memory_mtime.pop(source_name, None)
                 return None
             assert mtime is not None
             memory_mtime = self._memory_mtime.get(source_name)
             if memory_mtime is not None and mtime <= memory_mtime:
+                logger.debug(
+                    "cache hit (memory): source={source} nodes={nodes}",
+                    source=source_name,
+                    nodes=self._memory[source_name].node_count,
+                )
                 return self._memory[source_name]
+            logger.debug(
+                "cache hit (disk): source={source} nodes={nodes}",
+                source=source_name,
+                nodes=cache.node_count,
+            )
             self._memory[source_name] = cache
             self._memory_mtime[source_name] = mtime
             return cache
@@ -220,6 +234,12 @@ class JsonSourceCacheStore:
             mtime = await asyncio.to_thread(self._write_file, source_name, cache)
             self._memory[source_name] = cache
             self._memory_mtime[source_name] = mtime
+            logger.debug(
+                "cache written: source={source} nodes={nodes} path={path}",
+                source=source_name,
+                nodes=cache.node_count,
+                path=str(self._path(source_name)),
+            )
 
     async def status(self, source_name: str) -> SourceStatus:
         """获取指定源的缓存状态 / Get cache status for the given source.
@@ -232,7 +252,9 @@ class JsonSourceCacheStore:
         """
         cache = await self.get(source_name)
         if cache is None:
-            return SourceStatus(source_name, None, None, 0, "no cache", source_name in self._refreshing)
+            return SourceStatus(
+                source_name, None, None, 0, "no cache", source_name in self._refreshing
+            )
         return SourceStatus(
             source=source_name,
             last_attempt_at=cache.last_attempt_at,
@@ -255,7 +277,9 @@ class JsonSourceCacheStore:
         except FileNotFoundError:
             pass
 
-    def _read_or_miss(self, source_name: str, path: Path) -> tuple[SourceCache | None, float | None]:
+    def _read_or_miss(
+        self, source_name: str, path: Path
+    ) -> tuple[SourceCache | None, float | None]:
         """尝试从磁盘读取缓存，如果文件不存在则返回缓存未命中 / Attempt to read cache from disk, return miss if file does not exist.
 
         使用文件锁保证并发安全，并在读取前清理过期临时文件。
@@ -299,9 +323,14 @@ class JsonSourceCacheStore:
         except json.JSONDecodeError as exc:
             raise ValueError(f"malformed cache file {path}: {exc}") from exc
         if data.get("schema_version") != CURRENT_SCHEMA_VERSION:
-            raise ValueError(f"unsupported cache schema version: {data.get('schema_version')}")
+            raise ValueError(
+                f"unsupported cache schema version: {data.get('schema_version')}"
+            )
         try:
-            proxies = tuple(ProxyRecord(item["source"], item["data"]) for item in data.get("proxies", ()))
+            proxies = tuple(
+                ProxyRecord(item["source"], item["data"])
+                for item in data.get("proxies", ())
+            )
             return SourceCache(
                 source=data["source"],
                 schema_version=data["schema_version"],
@@ -336,7 +365,10 @@ class JsonSourceCacheStore:
             "node_count": cache.node_count,
             "warnings": list(cache.warnings),
             "last_error": cache.last_error,
-            "proxies": [{"source": record.source, "data": record.data} for record in cache.proxies],
+            "proxies": [
+                {"source": record.source, "data": record.data}
+                for record in cache.proxies
+            ],
         }
 
     def _write_file(self, source_name: str, cache: SourceCache) -> float:
@@ -357,7 +389,14 @@ class JsonSourceCacheStore:
         lock = FileLock(str(self._lock_path(source_name)))
         with lock:
             tmp.unlink(missing_ok=True)
-            tmp.write_text(json.dumps(self._to_json(cache), ensure_ascii=False, indent=self.config.write_indent), encoding="utf-8")
+            tmp.write_text(
+                json.dumps(
+                    self._to_json(cache),
+                    ensure_ascii=False,
+                    indent=self.config.write_indent,
+                ),
+                encoding="utf-8",
+            )
             os.chmod(tmp, self.config.file_mode)
             os.replace(tmp, path)
             os.chmod(path, self.config.file_mode)

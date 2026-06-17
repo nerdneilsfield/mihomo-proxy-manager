@@ -42,29 +42,60 @@ class RefreshScheduler:
 
         Start the scheduler, perform startup refresh and register scheduled tasks.
         """
+        source_count = len(self.config.sources)
         if self.config.scheduler.startup_refresh:
-            if self.config.scheduler.startup_refresh_mode == "blocking":
-                await asyncio.gather(*(self.refresher.refresh(name) for name in self.config.sources))
+            mode = self.config.scheduler.startup_refresh_mode
+            logger.info(
+                "scheduler start: startup_refresh={mode} sources={sources}",
+                mode=mode,
+                sources=source_count,
+            )
+            if mode == "blocking":
+                await asyncio.gather(
+                    *(self.refresher.refresh(name) for name in self.config.sources)
+                )
             else:
                 for name in self.config.sources:
                     task = asyncio.create_task(self.refresher.refresh(name))
-                    task.add_done_callback(lambda item, name=name: self._track_startup_refresh(item, name))
+                    task.add_done_callback(
+                        lambda item, name=name: self._track_startup_refresh(item, name)
+                    )
                     self._tasks.append(task)
+        else:
+            logger.info(
+                "scheduler start: startup_refresh=skipped sources={sources}",
+                sources=source_count,
+            )
         for name, source in self.config.sources.items():
             if source.refresh.interval:
-                self._tasks.append(asyncio.create_task(self._interval_loop(name, source.refresh.interval.total_seconds())))
+                interval_s = source.refresh.interval.total_seconds()
+                self._tasks.append(
+                    asyncio.create_task(self._interval_loop(name, interval_s))
+                )
+                logger.debug(
+                    "scheduler registered interval: source={source} interval={interval}s",
+                    source=name,
+                    interval=interval_s,
+                )
             for expr in source.refresh.cron:
                 self._tasks.append(asyncio.create_task(self._cron_loop(name, expr)))
+                logger.debug(
+                    "scheduler registered cron: source={source} expr={expr}",
+                    source=name,
+                    expr=expr,
+                )
 
     async def stop(self) -> None:
         """停止调度器，取消所有运行中的任务。
 
         Stop the scheduler and cancel all running tasks.
         """
+        logger.info("scheduler stop: cancelling {tasks} tasks", tasks=len(self._tasks))
         self._stopping.set()
         for task in self._tasks:
             task.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
+        logger.info("scheduler stopped")
 
     def _track_startup_refresh(self, task: asyncio.Task[Any], source_name: str) -> None:
         """跟踪启动刷新任务的结果并记录警告。
@@ -80,11 +111,19 @@ class RefreshScheduler:
         except asyncio.CancelledError:
             return
         except Exception as exc:
-            logger.warning("startup refresh failed for source {source}: {error}", source=source_name, error=exc)
+            logger.warning(
+                "startup refresh failed for source {source}: {error}",
+                source=source_name,
+                error=exc,
+            )
             return
         if result is not None and not getattr(result, "ok", True):
             error = getattr(result, "error", None) or "unknown error"
-            logger.warning("startup refresh failed for source {source}: {error}", source=source_name, error=error)
+            logger.warning(
+                "startup refresh failed for source {source}: {error}",
+                source=source_name,
+                error=error,
+            )
 
     def _jitter_seconds(self) -> float:
         """计算随机抖动的秒数。
@@ -114,6 +153,12 @@ class RefreshScheduler:
         while not self._stopping.is_set():
             jitter = random.uniform(0, jitter_seconds) if jitter_seconds > 0 else 0.0
             delay = max(0.0, next_target + jitter - loop.time())
+            logger.debug(
+                "interval loop: source={source} delay={delay:.1f}s jitter={jitter:.1f}s",
+                source=source_name,
+                delay=delay,
+                jitter=jitter,
+            )
             await asyncio.sleep(delay)
             if self._stopping.is_set():
                 return
@@ -146,10 +191,24 @@ class RefreshScheduler:
                 next_at = iterator.get_next(datetime)
                 now = datetime.now(tz)
             delay = (next_at - now).total_seconds()
+            logger.debug(
+                "cron loop: source={source} expr={expr} next_at={next_at} delay={delay:.1f}s",
+                source=source_name,
+                expr=expr,
+                next_at=next_at.isoformat(),
+                delay=delay,
+            )
             await asyncio.sleep(delay)
             if self._stopping.is_set():
                 return
-            await asyncio.sleep(self._jitter_seconds())
+            jitter = self._jitter_seconds()
+            if jitter > 0:
+                logger.debug(
+                    "cron jitter: source={source} jitter={jitter:.1f}s",
+                    source=source_name,
+                    jitter=jitter,
+                )
+            await asyncio.sleep(jitter)
             if self._stopping.is_set():
                 return
             try:

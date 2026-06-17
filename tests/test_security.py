@@ -136,3 +136,16 @@ def test_redact_secret_standalone_bearer() -> None:
 def test_rejects_multicast_reserved_and_unspecified_addresses(url: str) -> None:
     with pytest.raises(SecurityError):
         assert_safe_url(url, allow_private_network=False, resolve_dns=False)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://0/foo",
+        "http://0./foo",
+        "http://[::]/foo",
+    ],
+)
+def test_rejects_zero_literal_unspecified_addresses(url: str) -> None:
+    with pytest.raises(SecurityError):
+        assert_safe_url(url, allow_private_network=False, resolve_dns=False)

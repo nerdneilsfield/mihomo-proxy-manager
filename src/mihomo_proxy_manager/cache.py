@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
@@ -49,8 +50,11 @@ class JsonSourceCacheStore:
         self._dir_created = True
 
     def _cleanup_tmp_files(self) -> None:
+        now = time.time()
         for tmp in self.config.dir.glob("*.json.tmp"):
             try:
+                if now - tmp.stat().st_mtime < 60:
+                    continue
                 tmp.unlink()
             except FileNotFoundError:
                 pass

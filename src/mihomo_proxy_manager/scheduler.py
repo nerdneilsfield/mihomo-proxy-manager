@@ -93,6 +93,8 @@ class RefreshScheduler:
             if self._stopping.is_set():
                 return
             await asyncio.sleep(self._jitter_seconds())
+            if self._stopping.is_set():
+                return
             try:
                 await self.refresher.refresh(source_name)
             except Exception as exc:

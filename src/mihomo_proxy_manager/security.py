@@ -70,6 +70,12 @@ def _parse_ip_literal(host: str) -> _IpAddress | None:
     """
     host = host.rstrip(".")
 
+    # Treat a bare "0" (with optional trailing dot) as the unspecified IPv4
+    # address. Python 3.14 no longer accepts "0" in ip_address(), and earlier
+    # versions parsed it to 0.0.0.0, so handle it explicitly.
+    if host == "0":
+        return ipaddress.IPv4Address("0.0.0.0")
+
     try:
         return ipaddress.ip_address(host)
     except ValueError:

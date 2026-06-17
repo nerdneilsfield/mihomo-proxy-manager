@@ -1,4 +1,6 @@
 import asyncio
+import os
+import time
 from datetime import UTC, datetime
 
 import pytest
@@ -205,6 +207,9 @@ async def test_startup_cleans_stale_tmp_files(tmp_path) -> None:
     config = CacheConfig(tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7))
     stale_tmp = tmp_path / "airport_a.json.tmp"
     stale_tmp.write_text("stale", encoding="utf-8")
+    # Make the tmp file look stale so the 60s writer-race grace period skips it.
+    old_mtime = time.time() - 120
+    os.utime(stale_tmp, (old_mtime, old_mtime))
     store = JsonSourceCacheStore(config)
 
     await store._ensure_dir()

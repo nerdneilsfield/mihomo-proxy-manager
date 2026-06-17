@@ -58,6 +58,7 @@ tests/
   test_parsers.py
   test_plugins_refresher.py
   test_render.py
+  test_scheduler.py
   test_security.py
   test_transform.py
 ```
@@ -84,10 +85,13 @@ Responsibilities:
 - Use dataclasses, not Pydantic, to keep the dependency set tight.
 - Use `yaml.safe_load` and `yaml.safe_dump` with `sort_keys` from config.
 - Use `httpx.AsyncClient(follow_redirects=False)` and manually validate each redirect target.
+- Keep `mpm check` offline: it validates schemes, hosts, literal IPs, references, regexes, and enum values, but never performs DNS resolution or network I/O.
+- Put redirect handling, response size enforcement, and runtime DNS/private-network checks in one shared HTTP helper used by both source fetches and HTTP action plugins.
 - Use `filelock.FileLock` via `asyncio.to_thread` inside async cache methods.
 - Store internal source metadata under `ProxyRecord.source` rather than adding `_source` into public proxy dictionaries.
 - Treat empty refreshed proxy lists as refresh failure.
 - A route path is a bearer secret. Never log it raw.
+- Disable uvicorn access logs by default so hidden provider paths are not logged.
 - `mpm check` emits errors and warnings; errors return non-zero, warnings do not.
 
 ---
@@ -449,6 +453,40 @@ sources = ["missing"]
     assert "route 'phone' references missing source 'missing'" in joined
     assert "unsupported URL scheme" in joined
     assert "health_path and status_path collide" in joined
+
+
+def test_validation_rejects_invalid_enums_and_route_regex(temp_config_path: Path) -> None:
+    body = """
+[scheduler]
+startup_refresh_mode = "sideways"
+
+[sources.airport_a]
+url = "https://example.com/sub"
+parse_error = "explode"
+
+[plugins.turn_on]
+type = "shell"
+url = "https://example.com/action"
+
+[routes.phone]
+path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml"
+sources = ["airport_a"]
+
+[routes.phone.output]
+format = "full-config"
+
+[routes.phone.filter]
+include = "["
+"""
+    config = load_config(write_config(temp_config_path, body), validate=False)
+    report = config.validate(config_path=temp_config_path)
+    joined = "\\n".join(report.errors)
+
+    assert "startup_refresh_mode" in joined
+    assert "parse_error" in joined
+    assert "plugin 'turn_on' type is unsupported" in joined
+    assert "route 'phone' output format is unsupported" in joined
+    assert "route 'phone' include regex is invalid" in joined
 ```
 
 - [ ] **Step 2: Run config tests and verify they fail**
@@ -808,11 +846,20 @@ class LoadedConfig(AppConfig):
             for source in route.sources:
                 if source not in self.sources:
                     errors.append(f"route {route.name!r} references missing source {source!r}")
+            for pattern_name, pattern in (("include", route.filter.include), ("exclude", route.filter.exclude)):
+                if pattern:
+                    try:
+                        re.compile(pattern)
+                    except re.error as exc:
+                        errors.append(f"route {route.name!r} {pattern_name} regex is invalid: {exc}")
+            if route.output.format != "provider":
+                errors.append(f"route {route.name!r} output format is unsupported: {route.output.format!r}")
 
         for source in self.sources.values():
-            parsed = urlparse(source.url)
-            if parsed.scheme not in {"http", "https"}:
-                errors.append(f"source {source.name!r} has unsupported URL scheme {parsed.scheme!r}")
+            if source.format not in {"auto", "yaml", "share-links"}:
+                errors.append(f"source {source.name!r} format is unsupported: {source.format!r}")
+            if source.parse_error not in {"skip", "fail"}:
+                errors.append(f"source {source.name!r} parse_error is unsupported: {source.parse_error!r}")
             for pattern_name, pattern in (("include", source.filter.include), ("exclude", source.filter.exclude)):
                 if pattern:
                     try:
@@ -825,15 +872,36 @@ class LoadedConfig(AppConfig):
             for expr in source.refresh.cron:
                 if not croniter.is_valid(expr):
                     errors.append(f"source {source.name!r} cron expression is invalid: {expr!r}")
+            parsed = urlparse(source.url)
+            if parsed.scheme not in {"http", "https"}:
+                errors.append(f"source {source.name!r} has unsupported URL scheme {parsed.scheme!r}")
+            if not parsed.hostname:
+                errors.append(f"source {source.name!r} URL host is required")
+
+        for plugin in self.plugins.values():
+            if plugin.type != "http_action":
+                errors.append(f"plugin {plugin.name!r} type is unsupported: {plugin.type!r}")
+            parsed = urlparse(plugin.url)
+            if parsed.scheme not in {"http", "https"}:
+                errors.append(f"plugin {plugin.name!r} has unsupported URL scheme {parsed.scheme!r}")
+            if not parsed.hostname:
+                errors.append(f"plugin {plugin.name!r} URL host is required")
 
         try:
             ZoneInfo(self.server.timezone)
         except ZoneInfoNotFoundError:
             errors.append(f"server timezone is invalid: {self.server.timezone!r}")
 
+        if self.scheduler.startup_refresh_mode not in {"background", "blocking"}:
+            errors.append(f"startup_refresh_mode is unsupported: {self.scheduler.startup_refresh_mode!r}")
+
         self.cache.dir.mkdir(parents=True, exist_ok=True)
+        if not os.access(self.cache.dir, os.W_OK):
+            errors.append(f"cache directory is not writable: {self.cache.dir}")
         if self.logging_file.enabled and self.logging_file.path:
             self.logging_file.path.parent.mkdir(parents=True, exist_ok=True)
+            if not os.access(self.logging_file.path.parent, os.W_OK):
+                errors.append(f"log directory is not writable: {self.logging_file.path.parent}")
 
         if config_path and config_path.exists():
             mode = stat.S_IMODE(config_path.stat().st_mode)
@@ -845,6 +913,13 @@ class LoadedConfig(AppConfig):
 
 def load_config(path: Path, *, validate: bool = True) -> LoadedConfig:
     raw = tomllib.loads(path.read_text(encoding="utf-8"))
+    allowed_top_level = {
+        "server", "cache", "logging", "http", "scheduler", "security",
+        "parser", "output", "sources", "routes", "plugins",
+    }
+    unknown_top_level = sorted(set(raw) - allowed_top_level)
+    if unknown_top_level:
+        raise ValueError("\\n".join(f"unsupported top-level table {name!r}" for name in unknown_top_level))
 
     server_raw = _table(raw, "server")
     cache_raw = _table(raw, "cache")
@@ -1109,7 +1184,6 @@ Create `src/mihomo_proxy_manager/security.py`:
 from __future__ import annotations
 
 import ipaddress
-import math
 import re
 import socket
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -1143,7 +1217,10 @@ def _resolve_host(host: str) -> list[ipaddress._BaseAddress]:
     return sorted({ipaddress.ip_address(info[4][0]) for info in infos}, key=str)
 
 
-def assert_safe_url(url: str, *, allow_private_network: bool) -> None:
+_BASE64URL_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def assert_safe_url(url: str, *, allow_private_network: bool, resolve_dns: bool = True) -> None:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"}:
         raise SecurityError(f"unsupported URL scheme: {parsed.scheme}")
@@ -1151,20 +1228,22 @@ def assert_safe_url(url: str, *, allow_private_network: bool) -> None:
         raise SecurityError("URL host is required")
     if allow_private_network:
         return
-    for ip in _resolve_host(parsed.hostname):
+    try:
+        ips = [ipaddress.ip_address(parsed.hostname)]
+    except ValueError:
+        if not resolve_dns:
+            return
+        ips = _resolve_host(parsed.hostname)
+    for ip in ips:
         if not _is_public_ip(ip):
             raise SecurityError(f"URL resolves to non-public address: {ip}")
 
 
 def has_path_entropy(path: str, *, min_bits: int) -> bool:
     token = path.rsplit("/", 1)[-1].split(".", 1)[0]
-    if not token:
+    if not token or not _BASE64URL_TOKEN_RE.fullmatch(token):
         return False
-    alphabet = len(set(token))
-    if alphabet < 2:
-        return False
-    estimated = len(token) * math.log2(max(alphabet, 2))
-    return estimated >= min_bits
+    return len(token) * 6 >= min_bits
 
 
 def redact_url(url: str) -> str:
@@ -1213,7 +1292,7 @@ Replace URL scheme checks with:
 
 ```python
             try:
-                assert_safe_url(source.url, allow_private_network=source.fetch.allow_private_network)
+                assert_safe_url(source.url, allow_private_network=source.fetch.allow_private_network, resolve_dns=False)
             except SecurityError as exc:
                 errors.append(f"source {source.name!r} URL is unsafe: {exc}")
 ```
@@ -1223,7 +1302,7 @@ Add plugin URL checks:
 ```python
         for plugin in self.plugins.values():
             try:
-                assert_safe_url(plugin.url, allow_private_network=plugin.allow_private_network)
+                assert_safe_url(plugin.url, allow_private_network=plugin.allow_private_network, resolve_dns=False)
             except SecurityError as exc:
                 errors.append(f"plugin {plugin.name!r} URL is unsafe: {exc}")
 ```
@@ -1477,6 +1556,33 @@ def test_plain_share_links() -> None:
     assert result.records[0].data["password"] == "password"
 
 
+def test_ss_sip002_share_link() -> None:
+    body = b"ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTpzZWNyZXQ@example.com:443#SS%2001\\n"
+    result = parse_subscription(body, source="airport_a", fmt="share-links", parse_error="fail")
+
+    proxy = result.records[0].data
+    assert proxy["type"] == "ss"
+    assert proxy["cipher"] == "chacha20-ietf-poly1305"
+    assert proxy["password"] == "secret"
+    assert proxy["server"] == "example.com"
+
+
+def test_vless_share_link() -> None:
+    body = b"vless://00000000-0000-0000-0000-000000000000@example.com:443?encryption=none&security=tls&sni=example.com#VL%2001\\n"
+    result = parse_subscription(body, source="airport_a", fmt="share-links", parse_error="fail")
+
+    assert result.records[0].data["type"] == "vless"
+    assert result.records[0].data["uuid"] == "00000000-0000-0000-0000-000000000000"
+
+
+def test_hysteria2_share_link() -> None:
+    body = b"hysteria2://password@example.com:443?sni=example.com#HY2%2001\\n"
+    result = parse_subscription(body, source="airport_a", fmt="share-links", parse_error="fail")
+
+    assert result.records[0].data["type"] == "hysteria2"
+    assert result.records[0].data["password"] == "password"
+
+
 def test_base64_share_links() -> None:
     vmess = {
         "v": "2",
@@ -1623,7 +1729,41 @@ def _parse_vmess(link: str) -> dict[str, object]:
     return proxy
 
 
+def _parse_ss(link: str) -> dict[str, object]:
+    parsed = urlparse(link)
+    if parsed.hostname and parsed.username:
+        userinfo = unquote(parsed.username)
+        try:
+            decoded = _b64decode(userinfo).decode()
+        except Exception:
+            decoded = userinfo
+        cipher, password = decoded.split(":", 1)
+        return {
+            "name": _name(parsed.fragment, parsed.hostname),
+            "type": "ss",
+            "server": parsed.hostname,
+            "port": parsed.port,
+            "cipher": cipher,
+            "password": password,
+        }
+    raw = link.removeprefix("ss://").split("#", 1)[0]
+    decoded = _b64decode(raw).decode()
+    method_password, endpoint = decoded.rsplit("@", 1)
+    cipher, password = method_password.split(":", 1)
+    server, port = endpoint.rsplit(":", 1)
+    return {
+        "name": _name(parsed.fragment, server),
+        "type": "ss",
+        "server": server,
+        "port": int(port),
+        "cipher": cipher,
+        "password": password,
+    }
+
+
 def _parse_url_link(link: str) -> dict[str, object]:
+    if link.startswith("ss://"):
+        return _parse_ss(link)
     parsed = urlparse(link)
     query = {key: values[-1] for key, values in parse_qs(parsed.query).items()}
     scheme = parsed.scheme.lower()
@@ -1637,15 +1777,7 @@ def _parse_url_link(link: str) -> dict[str, object]:
     username = unquote(parsed.username or "")
     password = unquote(parsed.password or "")
 
-    if scheme == "ss":
-        method_password = username
-        if ":" in method_password:
-            cipher, ss_password = method_password.split(":", 1)
-        else:
-            decoded = _b64decode(method_password).decode()
-            cipher, ss_password = decoded.split(":", 1)
-        proxy.update({"cipher": cipher, "password": ss_password})
-    elif scheme == "vless":
+    if scheme == "vless":
         proxy.update({"uuid": username, "encryption": query.get("encryption", "none")})
     elif scheme == "trojan":
         proxy.update({"password": username})
@@ -1853,6 +1985,7 @@ from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import quote
 
 from filelock import FileLock
 
@@ -1883,10 +2016,12 @@ class JsonSourceCacheStore:
         self._refreshing: set[str] = set()
 
     def _path(self, source_name: str) -> Path:
-        return self.config.dir / f"{source_name}.json"
+        safe_name = quote(source_name, safe="")
+        return self.config.dir / f"{safe_name}.json"
 
     def _lock_path(self, source_name: str) -> Path:
-        return self.config.dir / f"{source_name}.lock"
+        safe_name = quote(source_name, safe="")
+        return self.config.dir / f"{safe_name}.lock"
 
     def set_refreshing(self, source_name: str, refreshing: bool) -> None:
         if refreshing:
@@ -2014,7 +2149,7 @@ async def test_fetch_sends_conditional_headers() -> None:
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     fetcher = SubscriptionFetcher(client, HttpConfig(__import__("datetime").timedelta(seconds=30), "ua", 1024, 3))
     result = await fetcher.fetch(
-        "https://example.com/sub",
+        "https://93.184.216.34/sub",
         FetchConfig(__import__("datetime").timedelta(seconds=30), "ua", {}, False),
         etag='"abc"',
         last_modified="Wed, 17 Jun 2026 04:00:00 GMT",
@@ -2032,7 +2167,19 @@ async def test_fetch_rejects_oversized_response() -> None:
     fetcher = SubscriptionFetcher(client, HttpConfig(__import__("datetime").timedelta(seconds=30), "ua", 1024, 3))
 
     with pytest.raises(ValueError):
-        await fetcher.fetch("https://example.com/sub", FetchConfig(__import__("datetime").timedelta(seconds=30), "ua", {}, False))
+        await fetcher.fetch("https://93.184.216.34/sub", FetchConfig(__import__("datetime").timedelta(seconds=30), "ua", {}, False))
+
+
+@pytest.mark.asyncio
+async def test_fetch_revalidates_redirect_target() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(302, headers={"Location": "http://127.0.0.1/sub"})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    fetcher = SubscriptionFetcher(client, HttpConfig(__import__("datetime").timedelta(seconds=30), "ua", 1024, 3))
+
+    with pytest.raises(ValueError):
+        await fetcher.fetch("https://93.184.216.34/sub", FetchConfig(__import__("datetime").timedelta(seconds=30), "ua", {}, False))
 ```
 
 - [ ] **Step 2: Write plugin tests**
@@ -2043,7 +2190,8 @@ Add to `tests/test_plugins_refresher.py`:
 import httpx
 import pytest
 
-from mihomo_proxy_manager.models import PluginConfig
+from mihomo_proxy_manager.models import HttpConfig, PluginConfig
+from mihomo_proxy_manager.fetcher import SafeHttpClient
 from mihomo_proxy_manager.plugins.http_action import HttpActionPlugin, PluginContext
 
 
@@ -2053,12 +2201,13 @@ async def test_http_action_success() -> None:
         assert request.method == "POST"
         return httpx.Response(204)
 
-    plugin = HttpActionPlugin(httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    plugin = HttpActionPlugin(SafeHttpClient(client, HttpConfig(__import__("datetime").timedelta(seconds=30), "ua", 1024, 3)))
     config = PluginConfig(
         name="turn_on",
         type="http_action",
         method="POST",
-        url="https://example.com/switch",
+        url="https://93.184.216.34/switch",
         headers={},
         success_status=(204,),
         timeout=__import__("datetime").timedelta(seconds=10),
@@ -2104,10 +2253,55 @@ class FetchResult:
     not_modified: bool = False
 
 
-class SubscriptionFetcher:
+class SafeHttpClient:
     def __init__(self, client: httpx.AsyncClient, http_config: HttpConfig) -> None:
         self.client = client
         self.http_config = http_config
+
+    async def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str],
+        timeout: float,
+        allow_private_network: bool,
+        body: bytes | str | None = None,
+    ) -> httpx.Response:
+        current = url
+        for _ in range(self.http_config.max_redirects + 1):
+            assert_safe_url(current, allow_private_network=allow_private_network, resolve_dns=True)
+            async with self.client.stream(
+                method,
+                current,
+                headers=headers,
+                content=body,
+                timeout=timeout,
+                follow_redirects=False,
+            ) as response:
+                if response.status_code in {301, 302, 303, 307, 308}:
+                    location = response.headers.get("Location")
+                    if not location:
+                        raise ValueError("redirect response missing Location")
+                    current = urljoin(current, location)
+                    continue
+                content = bytearray()
+                async for chunk in response.aiter_bytes():
+                    content.extend(chunk)
+                    if len(content) > self.http_config.max_response_size:
+                        raise ValueError("upstream response exceeds max_response_size")
+                return httpx.Response(
+                    response.status_code,
+                    headers=response.headers,
+                    content=bytes(content),
+                    request=response.request,
+                )
+        raise ValueError("too many redirects")
+
+
+class SubscriptionFetcher:
+    def __init__(self, client: httpx.AsyncClient, http_config: HttpConfig) -> None:
+        self.safe_http = SafeHttpClient(client, http_config)
 
     async def fetch(
         self,
@@ -2117,7 +2311,6 @@ class SubscriptionFetcher:
         etag: str | None = None,
         last_modified: str | None = None,
     ) -> FetchResult:
-        current = url
         headers = dict(fetch_config.headers)
         headers.setdefault("User-Agent", fetch_config.user_agent)
         if etag:
@@ -2125,23 +2318,17 @@ class SubscriptionFetcher:
         if last_modified:
             headers["If-Modified-Since"] = last_modified
 
-        for _ in range(self.http_config.max_redirects + 1):
-            assert_safe_url(current, allow_private_network=fetch_config.allow_private_network)
-            response = await self.client.get(current, headers=headers, timeout=fetch_config.timeout.total_seconds(), follow_redirects=False)
-            if response.status_code in {301, 302, 303, 307, 308}:
-                location = response.headers.get("Location")
-                if not location:
-                    raise ValueError("redirect response missing Location")
-                current = urljoin(current, location)
-                continue
-            if response.status_code == 304:
-                return FetchResult(None, etag, last_modified, True)
-            response.raise_for_status()
-            content = response.content
-            if len(content) > self.http_config.max_response_size:
-                raise ValueError("upstream response exceeds max_response_size")
-            return FetchResult(content, response.headers.get("ETag"), response.headers.get("Last-Modified"))
-        raise ValueError("too many redirects")
+        response = await self.safe_http.request(
+            "GET",
+            url,
+            headers=headers,
+            timeout=fetch_config.timeout.total_seconds(),
+            allow_private_network=fetch_config.allow_private_network,
+        )
+        if response.status_code == 304:
+            return FetchResult(None, etag, last_modified, True)
+        response.raise_for_status()
+        return FetchResult(response.content, response.headers.get("ETag"), response.headers.get("Last-Modified"))
 ```
 
 - [ ] **Step 5: Implement HTTP action plugin**
@@ -2153,10 +2340,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import httpx
-
+from mihomo_proxy_manager.fetcher import SafeHttpClient
 from mihomo_proxy_manager.models import PluginConfig
-from mihomo_proxy_manager.security import assert_safe_url
 
 
 @dataclass(frozen=True)
@@ -2172,20 +2357,19 @@ class PluginResult:
 
 
 class HttpActionPlugin:
-    def __init__(self, client: httpx.AsyncClient) -> None:
-        self.client = client
+    def __init__(self, safe_http: SafeHttpClient) -> None:
+        self.safe_http = safe_http
 
     async def run(self, context: PluginContext) -> PluginResult:
         plugin = context.plugin
         try:
-            assert_safe_url(plugin.url, allow_private_network=plugin.allow_private_network)
-            response = await self.client.request(
+            response = await self.safe_http.request(
                 plugin.method,
                 plugin.url,
                 headers=plugin.headers,
-                content=plugin.body,
                 timeout=plugin.timeout.total_seconds(),
-                follow_redirects=False,
+                allow_private_network=plugin.allow_private_network,
+                body=plugin.body,
             )
             if response.status_code not in plugin.success_status:
                 return PluginResult(False, f"unexpected status {response.status_code}")
@@ -2232,6 +2416,7 @@ git commit -m "feat: add async fetcher and http action plugin"
 Append to `tests/test_plugins_refresher.py`:
 
 ```python
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 from mihomo_proxy_manager.cache import JsonSourceCacheStore
@@ -2311,6 +2496,35 @@ proxies:
     assert result.ok
     assert cache is not None
     assert cache.proxies[0].data["name"] == "[airport_a] HK"
+
+
+@pytest.mark.asyncio
+async def test_refresher_shares_inflight_refresh(tmp_path) -> None:
+    body = b'''
+proxies:
+  - name: HK
+    type: vmess
+    server: example.com
+    port: 443
+    uuid: 00000000-0000-0000-0000-000000000000
+    cipher: auto
+'''
+    store = JsonSourceCacheStore(CacheConfig(tmp_path, 2, 0o600, timedelta(days=7)))
+    fetcher = StaticFetcher(body)
+    refresher = SourceRefresher(
+        sources={"airport_a": source_config()},
+        plugins={},
+        cache_store=store,
+        fetcher=fetcher,
+        http_plugin=None,
+        refresh_lock_timeout=timedelta(seconds=1),
+    )
+
+    first, second = await asyncio.gather(refresher.refresh("airport_a"), refresher.refresh("airport_a"))
+
+    assert first.ok
+    assert second.ok
+    assert fetcher.calls == 1
 ```
 
 - [ ] **Step 2: Run refresher test and verify it fails**
@@ -2339,6 +2553,7 @@ from .cache import CURRENT_SCHEMA_VERSION, SourceCacheStore
 from .models import PluginConfig, SourceCache, SourceConfig
 from .parsers import ParseError, parse_subscription
 from .plugins.http_action import HttpActionPlugin, PluginContext
+from .security import redact_secret
 from .transform import apply_transform
 
 
@@ -2348,6 +2563,7 @@ class RefreshResult:
     source: str
     node_count: int = 0
     warning_count: int = 0
+    cache_path: str | None = None
     error: str | None = None
 
 
@@ -2369,12 +2585,25 @@ class SourceRefresher:
         self.http_plugin = http_plugin
         self.refresh_lock_timeout = refresh_lock_timeout
         self._locks: dict[str, asyncio.Lock] = {}
+        self._inflight: dict[str, asyncio.Task[RefreshResult]] = {}
 
     def _lock(self, source_name: str) -> asyncio.Lock:
         self._locks.setdefault(source_name, asyncio.Lock())
         return self._locks[source_name]
 
     async def refresh(self, source_name: str) -> RefreshResult:
+        existing = self._inflight.get(source_name)
+        if existing is not None and not existing.done():
+            return await asyncio.wait_for(asyncio.shield(existing), timeout=self.refresh_lock_timeout.total_seconds())
+        task = asyncio.create_task(self._refresh_with_lock(source_name))
+        self._inflight[source_name] = task
+        try:
+            return await task
+        finally:
+            if self._inflight.get(source_name) is task:
+                self._inflight.pop(source_name, None)
+
+    async def _refresh_with_lock(self, source_name: str) -> RefreshResult:
         lock = self._lock(source_name)
         try:
             await asyncio.wait_for(lock.acquire(), timeout=self.refresh_lock_timeout.total_seconds())
@@ -2420,7 +2649,7 @@ class SourceRefresher:
                     proxies=old_cache.proxies,
                 )
                 await self.cache_store.set(source_name, cache)
-                return RefreshResult(True, source_name, old_cache.node_count, len(old_cache.warnings))
+                return RefreshResult(True, source_name, old_cache.node_count, len(old_cache.warnings), self._cache_path(source_name))
 
             parsed = parse_subscription(
                 fetched.body or b"",
@@ -2444,8 +2673,9 @@ class SourceRefresher:
                 proxies=tuple(transformed),
             )
             await self.cache_store.set(source_name, cache)
-            return RefreshResult(True, source_name, len(transformed), len(parsed.warnings))
+            return RefreshResult(True, source_name, len(transformed), len(parsed.warnings), self._cache_path(source_name))
         except Exception as exc:
+            redacted_error = redact_secret(str(exc))
             if old_cache:
                 failed = SourceCache(
                     source=source_name,
@@ -2456,14 +2686,19 @@ class SourceRefresher:
                     last_modified=old_cache.last_modified,
                     node_count=old_cache.node_count,
                     warnings=old_cache.warnings,
-                    last_error=str(exc),
+                    last_error=redacted_error,
                     proxies=old_cache.proxies,
                 )
                 await self.cache_store.set(source_name, failed)
-            return RefreshResult(False, source_name, error=str(exc))
+            return RefreshResult(False, source_name, cache_path=self._cache_path(source_name), error=redacted_error)
         finally:
             if hasattr(self.cache_store, "set_refreshing"):
                 self.cache_store.set_refreshing(source_name, False)
+
+    def _cache_path(self, source_name: str) -> str | None:
+        if hasattr(self.cache_store, "_path"):
+            return str(self.cache_store._path(source_name))
+        return None
 ```
 
 - [ ] **Step 4: Run refresher tests**
@@ -2655,6 +2890,14 @@ sources = ["airport_a"]
     return path
 
 
+class FakeRefresher:
+    def __init__(self) -> None:
+        self.called: list[str] = []
+
+    async def refresh(self, source_name: str):
+        self.called.append(source_name)
+
+
 @pytest.mark.asyncio
 async def test_provider_route_returns_yaml(tmp_path) -> None:
     config = load_config(config_file(tmp_path))
@@ -2690,6 +2933,36 @@ def test_health_and_unknown_path(tmp_path) -> None:
     with TestClient(app) as client:
         assert client.get("/healthz").status_code == 200
         assert client.get("/missing").status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_provider_serves_stale_valid_cache_and_triggers_refresh(tmp_path) -> None:
+    config = load_config(config_file(tmp_path))
+    store = JsonSourceCacheStore(config.cache)
+    old_success = datetime.now(UTC) - timedelta(hours=2)
+    await store.set(
+        "airport_a",
+        SourceCache(
+            "airport_a",
+            1,
+            old_success,
+            old_success,
+            None,
+            None,
+            1,
+            (),
+            None,
+            (ProxyRecord("airport_a", {"name": "HK", "type": "vmess"}),),
+        ),
+    )
+    refresher = FakeRefresher()
+    app = create_app(config, cache_store=store, refresher=refresher, scheduler=None)
+
+    with TestClient(app) as client:
+        response = client.get("/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml")
+
+    assert response.status_code == 200
+    assert refresher.called == ["airport_a"]
 ```
 
 - [ ] **Step 2: Run app tests and verify they fail**
@@ -2710,6 +2983,7 @@ Create `src/mihomo_proxy_manager/status.py`:
 from __future__ import annotations
 
 from .cache import SourceCacheStore
+from .security import redact_secret
 
 
 async def build_status(cache_store: SourceCacheStore, source_names: list[str]) -> dict[str, object]:
@@ -2722,7 +2996,7 @@ async def build_status(cache_store: SourceCacheStore, source_names: list[str]) -
                 "last_attempt_at": status.last_attempt_at.isoformat() if status.last_attempt_at else None,
                 "last_success_at": status.last_success_at.isoformat() if status.last_success_at else None,
                 "node_count": status.node_count,
-                "last_error": status.last_error,
+                "last_error": redact_secret(status.last_error) if status.last_error else None,
                 "refreshing": status.refreshing,
             }
         )
@@ -2738,19 +3012,38 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
+from croniter import croniter
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route
 
 from .cache import SourceCacheStore
-from .models import AppConfig, ProxyRecord
+from .models import AppConfig, ProxyRecord, SourceConfig
 from .render import ProviderRenderer
 from .status import build_status
 
 
 def _is_still_valid(cache, max_stale) -> bool:
     return bool(cache and cache.last_success_at and datetime.now(UTC) - cache.last_success_at <= max_stale)
+
+
+def _is_due(cache, source: SourceConfig, timezone: str) -> bool:
+    if not cache or not cache.last_success_at:
+        return True
+    now = datetime.now(UTC)
+    if source.refresh.interval and now - cache.last_success_at >= source.refresh.interval:
+        return True
+    if source.refresh.cron:
+        tz = ZoneInfo(timezone)
+        last_success = cache.last_success_at.astimezone(tz)
+        now_tz = now.astimezone(tz)
+        for expr in source.refresh.cron:
+            previous = croniter(expr, now_tz).get_prev(datetime)
+            if previous > last_success:
+                return True
+    return False
 
 
 def create_app(config: AppConfig, *, cache_store: SourceCacheStore, refresher, scheduler) -> Starlette:
@@ -2770,20 +3063,26 @@ def create_app(config: AppConfig, *, cache_store: SourceCacheStore, refresher, s
 
         records: list[ProxyRecord] = []
         missing: list[str] = []
+        due: list[str] = []
         for source_name in route.sources:
             cache = await cache_store.get(source_name)
             if _is_still_valid(cache, config.cache.max_stale):
                 records.extend(cache.proxies)
+                if _is_due(cache, config.sources[source_name], config.server.timezone):
+                    due.append(source_name)
             else:
                 missing.append(source_name)
+
+        for source_name in due:
+            if refresher is not None:
+                asyncio.create_task(refresher.refresh(source_name))
+        if due:
+            await asyncio.sleep(0)
 
         if missing and refresher is not None:
             tasks = [asyncio.create_task(refresher.refresh(name)) for name in missing]
             if route.require_all_sources or not records:
-                try:
-                    await asyncio.wait_for(asyncio.gather(*tasks), timeout=config.server.route_refresh_wait.total_seconds())
-                except TimeoutError:
-                    pass
+                await asyncio.wait(tasks, timeout=config.server.route_refresh_wait.total_seconds())
                 records.clear()
                 for source_name in route.sources:
                     cache = await cache_store.get(source_name)
@@ -2840,6 +3139,7 @@ git commit -m "feat: expose provider routes"
 **Files:**
 - Create: `src/mihomo_proxy_manager/scheduler.py`
 - Create: `src/mihomo_proxy_manager/logging.py`
+- Create: `tests/test_scheduler.py`
 - Modify: `src/mihomo_proxy_manager/cli.py`
 - Test: `tests/test_cli_smoke.py`
 
@@ -2884,9 +3184,98 @@ Run:
 uv run pytest tests/test_cli_smoke.py -v
 ```
 
-Expected: PASS for parser tests, PASS for `check` if earlier CLI wiring is correct.
+Expected: PASS for CLI parser tests and PASS for `check` if earlier CLI wiring is correct.
 
-- [ ] **Step 3: Implement scheduler**
+- [ ] **Step 3: Write scheduler tests**
+
+Create `tests/test_scheduler.py`:
+
+```python
+from datetime import timedelta
+
+import pytest
+
+from mihomo_proxy_manager.models import (
+    AppConfig,
+    CacheConfig,
+    HttpConfig,
+    LoggingSinkConfig,
+    OutputConfig,
+    ParserConfig,
+    RefreshConfig,
+    RenameConfig,
+    FilterConfig,
+    RouteConfig,
+    RouteOutputConfig,
+    SchedulerConfig,
+    SecurityConfig,
+    ServerConfig,
+    SourceConfig,
+    SourcePluginConfig,
+    FetchConfig,
+)
+from mihomo_proxy_manager.scheduler import RefreshScheduler
+
+
+class FakeRefresher:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def refresh(self, source_name: str):
+        self.calls.append(source_name)
+
+
+def scheduler_config(tmp_path, *, startup_refresh=True, startup_refresh_mode="blocking") -> AppConfig:
+    source = SourceConfig(
+        name="airport_a",
+        url="https://example.com/sub",
+        format="auto",
+        parse_error="skip",
+        fetch=FetchConfig(timedelta(seconds=30), "ua", {}, False),
+        refresh=RefreshConfig(interval=None, cron=()),
+        rename=RenameConfig(),
+        filter=FilterConfig(),
+        plugins=SourcePluginConfig(),
+    )
+    return AppConfig(
+        server=ServerConfig("127.0.0.1", 8080, "Asia/Shanghai", "/healthz", None, timedelta(seconds=1)),
+        cache=CacheConfig(tmp_path, 2, 0o600, timedelta(days=7)),
+        logging_console=LoggingSinkConfig(True, "INFO", True),
+        logging_file=LoggingSinkConfig(False, "DEBUG"),
+        http=HttpConfig(timedelta(seconds=30), "ua", 1024, 3),
+        scheduler=SchedulerConfig(startup_refresh, startup_refresh_mode, timedelta(seconds=0), timedelta(seconds=1)),
+        security=SecurityConfig(128, False),
+        parser=ParserConfig("auto", "skip"),
+        output=OutputConfig(False, False),
+        sources={"airport_a": source},
+        routes={"phone": RouteConfig("phone", "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml", ("airport_a",), False, RouteOutputConfig(), RenameConfig(), FilterConfig())},
+        plugins={},
+    )
+
+
+@pytest.mark.asyncio
+async def test_scheduler_blocking_startup_refreshes_sources(tmp_path) -> None:
+    refresher = FakeRefresher()
+    scheduler = RefreshScheduler(scheduler_config(tmp_path), refresher)
+
+    await scheduler.start()
+    await scheduler.stop()
+
+    assert refresher.calls == ["airport_a"]
+
+
+@pytest.mark.asyncio
+async def test_scheduler_startup_refresh_can_be_disabled(tmp_path) -> None:
+    refresher = FakeRefresher()
+    scheduler = RefreshScheduler(scheduler_config(tmp_path, startup_refresh=False), refresher)
+
+    await scheduler.start()
+    await scheduler.stop()
+
+    assert refresher.calls == []
+```
+
+- [ ] **Step 4: Implement scheduler**
 
 Create `src/mihomo_proxy_manager/scheduler.py`:
 
@@ -2951,7 +3340,7 @@ class RefreshScheduler:
             await self.refresher.refresh(source_name)
 ```
 
-- [ ] **Step 4: Implement loguru setup**
+- [ ] **Step 5: Implement loguru setup**
 
 Create `src/mihomo_proxy_manager/logging.py`:
 
@@ -2980,7 +3369,7 @@ def configure_logging(config: AppConfig) -> None:
         )
 ```
 
-- [ ] **Step 5: Complete CLI serve and refresh**
+- [ ] **Step 6: Complete CLI serve and refresh**
 
 Replace `src/mihomo_proxy_manager/cli.py` with:
 
@@ -2997,7 +3386,7 @@ import uvicorn
 from .app import create_app
 from .cache import JsonSourceCacheStore
 from .config import load_config
-from .fetcher import SubscriptionFetcher
+from .fetcher import SafeHttpClient, SubscriptionFetcher
 from .logging import configure_logging
 from .plugins.http_action import HttpActionPlugin
 from .refresher import SourceRefresher
@@ -3042,7 +3431,7 @@ async def _build_runtime(config_path: str):
     cache_store = JsonSourceCacheStore(config.cache)
     client = httpx.AsyncClient()
     fetcher = SubscriptionFetcher(client, config.http)
-    plugin = HttpActionPlugin(client)
+    plugin = HttpActionPlugin(SafeHttpClient(client, config.http))
     refresher = SourceRefresher(
         sources=config.sources,
         plugins=config.plugins,
@@ -3060,7 +3449,7 @@ def _cmd_serve(config_path: str) -> int:
         scheduler = RefreshScheduler(config, refresher)
         app = create_app(config, cache_store=cache_store, refresher=refresher, scheduler=scheduler)
         try:
-            server_config = uvicorn.Config(app, host=config.server.host, port=config.server.port)
+            server_config = uvicorn.Config(app, host=config.server.host, port=config.server.port, access_log=False)
             server = uvicorn.Server(server_config)
             await server.serve()
             return 0
@@ -3079,9 +3468,9 @@ def _cmd_refresh(config_path: str, source_name: str) -> int:
                 return 1
             result = await refresher.refresh(source_name)
             if result.ok:
-                print(f"OK: refreshed {result.source}: nodes={result.node_count} warnings={result.warning_count}")
+                print(f"OK: refreshed {result.source}: nodes={result.node_count} warnings={result.warning_count} cache={result.cache_path}")
                 return 0
-            print(f"ERROR: refresh failed for {result.source}: {result.error}")
+            print(f"ERROR: refresh failed for {result.source}: cache={result.cache_path} error={result.error}")
             return 1
         finally:
             await client.aclose()
@@ -3102,21 +3491,22 @@ def main(argv: list[str] | None = None) -> int:
     return 2
 ```
 
-- [ ] **Step 6: Run CLI tests and config check**
+- [ ] **Step 7: Run CLI, scheduler tests, and config check**
 
 Run:
 
 ```bash
 uv run pytest tests/test_cli_smoke.py -v
+uv run pytest tests/test_scheduler.py -v
 uv run mpm check -c examples/config.toml
 ```
 
 Expected: tests PASS; `mpm check` prints `OK: configuration is valid`.
 
-- [ ] **Step 7: Commit scheduler and CLI**
+- [ ] **Step 8: Commit scheduler and CLI**
 
 ```bash
-git add src/mihomo_proxy_manager/scheduler.py src/mihomo_proxy_manager/logging.py src/mihomo_proxy_manager/cli.py tests/test_cli_smoke.py
+git add src/mihomo_proxy_manager/scheduler.py src/mihomo_proxy_manager/logging.py src/mihomo_proxy_manager/cli.py tests/test_cli_smoke.py tests/test_scheduler.py
 git commit -m "feat: add scheduler and service cli"
 ```
 

@@ -1,0 +1,70 @@
+[server]
+host = "127.0.0.1"
+port = 8080
+timezone = "Asia/Shanghai"
+health_path = "/healthz"
+status_path = "/s/X6HfeBRQz6xqk9S4dTV7gQwL2nP8aYcM"
+route_refresh_wait = "10s"
+
+[cache]
+dir = "data/cache"
+write_indent = 2
+file_mode = "0600"
+max_stale = "7d"
+
+[logging.console]
+enabled = true
+level = "INFO"
+colorize = true
+
+[logging.file]
+enabled = false
+path = "logs/mihomo-proxy-manager.log"
+level = "DEBUG"
+rotation = "10 MB"
+retention = "14 days"
+compression = "gz"
+
+[http]
+timeout = "30s"
+user_agent = "mihomo-proxy-manager/0.1"
+max_response_size = "10 MB"
+max_redirects = 3
+
+[scheduler]
+startup_refresh = true
+startup_refresh_mode = "background"
+jitter = "30s"
+refresh_lock_timeout = "35s"
+
+[security]
+hidden_path_min_entropy_bits = 128
+allow_private_network_urls = false
+
+[parser]
+default_format = "auto"
+default_parse_error = "skip"
+
+[output]
+yaml_sort_keys = false
+default_include_meta_comments = false
+
+[sources.airport_a]
+url = "https://example.com/sub"
+format = "auto"
+parse_error = "skip"
+
+[sources.airport_a.refresh]
+interval = "1h"
+
+[sources.airport_a.rename]
+prefix = "[{source}] "
+
+[routes.phone]
+path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml"
+sources = ["airport_a"]
+require_all_sources = false
+
+[routes.phone.output]
+format = "provider"
+include_meta_comments = false

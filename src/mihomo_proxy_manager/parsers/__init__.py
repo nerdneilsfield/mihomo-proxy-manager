@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 from dataclasses import dataclass
 from typing import Literal
 
@@ -45,21 +46,49 @@ def parse_subscription(
     fmt: Literal["auto", "yaml", "share-links"],
     parse_error: Literal["skip", "fail"],
 ) -> ParseResult:
+    yaml_error: Exception | None = None
     if fmt in {"auto", "yaml"}:
         try:
             records, warnings = parse_yaml_subscription(body, source=source)
             return _finalize(records, warnings, parse_error=parse_error)
-        except Exception:
+        except Exception as exc:
             if fmt == "yaml":
                 raise
+            yaml_error = exc
 
+    share_links_text: str | None = None
+    share_links_warnings: list[str] = []
     if fmt in {"auto", "share-links"}:
-        records, warnings = parse_share_links_text(_decode_text(body), source=source)
-        if records or fmt == "share-links":
-            return _finalize(records, warnings, parse_error=parse_error)
+        try:
+            share_links_text = _decode_text(body)
+        except UnicodeDecodeError as exc:
+            if fmt == "share-links":
+                raise ParseError(f"body is not valid UTF-8: {exc}") from exc
+        if share_links_text is not None:
+            records, warnings = parse_share_links_text(share_links_text, source=source)
+            if records or fmt == "share-links":
+                return _finalize(records, warnings, parse_error=parse_error)
+            share_links_warnings = warnings
 
     if fmt == "auto":
-        records, warnings = parse_share_links_text(_try_base64_text(body), source=source)
-        return _finalize(records, warnings, parse_error=parse_error)
+        try:
+            text = _try_base64_text(body)
+        except (binascii.Error, ValueError, UnicodeDecodeError) as exc:
+            parts = [f"body is not valid base64 share-links: {exc}"]
+            if share_links_warnings:
+                parts.append("; ".join(share_links_warnings))
+            if yaml_error is not None:
+                parts.append(f"yaml failed: {yaml_error}")
+            raise ParseError("; ".join(parts)) from exc
+        records, warnings = parse_share_links_text(text, source=source)
+        try:
+            return _finalize(records, warnings, parse_error=parse_error)
+        except ParseError as exc:
+            parts = [str(exc)]
+            if share_links_warnings:
+                parts.append("; ".join(share_links_warnings))
+            if yaml_error is not None:
+                parts.append(f"yaml failed: {yaml_error}")
+            raise ParseError("; ".join(parts)) from exc
 
     raise ParseError("unsupported subscription format")

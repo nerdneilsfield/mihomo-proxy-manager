@@ -55,8 +55,32 @@ async def test_cache_reloads_when_file_changes_from_another_process(tmp_path) ->
     )
 
     await server_store.set("airport_a", old_cache)
-    assert (await server_store.get("airport_a")).proxies[0].data["name"] == "old"
+    old_loaded = await server_store.get("airport_a")
+    assert old_loaded is not None
+    assert old_loaded.proxies[0].data["name"] == "old"
     await asyncio.sleep(0.01)
     await cli_store.set("airport_a", new_cache)
 
-    assert (await server_store.get("airport_a")).proxies[0].data["name"] == "new"
+    new_loaded = await server_store.get("airport_a")
+    assert new_loaded is not None
+    assert new_loaded.proxies[0].data["name"] == "new"
+
+
+@pytest.mark.asyncio
+async def test_malformed_cache_json_raises_value_error(tmp_path) -> None:
+    path = tmp_path / "airport_a.json"
+    path.write_text("not json", encoding="utf-8")
+    store = JsonSourceCacheStore(CacheConfig(tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7)))
+
+    with pytest.raises(ValueError, match="malformed cache file"):
+        await store.get("airport_a")
+
+
+@pytest.mark.asyncio
+async def test_malformed_cache_missing_source_raises_value_error(tmp_path) -> None:
+    path = tmp_path / "airport_a.json"
+    path.write_text('{"schema_version": 1}', encoding="utf-8")
+    store = JsonSourceCacheStore(CacheConfig(tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7)))
+
+    with pytest.raises(ValueError, match="malformed cache file"):
+        await store.get("airport_a")

@@ -33,13 +33,16 @@ class SafeHttpClient:
         body: bytes | str | None = None,
     ) -> httpx.Response:
         current = url
+        current_method = method
+        current_body = body
+        current_headers = dict(headers)
         for _ in range(self.http_config.max_redirects + 1):
             assert_safe_url(current, allow_private_network=allow_private_network, resolve_dns=True)
             async with self.client.stream(
-                method,
+                current_method,
                 current,
-                headers=headers,
-                content=body,
+                headers=current_headers,
+                content=current_body,
                 timeout=timeout,
                 follow_redirects=False,
             ) as response:
@@ -48,6 +51,14 @@ class SafeHttpClient:
                     if not location:
                         raise ValueError("redirect response missing Location")
                     current = urljoin(current, location)
+                    if response.status_code in {301, 302, 303}:
+                        current_method = "GET"
+                        current_body = None
+                        current_headers = {
+                            key: value
+                            for key, value in current_headers.items()
+                            if key.lower() not in {"content-length", "content-type", "transfer-encoding"}
+                        }
                     continue
                 content = bytearray()
                 async for chunk in response.aiter_bytes():

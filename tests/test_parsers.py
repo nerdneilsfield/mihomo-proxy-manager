@@ -4,6 +4,7 @@ import json
 import pytest
 
 from mihomo_proxy_manager.parsers import ParseError, parse_subscription
+from mihomo_proxy_manager.parsers.share_links import _parse_ss
 from mihomo_proxy_manager.parsers.yaml import validate_required_fields
 
 
@@ -152,3 +153,45 @@ def test_parse_error_skip_bad_nodes() -> None:
 def test_parse_error_fail_bad_nodes() -> None:
     with pytest.raises(ParseError):
         parse_subscription(b"not-a-node\n", source="airport_a", fmt="share-links", parse_error="fail")
+
+
+def test_share_links_rejects_non_utf8_body() -> None:
+    with pytest.raises(ParseError, match="UTF-8"):
+        parse_subscription(b"\xff\xfe\xfd", source="airport_a", fmt="share-links", parse_error="fail")
+
+
+def test_auto_rejects_invalid_base64() -> None:
+    with pytest.raises(ParseError, match="base64"):
+        parse_subscription(b"not-base64!!!", source="airport_a", fmt="auto", parse_error="fail")
+
+
+def test_auto_includes_yaml_error_when_all_formats_fail() -> None:
+    with pytest.raises(ParseError, match="yaml failed") as exc_info:
+        parse_subscription(b"{", source="airport_a", fmt="auto", parse_error="skip")
+
+    assert "YAML" not in str(exc_info.value) or "yaml failed" in str(exc_info.value)
+
+
+def test_legacy_ss_link_with_plugin_query() -> None:
+    payload = base64.urlsafe_b64encode(b"chacha20-ietf-poly1305:secret@example.com:443").decode()
+    body = (
+        f"ss://{payload}"
+        "?plugin=obfs-local%3Bobfs%3Dhttp%3Bobfs-host%3Dwww.bing.com#SS%2001"
+    ).encode()
+    result = parse_subscription(body, source="airport_a", fmt="share-links", parse_error="fail")
+
+    proxy = result.records[0].data
+    assert proxy["type"] == "ss"
+    assert proxy["cipher"] == "chacha20-ietf-poly1305"
+    assert proxy["password"] == "secret"
+    assert proxy["server"] == "example.com"
+    assert proxy["plugin"] == "obfs-local"
+    assert proxy["plugin-opts"] == {"obfs": "http", "obfs-host": "www.bing.com"}
+
+
+def test_parse_ss_legacy_with_query_directly() -> None:
+    payload = base64.urlsafe_b64encode(b"aes-256-gcm:pass@192.0.2.1:8388").decode()
+    link = f"ss://{payload}?plugin=obfs-local%3Bobfs%3Dtls#Legacy"
+    proxy = _parse_ss(link)
+    assert proxy["plugin"] == "obfs-local"
+    assert proxy["plugin-opts"] == {"obfs": "tls"}

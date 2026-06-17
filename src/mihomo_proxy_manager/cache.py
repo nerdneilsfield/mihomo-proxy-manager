@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
@@ -59,22 +58,22 @@ class JsonSourceCacheStore:
 
     async def get(self, source_name: str) -> SourceCache | None:
         path = self._path(source_name)
-        if not path.exists():
+        cache, mtime = await asyncio.to_thread(self._read_or_miss, path)
+        if cache is None:
             self._memory.pop(source_name, None)
             self._memory_mtime.pop(source_name, None)
             return None
-        mtime = path.stat().st_mtime
+        assert mtime is not None
         if source_name in self._memory and self._memory_mtime.get(source_name) == mtime:
             return self._memory[source_name]
-        cache = await asyncio.to_thread(self._read_file, path)
         self._memory[source_name] = cache
         self._memory_mtime[source_name] = mtime
         return cache
 
     async def set(self, source_name: str, cache: SourceCache) -> None:
-        await asyncio.to_thread(self._write_file, source_name, cache)
+        mtime = await asyncio.to_thread(self._write_file, source_name, cache)
         self._memory[source_name] = cache
-        self._memory_mtime[source_name] = self._path(source_name).stat().st_mtime
+        self._memory_mtime[source_name] = mtime
 
     async def status(self, source_name: str) -> SourceStatus:
         cache = await self.get(source_name)
@@ -89,23 +88,35 @@ class JsonSourceCacheStore:
             refreshing=source_name in self._refreshing,
         )
 
+    def _read_or_miss(self, path: Path) -> tuple[SourceCache | None, float | None]:
+        if not path.exists():
+            return None, None
+        mtime = path.stat().st_mtime
+        return self._read_file(path), mtime
+
     def _read_file(self, path: Path) -> SourceCache:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"malformed cache file {path}: {exc}") from exc
         if data.get("schema_version") != CURRENT_SCHEMA_VERSION:
             raise ValueError(f"unsupported cache schema version: {data.get('schema_version')}")
-        proxies = tuple(ProxyRecord(item["source"], item["data"]) for item in data.get("proxies", ()))
-        return SourceCache(
-            source=data["source"],
-            schema_version=data["schema_version"],
-            last_attempt_at=_dt(data.get("last_attempt_at")),
-            last_success_at=_dt(data.get("last_success_at")),
-            etag=data.get("etag"),
-            last_modified=data.get("last_modified"),
-            node_count=int(data.get("node_count", len(proxies))),
-            warnings=tuple(data.get("warnings", ())),
-            last_error=data.get("last_error"),
-            proxies=proxies,
-        )
+        try:
+            proxies = tuple(ProxyRecord(item["source"], item["data"]) for item in data.get("proxies", ()))
+            return SourceCache(
+                source=data["source"],
+                schema_version=data["schema_version"],
+                last_attempt_at=_dt(data.get("last_attempt_at")),
+                last_success_at=_dt(data.get("last_success_at")),
+                etag=data.get("etag"),
+                last_modified=data.get("last_modified"),
+                node_count=int(data.get("node_count", len(proxies))),
+                warnings=tuple(data.get("warnings", ())),
+                last_error=data.get("last_error"),
+                proxies=proxies,
+            )
+        except (KeyError, TypeError) as exc:
+            raise ValueError(f"malformed cache file {path}: {exc}") from exc
 
     def _to_json(self, cache: SourceCache) -> dict[str, Any]:
         return {
@@ -121,7 +132,7 @@ class JsonSourceCacheStore:
             "proxies": [{"source": record.source, "data": record.data} for record in cache.proxies],
         }
 
-    def _write_file(self, source_name: str, cache: SourceCache) -> None:
+    def _write_file(self, source_name: str, cache: SourceCache) -> float:
         path = self._path(source_name)
         tmp = path.with_suffix(".json.tmp")
         lock = FileLock(str(self._lock_path(source_name)))
@@ -130,3 +141,4 @@ class JsonSourceCacheStore:
             os.chmod(tmp, self.config.file_mode)
             os.replace(tmp, path)
             os.chmod(path, self.config.file_mode)
+        return path.stat().st_mtime

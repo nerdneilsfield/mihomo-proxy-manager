@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from mihomo_proxy_manager.fetcher import SafeHttpClient
 from mihomo_proxy_manager.models import PluginConfig
+from mihomo_proxy_manager.security import redact_secret
 
 
 @dataclass(frozen=True)
@@ -37,4 +38,4 @@ class HttpActionPlugin:
                 return PluginResult(False, f"unexpected status {response.status_code}")
             return PluginResult(True)
         except Exception as exc:
-            return PluginResult(False, str(exc))
+            return PluginResult(False, redact_secret(str(exc)))

@@ -122,7 +122,7 @@ def _parse_ss(link: str) -> dict[str, object]:
         }
         _add_ss_plugin(proxy, query.get("plugin"))
         return proxy
-    raw = link.removeprefix("ss://").split("#", 1)[0]
+    raw = link.removeprefix("ss://").split("?", 1)[0].split("#", 1)[0]
     decoded = _b64decode(raw).decode()
     method_password, endpoint = decoded.rsplit("@", 1)
     cipher, password = method_password.split(":", 1)

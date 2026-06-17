@@ -29,11 +29,12 @@ The first implementation is an asynchronous single-process service with clear mo
 ## Technology
 
 - Python project managed by `uv`.
+- Python 3.11 or newer.
 - HTTP server: `starlette` served by `uvicorn`.
 - Async HTTP client: `httpx`.
 - Configuration: TOML loaded with Python `tomllib`.
 - Logging: `loguru`.
-- Type checking: `ty`.
+- Type checking: Astral `ty`.
 - Tests: `pytest`.
 
 The service should be async-first. Starlette endpoints, source refreshes, plugin execution, and upstream downloads use `async`. JSON file cache can start with direct small-file operations behind a cache interface; the interface should remain replaceable.
@@ -48,11 +49,14 @@ host = "0.0.0.0"
 port = 8080
 timezone = "Asia/Shanghai"
 health_path = "/healthz"
-status_path = "/s/random-status-path"
+status_path = "/s/X6HfeBRQz6xqk9S4dTV7gQ"
+route_refresh_wait = "10s"
 
 [cache]
 dir = "data/cache"
 write_indent = 2
+file_mode = "0600"
+max_stale = "7d"
 
 [logging.console]
 enabled = true
@@ -71,11 +75,17 @@ compression = "gz"
 timeout = "30s"
 user_agent = "mihomo-proxy-manager/0.1"
 max_response_size = "10 MB"
+max_redirects = 3
 
 [scheduler]
 startup_refresh = true
 startup_refresh_mode = "background" # background | blocking
 jitter = "30s"
+refresh_lock_timeout = "35s"
+
+[security]
+hidden_path_min_entropy_bits = 128
+allow_private_network_urls = false
 
 [parser]
 default_format = "auto"
@@ -97,6 +107,7 @@ parse_error = "skip" # skip | fail
 [sources.airport_a.fetch]
 timeout = "30s"
 user_agent = "custom-UA"
+allow_private_network = false
 
 [sources.airport_a.fetch.headers]
 Authorization = "Bearer xxx"
@@ -122,12 +133,14 @@ type = "http_action"
 method = "POST"
 url = "https://example.com/switch"
 success_status = [200, 204]
+allow_private_network = false
+timeout = "10s"
 
 [plugins.turn_on.headers]
 Authorization = "Bearer xxx"
 
 [routes.phone]
-path = "/p/7rKx9mQe.yaml"
+path = "/p/CsYWr0BGzGQQmwq2X5eG5Q.yaml"
 sources = ["airport_a"]
 require_all_sources = false
 
@@ -152,14 +165,19 @@ Validate at least:
 - Unique route paths.
 - Route paths start with `/`.
 - `health_path`, optional `status_path`, and route paths do not collide.
+- Hidden route paths satisfy the configured minimum entropy. The recommended shape is `/p/<128-bit-or-stronger-base64url-token>.yaml`.
+- If `status_path` is omitted, the status endpoint is disabled. If it is configured, it must satisfy the same entropy rule as provider route paths.
 - All route source references exist.
 - All source plugin references exist.
 - Regex fields compile.
 - Cron expressions are valid.
 - `startup_refresh_mode`, `parse_error`, plugin `on_failure`, output `format`, and plugin `type` are supported.
 - Required source fields such as `url` exist.
+- Source and plugin URLs use supported schemes, defaulting to `http` and `https` only.
+- Source and plugin URLs do not target private, loopback, link-local, multicast, or otherwise reserved networks unless that specific source or plugin sets `allow_private_network = true`.
 - Logging file path parent can be created or is writable.
 - Cache directory can be created or is writable.
+- Config and cache files should be readable only by the service account. `mpm check` should warn when the config file is group/world-readable.
 
 TOML parse failure is a structural error and can stop immediately. Other validation failures should be listed together.
 
@@ -173,7 +191,7 @@ mpm check -c config.toml
 mpm refresh -c config.toml airport_a
 ```
 
-`serve` starts the Starlette app and scheduler. `check` validates config without network access. `refresh` manually refreshes one source using the normal refresh pipeline, including plugins, conditional requests, parsing, transform, and JSON cache writes.
+`serve` starts the Starlette app and scheduler. `check` validates config without network access. `refresh` validates config first, then manually refreshes one source using the normal refresh pipeline, including plugins, conditional requests, parsing, transform, and JSON cache writes. `refresh` should print a concise success or failure summary, including source name, node count, warning count, cache path, and last error when applicable.
 
 ## Data Flow
 
@@ -181,26 +199,28 @@ Source refresh:
 
 1. Acquire the per-source async refresh lock.
 2. Execute `before_fetch` plugins in configured order.
-3. Download upstream subscription with source-specific fetch config over global defaults.
+3. Download upstream subscription with source-specific fetch config over global defaults. Redirects are limited by `max_redirects`, and every redirect target must pass the same URL safety checks as the original URL.
 4. Send `If-None-Match` and `If-Modified-Since` when cached `etag` or `last_modified` exists.
 5. On `304 Not Modified`, update attempt/success metadata and keep cached proxies.
 6. Parse YAML or share-link subscription into normalized Mihomo proxy dictionaries.
-7. Apply source-level filter and rename.
+7. Apply source-level filter, then source-level rename.
 8. Persist source JSON cache with a temporary file plus atomic replace.
 9. Update in-memory source cache and status.
 
 Route request:
 
 1. Match the exact hidden route path.
-2. Load route source caches from memory, falling back to source JSON files.
+2. Load route source caches through the cache interface. The MVP implementation is an in-memory read-through cache backed by source JSON files.
 3. If a required cache is missing, trigger refresh.
-4. If `require_all_sources = true`, wait for missing source refreshes and return `503` if any remain unavailable.
-5. If `require_all_sources = false`, return available source nodes. If no nodes are available, wait for missing source refreshes once before returning `503`.
-6. Apply route-level filter and rename.
+4. If `require_all_sources = true`, wait up to `server.route_refresh_wait` for missing source refreshes and return `503` if any remain unavailable.
+5. If `require_all_sources = false`, return available source nodes. If no nodes are available, wait up to `server.route_refresh_wait` for missing source refreshes once before returning `503`.
+6. Apply route-level filter, then route-level rename.
 7. Resolve duplicate final node names by appending ` #2`, ` #3`, and so on.
 8. Render provider payload YAML.
 
-If a source has stale but valid cache and a refresh is due, route requests should return the stale cache and trigger refresh asynchronously.
+If a source has stale but still-valid cache and a refresh is due, route requests should return the stale cache and trigger refresh asynchronously. A cache is still-valid only while `now - last_success_at <= cache.max_stale`. After `max_stale`, the source is treated as unavailable unless a refresh succeeds.
+
+Route freshness checks must use cache metadata and configuration directly, not scheduler-only in-memory state. This keeps restart behavior predictable when JSON cache files exist but scheduler state has not yet been rebuilt.
 
 ## Scheduler
 
@@ -208,8 +228,10 @@ Each source can define both fixed-interval and cron refresh triggers.
 
 - `interval` supports human duration strings such as `1h`.
 - `cron` uses the configured server timezone.
-- `jitter` avoids refreshing all sources at the same instant.
+- `interval` and `cron` are additive triggers. If both fire close together, the source refresh lock deduplicates the work.
+- `jitter` is a random uniform delay between `0` and the configured duration before scheduler-triggered refreshes. It avoids refreshing all sources at the same instant.
 - Each source has one async lock, so overlapping refresh triggers share or wait on the same in-flight refresh.
+- Lock waiters use `scheduler.refresh_lock_timeout`. When the timeout expires, callers use stale cache if it is still-valid or report unavailability.
 
 Startup behavior is configurable:
 
@@ -218,6 +240,8 @@ Startup behavior is configurable:
 - `startup_refresh = false`: rely on interval, cron, manual refresh, and route-triggered refresh.
 
 Default startup behavior is background refresh.
+
+The server lifespan should cancel scheduler tasks on shutdown, close the shared `httpx.AsyncClient`, and avoid interrupting cache writes in the middle of an atomic replace. Long-running refresh tasks may be cancelled after the normal shutdown grace period; partial temp files should be cleaned up on the next cache operation.
 
 ## Cache
 
@@ -248,10 +272,17 @@ Example cache file:
 ```
 
 Cache writes must avoid corrupted partial files by writing to a temporary file and atomically replacing the old cache file.
+Cache files should be created with `cache.file_mode`, defaulting to owner-read/write only. Cache operations should use a per-source file lock so `mpm refresh` and a running server cannot write the same cache file concurrently from different processes.
+
+The cache interface is the canonical read and write API. The MVP may implement it as an in-memory read-through cache backed by JSON files, but callers should not reach directly into memory dictionaries or the filesystem. Future Redis-backed cache implementations should satisfy the same interface.
+
+Cache schema changes should increment `schema_version`. Unknown future schema versions are invalid. Older supported versions can be migrated during load or rejected with a clear validation/runtime error.
 
 ## Plugins
 
 Plugins are globally defined and referenced from pipeline hook points. The MVP supports `before_fetch`; later versions can add hook points such as `after_fetch`, `before_render`, or `after_refresh_failed`.
+
+Multiple plugins for the same hook run sequentially in TOML order. MVP plugin references can override only reference-level execution policy such as `on_failure`; they cannot override plugin implementation fields such as URL, method, headers, or body. If two sources need different HTTP action parameters, define two plugins.
 
 The MVP includes one plugin type: `http_action`.
 
@@ -263,6 +294,9 @@ The MVP includes one plugin type: `http_action`.
 - optional request body
 - `success_status`
 - timeout, defaulting to global HTTP timeout unless overridden
+- `allow_private_network`, defaulting to the global security setting
+
+`http_action` uses the same URL safety checks, redirect limits, response size limits, and timeout behavior as source downloads.
 
 Each plugin reference can configure failure handling:
 
@@ -281,12 +315,16 @@ MVP input formats:
 
 For YAML input, preserve proxy dictionaries and validate at least `name` and `type`.
 
-For share links, convert to Mihomo proxy dictionaries. If a field cannot be mapped reliably, record a warning. `format = "auto"` detection order:
+For YAML input, also run per-type required-field validation for supported proxy types. For example, `ss` requires `server`, `port`, `cipher`, and `password`; `vmess` requires `server`, `port`, `uuid`, and `cipher`; `trojan` requires `server`, `port`, and `password`. Missing required fields follow the source `parse_error` policy.
+
+For share links, convert to Mihomo proxy dictionaries. Field mapping is part of the parser contract and must be covered by tests for each supported scheme. If a field cannot be mapped reliably, record a warning and preserve a usable proxy only when required fields are still present. `format = "auto"` detection order:
 
 1. Parse as YAML and use `proxies` when present.
 2. Parse as plain text share links.
 3. Base64 decode and parse as share links.
 4. Treat as parse failure.
+
+Explicit source formats should be supported for `auto`, `yaml`, and `share-links`. `auto` is the default.
 
 Parse failure behavior is source-configurable:
 
@@ -306,6 +344,8 @@ Filtering:
 - `include_types`: case-insensitive exact match against proxy `type`.
 - `exclude_types`: case-insensitive exact match against proxy `type`.
 
+Name filters are regular expressions and therefore use regex metacharacter rules. Type filters intentionally use exact matches because proxy types are a small finite vocabulary.
+
 Renaming:
 
 - `prefix`
@@ -314,7 +354,7 @@ Renaming:
 
 Route-level transforms should retain each proxy's internal source name while aggregating, so `{source}` remains available for templates. Internal metadata must be removed before rendering YAML.
 
-The service does not deduplicate by server, port, credentials, or final name. It only ensures final node names are unique for valid Mihomo output. If final names collide after all transforms, append ` #2`, ` #3`, and so on.
+The service does not deduplicate by server, port, credentials, or final name. It only ensures final node names are unique for valid Mihomo output. If final names collide after all transforms, append ` #2`, ` #3`, and so on. Name repair must be iterative: if `name #2` already exists, try `name #3` until the final name is unique.
 
 ## Rendering
 
@@ -322,11 +362,19 @@ MVP renderer:
 
 ```yaml
 proxies:
-  - name: ...
-    type: ...
+  - name: "[airport_a] HK 01"
+    type: vmess
+    server: example.com
+    port: 443
+    uuid: 00000000-0000-0000-0000-000000000000
+    alterId: 0
+    cipher: auto
+    tls: true
 ```
 
 `format = "provider"` is the only MVP route output format. The renderer registry should allow later formats such as full Clash/Mihomo config.
+
+The provider renderer must preserve all proxy fields needed by Mihomo, not only `name` and `type`. It must remove internal metadata before output and use safe YAML serialization so names and string values containing characters such as `:`, `#`, `[`, `]`, `&`, `*`, or Unicode text remain valid YAML. YAML tags from untrusted input must not be emitted.
 
 `include_meta_comments = false` by default. When enabled, comments can include generation time, route name, source count, and node count. Comments must not include hidden route paths, upstream URLs, headers, tokens, or plugin secrets.
 
@@ -340,7 +388,7 @@ Fixed and optional operational paths:
 Provider routes:
 
 - Exact hidden paths configured under `[routes.*]`.
-- Hidden path is the only MVP access control.
+- Hidden path is the only MVP access control by design decision. Treat the path as a bearer secret: it must be high entropy, should be served only over TLS in production, should not be logged, and should be rotated by changing the TOML and restarting if leaked.
 - Unknown path returns `404`.
 - Route unavailable returns `503`.
 - The service must not return `200` with `proxies: []` for unavailable routes, because that can cause clients to clear usable nodes.
@@ -354,7 +402,7 @@ Use `loguru` with independent console and file sinks.
 - Console sink defaults to colored `INFO`.
 - File sink defaults to `DEBUG`.
 - File sink supports rotation, retention, and compression.
-- Logs should redact sensitive headers, tokens, upstream subscription URLs when needed, and plugin secret values.
+- Logs must redact sensitive headers, tokens, upstream subscription URLs with credentials or secret query parameters, hidden route paths, and plugin secret values.
 
 ## Error Handling
 
@@ -364,6 +412,8 @@ Use `loguru` with independent console and file sinks.
 - HTTP `304` updates metadata without parsing.
 - Parse errors follow source-level `parse_error`.
 - Source refresh failures do not delete old cache.
+- Cache write failures are refresh failures; old disk and memory cache remain in use if still-valid.
+- Caches older than `cache.max_stale` are unavailable even if they can be read.
 - A source refresh with zero usable nodes is treated as failure.
 - Duplicate final names are repaired, not dropped.
 - Missing route path returns `404`.
@@ -395,6 +445,23 @@ Dependencies should flow from orchestration layers into focused services:
 - `render` reads cache and applies route-level transform.
 - `cache` hides persistence details behind an interface.
 
+Core interfaces should be small and explicit:
+
+```python
+class SourceCacheStore:
+    async def get(self, source_name: str) -> SourceCache | None: ...
+    async def set(self, source_name: str, cache: SourceCache) -> None: ...
+    async def status(self, source_name: str) -> SourceStatus: ...
+
+class Plugin:
+    async def run(self, context: PluginContext) -> PluginResult: ...
+
+class Renderer:
+    async def render(self, route: RouteConfig, proxies: list[ProxyRecord]) -> bytes: ...
+```
+
+`ProxyRecord` may contain internal metadata such as source name while inside the service. Renderers must strip that metadata from the public YAML.
+
 ## Testing
 
 Use `pytest`.
@@ -409,7 +476,11 @@ Unit tests:
 - YAML provider parsing.
 - YAML full-config parsing.
 - Share-link parsing for `ss`, `vmess`, `vless`, `trojan`, and `hysteria2`.
+- Per-type required-field validation.
+- URL safety checks for private, loopback, link-local, multicast, and reserved networks.
 - JSON cache atomic writes and reads.
+- Cache file permissions.
+- Cache schema version handling.
 
 HTTP integration tests:
 
@@ -419,6 +490,9 @@ HTTP integration tests:
 - Unknown path returns `404`.
 - No available nodes returns `503`.
 - `require_all_sources` behavior.
+- Stale-while-revalidate behavior.
+- Server restart loading source JSON cache through the cache interface.
+- Rendered YAML can be parsed back as valid provider payload and contains all required proxy fields.
 
 Async refresh tests:
 
@@ -430,6 +504,10 @@ Async refresh tests:
 - Parse error `skip` and `fail`.
 - Concurrent refreshes for the same source share one in-flight refresh.
 - Route request triggers refresh when cache is missing.
+- Route-triggered refresh respects `server.route_refresh_wait`.
+- Refresh lock waiters respect `scheduler.refresh_lock_timeout`.
+- Concurrent `mpm refresh` and server refresh cannot corrupt source JSON cache.
+- Redirect targets are revalidated for URL safety.
 
 ## Open Extension Points
 

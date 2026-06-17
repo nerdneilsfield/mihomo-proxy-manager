@@ -1,3 +1,8 @@
+"""URL 安全检查（SSRF 防护）、路径熵验证和敏感信息脱敏。
+
+URL safety checks (SSRF prevention), path entropy validation, and secret redaction.
+"""
+
 from __future__ import annotations
 
 import ipaddress
@@ -7,6 +12,10 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 
 class SecurityError(ValueError):
+    """安全相关错误，用于 URL 检查失败等情况。
+
+    Security-related error for URL check failures and similar cases.
+    """
     pass
 
 
@@ -35,6 +44,16 @@ _PRIVATE_HOSTNAME_SUFFIXES = (".local", ".localdomain", ".internal", ".localhost
 
 
 def _is_public_ip(ip: _IpAddress) -> bool:
+    """检查 IP 地址是否为公网地址。
+
+    Check whether an IP address is a public address.
+
+    Args:
+        ip: IP 地址 / IP address.
+
+    Returns:
+        如果是公网地址返回 True / True if the address is public.
+    """
     return not (
         ip.is_private
         or ip.is_loopback
@@ -46,6 +65,16 @@ def _is_public_ip(ip: _IpAddress) -> bool:
 
 
 def _resolve_host(host: str) -> list[_IpAddress]:
+    """解析主机名为 IP 地址列表。
+
+    Resolve a hostname to a list of IP addresses.
+
+    Args:
+        host: 主机名或 IP 字符串 / Hostname or IP string.
+
+    Returns:
+        IP 地址列表 / List of IP addresses.
+    """
     try:
         return [ipaddress.ip_address(host)]
     except ValueError:
@@ -55,6 +84,16 @@ def _resolve_host(host: str) -> list[_IpAddress]:
 
 
 def _is_blocked_hostname(hostname: str) -> bool:
+    """检查主机名是否在阻止列表中。
+
+    Check if a hostname is in the blocked list.
+
+    Args:
+        hostname: 主机名 / Hostname.
+
+    Returns:
+        如果被阻止返回 True / True if blocked.
+    """
     lowered = hostname.lower().rstrip(".")
     if lowered in _PRIVATE_HOSTNAMES:
         return True
@@ -67,6 +106,17 @@ def _parse_ip_literal(host: str) -> _IpAddress | None:
     Handles trailing dots, decimal/hex/octal integers, dotted forms with fewer
     than four octets, and IPv6 addresses written as 32 hex digits. Returns the
     parsed address or ``None`` if the value does not look like an IP literal.
+
+    尽力解析规范和非规范的 IP 字面量。
+    处理尾部点号、十进制/十六进制/八进制整数、少于四个八位组的点分形式、
+    以及以 32 位十六进制数字编写的 IPv6 地址。返回解析后的地址，
+    如果值看起来不像 IP 字面量则返回 ``None``。
+
+    Args:
+        host: 主机名字符串 / Hostname string.
+
+    Returns:
+        解析后的 IP 地址，或 None / Parsed IP address, or None.
     """
     host = host.rstrip(".")
 
@@ -143,6 +193,18 @@ _BASE64URL_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 def assert_safe_url(url: str, *, allow_private_network: bool, resolve_dns: bool = True) -> None:
+    """验证 URL 是否安全，防止 SSRF 攻击。
+
+    Assert that a URL is safe, preventing SSRF attacks.
+
+    Args:
+        url: 待验证的 URL / URL to validate.
+        allow_private_network: 是否允许私有网络地址 / Whether to allow private network addresses.
+        resolve_dns: 是否执行 DNS 解析（默认 True） / Whether to perform DNS resolution (default True).
+
+    Raises:
+        SecurityError: 如果 URL 不安全 / If the URL is not safe.
+    """
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"}:
         raise SecurityError(f"unsupported URL scheme: {parsed.scheme}")
@@ -172,6 +234,17 @@ def assert_safe_url(url: str, *, allow_private_network: bool, resolve_dns: bool 
 
 
 def has_path_entropy(path: str, *, min_bits: int) -> bool:
+    """检查路径的最后一段是否具有足够的熵值。
+
+    Check whether the last segment of a path has sufficient entropy.
+
+    Args:
+        path: URL 路径 / URL path.
+        min_bits: 最小熵位数 / Minimum entropy bits.
+
+    Returns:
+        如果熵值足够返回 True / True if entropy is sufficient.
+    """
     token = path.rsplit("/", 1)[-1].split(".", 1)[0]
     if not token or not _BASE64URL_TOKEN_RE.fullmatch(token):
         return False
@@ -179,6 +252,16 @@ def has_path_entropy(path: str, *, min_bits: int) -> bool:
 
 
 def redact_url(url: str) -> str:
+    """脱敏 URL 中的敏感查询参数。
+
+    Redact sensitive query parameters in a URL.
+
+    Args:
+        url: 原始 URL / Original URL.
+
+    Returns:
+        脱敏后的 URL / Redacted URL.
+    """
     parsed = urlparse(url)
     query = []
     for key, value in parse_qsl(parsed.query, keep_blank_values=True):
@@ -187,6 +270,17 @@ def redact_url(url: str) -> str:
 
 
 def redact_secret(text: str, *, extra_secrets: list[str] | None = None) -> str:
+    """脱敏文本中的敏感信息，包括 Authorization、Bearer token 和自定义密钥。
+
+    Redact sensitive information in text, including Authorization, Bearer tokens, and custom secrets.
+
+    Args:
+        text: 原始文本 / Original text.
+        extra_secrets: 额外的敏感字符串列表 / Additional sensitive strings to redact.
+
+    Returns:
+        脱敏后的文本 / Redacted text.
+    """
     redacted = _AUTHORIZATION_RE.sub(r"\1***", text)
     redacted = _BEARER_RE.sub(r"Bearer ***", redacted)
     redacted = re.sub(

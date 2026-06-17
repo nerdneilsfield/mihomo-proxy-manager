@@ -1,3 +1,8 @@
+"""覆盖边界场景的集成测试，包括插件、并发和 304 处理。
+
+Integration tests covering edge cases including plugins, concurrency, and 304 handling.
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -42,6 +47,16 @@ from mihomo_proxy_manager.refresher import SourceRefresher
 
 
 def _proxy_yaml(name: str = "HK") -> bytes:
+    """生成一个简单的代理 YAML 内容。
+
+    Generate a simple proxy YAML content.
+
+    Args:
+        name: 代理名称 / Proxy name.
+
+    Returns:
+        bytes: YAML 格式的代理内容 / Proxy content in YAML format.
+    """
     return f"""\
 proxies:
   - name: {name}
@@ -54,6 +69,11 @@ proxies:
 
 
 class StaticFetcher:
+    """返回固定内容的模拟抓取器。
+
+    A mock fetcher that returns static content.
+    """
+
     def __init__(
         self,
         body: bytes,
@@ -62,6 +82,16 @@ class StaticFetcher:
         last_modified: str | None = "Wed, 17 Jun 2026 04:00:00 GMT",
         not_modified: bool = False,
     ) -> None:
+        """初始化 StaticFetcher。
+
+        Initialize StaticFetcher.
+
+        Args:
+            body: 响应体 / Response body.
+            etag: ETag 头 / ETag header.
+            last_modified: Last-Modified 头 / Last-Modified header.
+            not_modified: 是否返回 304 / Whether to return 304.
+        """
         self.body = body
         self.etag = etag
         self.last_modified = last_modified
@@ -69,17 +99,55 @@ class StaticFetcher:
         self.calls = 0
 
     async def fetch(self, *args: object, **kwargs: object) -> FetchResult:
+        """模拟抓取并返回预设结果。
+
+        Mock fetch and return preset result.
+
+        Args:
+            *args: 位置参数 / Positional args.
+            **kwargs: 关键字参数 / Keyword args.
+
+        Returns:
+            FetchResult: 预设的抓取结果 / Preset fetch result.
+        """
         self.calls += 1
         return FetchResult(self.body, self.etag, self.last_modified, self.not_modified)
 
 
 class FailingAfterFirstFetcher:
+    """第一次成功、后续失败的模拟抓取器。
+
+    A mock fetcher that succeeds once then fails.
+    """
+
     def __init__(self, ok_body: bytes, fail_mode: str) -> None:
+        """初始化 FailingAfterFirstFetcher。
+
+        Initialize FailingAfterFirstFetcher.
+
+        Args:
+            ok_body: 成功时的响应体 / Response body on success.
+            fail_mode: 失败模式（raise 或 empty）/ Failure mode (raise or empty).
+        """
         self.ok_body = ok_body
         self.fail_mode = fail_mode
         self.calls = 0
 
     async def fetch(self, *args: object, **kwargs: object) -> FetchResult:
+        """模拟抓取，第一次成功，后续失败。
+
+        Mock fetch, first call succeeds, subsequent calls fail.
+
+        Args:
+            *args: 位置参数 / Positional args.
+            **kwargs: 关键字参数 / Keyword args.
+
+        Returns:
+            FetchResult: 抓取结果 / Fetch result.
+
+        Raises:
+            RuntimeError: 当 fail_mode 为 raise 时 / When fail_mode is "raise".
+        """
         self.calls += 1
         if self.calls == 1:
             return FetchResult(self.ok_body, '"etag"', "Wed, 17 Jun 2026 04:00:00 GMT")
@@ -89,23 +157,67 @@ class FailingAfterFirstFetcher:
 
 
 class SlowFetcher:
+    """模拟慢速抓取的抓取器。
+
+    A mock fetcher that simulates slow fetches.
+    """
+
     def __init__(self, sleep: float, body: bytes | None = None) -> None:
+        """初始化 SlowFetcher。
+
+        Initialize SlowFetcher.
+
+        Args:
+            sleep: 休眠秒数 / Sleep duration in seconds.
+            body: 响应体 / Response body.
+        """
         self.sleep = sleep
         self.body = body if body is not None else _proxy_yaml()
         self.calls = 0
 
     async def fetch(self, *args: object, **kwargs: object) -> FetchResult:
+        """模拟慢速抓取。
+
+        Mock a slow fetch.
+
+        Args:
+            *args: 位置参数 / Positional args.
+            **kwargs: 关键字参数 / Keyword args.
+
+        Returns:
+            FetchResult: 抓取结果 / Fetch result.
+        """
         self.calls += 1
         await asyncio.sleep(self.sleep)
         return FetchResult(self.body, None, None)
 
 
 class CountingFetcher:
+    """统计调用次数的模拟抓取器。
+
+    A mock fetcher that counts calls.
+    """
+
     def __init__(self) -> None:
+        """初始化 CountingFetcher。
+
+        Initialize CountingFetcher.
+        """
         self.lock = asyncio.Lock()
         self.calls = 0
 
     async def fetch(self, *args: object, **kwargs: object) -> FetchResult:
+        """模拟抓取并统计调用次数。
+
+        Mock fetch and count calls.
+
+        Args:
+            *args: 位置参数 / Positional args.
+            **kwargs: 关键字参数 / Keyword args.
+
+        Returns:
+            FetchResult: 包含节点编号的抓取结果 / Fetch result with node number.
+        """
         async with self.lock:
             self.calls += 1
             call = self.calls
@@ -114,11 +226,34 @@ class CountingFetcher:
 
 
 class RaisingFetcher:
+    """模拟抛出异常的抓取器。
+
+    A mock fetcher that raises an exception.
+    """
+
     async def fetch(self, *args: object, **kwargs: object) -> FetchResult:
+        """模拟抓取并抛出异常。
+
+        Mock fetch and raise an exception.
+
+        Args:
+            *args: 位置参数 / Positional args.
+            **kwargs: 关键字参数 / Keyword args.
+
+        Raises:
+            RuntimeError: 总是抛出 / Always raised.
+        """
         raise RuntimeError("boom")
 
 
 def _http_config() -> HttpConfig:
+    """创建默认 HTTP 配置。
+
+    Create a default HTTP config.
+
+    Returns:
+        HttpConfig: HTTP 配置对象 / HTTP config object.
+    """
     return HttpConfig(
         timeout=timedelta(seconds=30),
         user_agent="ua",
@@ -133,6 +268,18 @@ def _source(
     plugins: SourcePluginConfig | None = None,
     interval: timedelta | None = None,
 ) -> SourceConfig:
+    """创建源配置。
+
+    Create a source config.
+
+    Args:
+        name: 源名称 / Source name.
+        plugins: 插件配置 / Plugin config.
+        interval: 刷新间隔 / Refresh interval.
+
+    Returns:
+        SourceConfig: 源配置对象 / Source config object.
+    """
     return SourceConfig(
         name=name,
         url="https://example.com/sub",
@@ -147,6 +294,16 @@ def _source(
 
 
 def _plugin_config(status: tuple[int, ...] = (200, 204)) -> PluginConfig:
+    """创建插件配置。
+
+    Create a plugin config.
+
+    Args:
+        status: 成功状态码元组 / Tuple of success status codes.
+
+    Returns:
+        PluginConfig: 插件配置对象 / Plugin config object.
+    """
     return PluginConfig(
         name="auth",
         type="http_action",
@@ -161,6 +318,16 @@ def _plugin_config(status: tuple[int, ...] = (200, 204)) -> PluginConfig:
 
 
 def _http_plugin_status(status: int) -> HttpActionPlugin:
+    """创建返回指定状态码的 HTTP 插件。
+
+    Create an HTTP plugin that returns a given status code.
+
+    Args:
+        status: HTTP 状态码 / HTTP status code.
+
+    Returns:
+        HttpActionPlugin: HTTP 动作插件实例 / HTTP action plugin instance.
+    """
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(status)
 
@@ -174,6 +341,19 @@ def _route(
     sources: tuple[str, ...],
     require_all_sources: bool = False,
 ) -> RouteConfig:
+    """创建路由配置。
+
+    Create a route config.
+
+    Args:
+        name: 路由名称 / Route name.
+        path: 路由路径 / Route path.
+        sources: 源名称元组 / Tuple of source names.
+        require_all_sources: 是否需要所有源 / Whether all sources are required.
+
+    Returns:
+        RouteConfig: 路由配置对象 / Route config object.
+    """
     return RouteConfig(
         name=name,
         path=path,
@@ -194,6 +374,21 @@ def _app_config(
     status_path: str | None = "/s/X6HfeBRQz6xqk9S4dTV7gQwL2nP8aYcM",
     route_refresh_wait: timedelta = timedelta(seconds=1),
 ) -> AppConfig:
+    """创建应用配置。
+
+    Create an app config.
+
+    Args:
+        tmp_path: 临时目录路径 / Temporary directory path.
+        sources: 源配置字典 / Source config dict.
+        routes: 路由配置字典 / Route config dict.
+        plugins: 插件配置字典 / Plugin config dict.
+        status_path: 状态路径 / Status path.
+        route_refresh_wait: 路由刷新等待时间 / Route refresh wait duration.
+
+    Returns:
+        AppConfig: 应用配置对象 / App config object.
+    """
     return AppConfig(
         server=ServerConfig(
             host="127.0.0.1",
@@ -236,6 +431,10 @@ def _app_config(
 
 @pytest.mark.asyncio
 async def test_before_fetch_plugin_success_then_refresh_succeeds(tmp_path: Path) -> None:
+    """测试 before_fetch 插件成功后刷新成功。
+
+    Test that a successful before_fetch plugin leads to a successful refresh.
+    """
     source = _source("src", plugins=SourcePluginConfig(before_fetch={"auth": PluginRefConfig("abort")}))
     store = JsonSourceCacheStore(
         CacheConfig(tmp_path, 2, 0o600, max_stale=timedelta(days=7))
@@ -260,6 +459,10 @@ async def test_before_fetch_plugin_success_then_refresh_succeeds(tmp_path: Path)
 
 @pytest.mark.asyncio
 async def test_before_fetch_plugin_abort_preserves_cache_and_records_error(tmp_path: Path) -> None:
+    """测试 before_fetch 插件中止时保留旧缓存并记录错误。
+
+    Test that a before_fetch plugin abort preserves old cache and records error.
+    """
     old = SourceCache(
         source="src",
         schema_version=1,
@@ -299,6 +502,10 @@ async def test_before_fetch_plugin_abort_preserves_cache_and_records_error(tmp_p
 
 @pytest.mark.asyncio
 async def test_before_fetch_plugin_continue_ignores_failure_and_refreshes(tmp_path: Path) -> None:
+    """测试 before_fetch 插件 continue 模式忽略失败并继续刷新。
+
+    Test that before_fetch plugin continue mode ignores failure and proceeds.
+    """
     source = _source("src", plugins=SourcePluginConfig(before_fetch={"auth": PluginRefConfig("continue")}))
     store = JsonSourceCacheStore(
         CacheConfig(tmp_path, 2, 0o600, max_stale=timedelta(days=7))
@@ -322,6 +529,10 @@ async def test_before_fetch_plugin_continue_ignores_failure_and_refreshes(tmp_pa
 
 @pytest.mark.asyncio
 async def test_require_all_sources_503_when_any_source_missing(tmp_path: Path) -> None:
+    """测试 require_all_sources 在缺少源时返回 503。
+
+    Test that require_all_sources returns 503 when any source is missing.
+    """
     config = _app_config(
         tmp_path,
         sources={"a": _source("a"), "b": _source("b")},
@@ -380,6 +591,10 @@ async def test_require_all_sources_503_when_any_source_missing(tmp_path: Path) -
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fail_mode", ["raise", "empty"])
 async def test_refresher_preserves_old_cache_on_download_or_parse_failure(tmp_path: Path, fail_mode: str) -> None:
+    """测试刷新器在下载或解析失败时保留旧缓存。
+
+    Test that the refresher preserves old cache on download or parse failure.
+    """
     store = JsonSourceCacheStore(
         CacheConfig(tmp_path, 2, 0o600, max_stale=timedelta(days=7))
     )
@@ -408,6 +623,10 @@ async def test_refresher_preserves_old_cache_on_download_or_parse_failure(tmp_pa
 
 @pytest.mark.asyncio
 async def test_refresher_rewrites_cache_timestamps_on_304_not_modified(tmp_path: Path) -> None:
+    """测试刷新器在 304 未修改时更新缓存时间戳。
+
+    Test that the refresher rewrites cache timestamps on 304 Not Modified.
+    """
     store = JsonSourceCacheStore(
         CacheConfig(tmp_path, 2, 0o600, max_stale=timedelta(days=7))
     )
@@ -453,6 +672,10 @@ async def test_refresher_rewrites_cache_timestamps_on_304_not_modified(tmp_path:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("require_all_sources", [True, False])
 async def test_route_refresh_wait_timeout_is_respected(tmp_path: Path, require_all_sources: bool) -> None:
+    """测试路由刷新等待超时被遵守。
+
+    Test that the route refresh wait timeout is respected.
+    """
     config = _app_config(
         tmp_path,
         sources={"src": _source("src")},
@@ -482,6 +705,10 @@ async def test_route_refresh_wait_timeout_is_respected(tmp_path: Path, require_a
 
 @pytest.mark.asyncio
 async def test_concurrent_refresher_instances_do_not_corrupt_cache(tmp_path: Path) -> None:
+    """测试并发刷新器实例不会损坏缓存。
+
+    Test that concurrent refresher instances do not corrupt the cache.
+    """
     cache_config = CacheConfig(tmp_path, 2, 0o600, max_stale=timedelta(days=7))
     store = JsonSourceCacheStore(cache_config)
     fetcher = CountingFetcher()
@@ -519,6 +746,10 @@ async def test_concurrent_refresher_instances_do_not_corrupt_cache(tmp_path: Pat
 
 @pytest.mark.asyncio
 async def test_inflight_dedup_shares_single_fetch(tmp_path: Path) -> None:
+    """测试进行中的去重共享单个抓取请求。
+
+    Test that in-flight deduplication shares a single fetch.
+    """
     store = JsonSourceCacheStore(
         CacheConfig(tmp_path, 2, 0o600, max_stale=timedelta(days=7))
     )
@@ -543,6 +774,10 @@ async def test_inflight_dedup_shares_single_fetch(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_disabled_status_path_returns_404(tmp_path: Path) -> None:
+    """测试禁用的状态路径返回 404。
+
+    Test that a disabled status path returns 404.
+    """
     config = _app_config(
         tmp_path,
         sources={"src": _source("src")},
@@ -560,6 +795,10 @@ async def test_disabled_status_path_returns_404(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_app_with_real_refresher_serves_fresh_yaml(tmp_path: Path) -> None:
+    """测试应用使用真实刷新器提供新鲜的 YAML。
+
+    Test that the app with a real refresher serves fresh YAML.
+    """
     config = _app_config(
         tmp_path,
         sources={"src": _source("src")},
@@ -585,6 +824,10 @@ async def test_app_with_real_refresher_serves_fresh_yaml(tmp_path: Path) -> None
 
 @pytest.mark.asyncio
 async def test_app_real_refresher_plugin_abort_returns_503(tmp_path: Path) -> None:
+    """测试应用在插件中止时返回 503。
+
+    Test that the app returns 503 when a plugin aborts.
+    """
     source = _source("src", plugins=SourcePluginConfig(before_fetch={"auth": PluginRefConfig("abort")}))
     config = _app_config(
         tmp_path,
@@ -611,6 +854,10 @@ async def test_app_real_refresher_plugin_abort_returns_503(tmp_path: Path) -> No
 
 @pytest.mark.asyncio
 async def test_app_real_refresher_serves_stale_cache_when_background_refresh_fails(tmp_path: Path) -> None:
+    """测试应用在后台刷新失败时提供旧缓存。
+
+    Test that the app serves stale cache when background refresh fails.
+    """
     source = _source("src", interval=timedelta(minutes=1))
     config = _app_config(
         tmp_path,
@@ -657,6 +904,10 @@ async def test_app_real_refresher_serves_stale_cache_when_background_refresh_fai
 
 @pytest.mark.asyncio
 async def test_app_real_refresher_rewrites_cache_on_304_and_serves_stale(tmp_path: Path) -> None:
+    """测试应用在 304 时重写缓存并提供旧内容。
+
+    Test that the app rewrites cache on 304 and serves stale content.
+    """
     old_time = datetime.now(UTC) - timedelta(minutes=5)
     source = _source("src", interval=timedelta(minutes=1))
     config = _app_config(

@@ -1,3 +1,8 @@
+"""Share-link 解析器，支持 vmess://、ss://、vless://、trojan://、hysteria2:// 格式。
+
+Share-link parser supporting vmess://, ss://, vless://, trojan://, and hysteria2:// formats.
+"""
+
 from __future__ import annotations
 
 import base64
@@ -10,6 +15,16 @@ from mihomo_proxy_manager.security import redact_secret
 
 
 def _b64decode(value: str) -> bytes:
+    """Base64 解码，同时支持 URL-safe 和标准 Base64 字母表。
+
+    Base64 decode supporting both URL-safe and standard Base64 alphabets.
+
+    Args:
+        value: Base64 编码的字符串 / Base64-encoded string.
+
+    Returns:
+        解码后的字节数据 / Decoded bytes.
+    """
     padding = "=" * (-len(value) % 4)
     padded = (value + padding).encode()
     try:
@@ -21,14 +36,43 @@ def _b64decode(value: str) -> bytes:
 
 
 def _name(fragment: str, fallback: str) -> str:
+    """从 URL fragment 中提取代理名称，如无则使用备用名称。
+
+    Extract proxy name from URL fragment, falling back to default.
+
+    Args:
+        fragment: URL fragment 部分 / URL fragment part.
+        fallback: 备用名称 / Fallback name.
+
+    Returns:
+        代理名称 / Proxy name.
+    """
     return unquote(fragment) if fragment else fallback
 
 
 def _query(parsed) -> dict[str, str]:
+    """解析 URL 查询参数为字典。
+
+    Parse URL query parameters into a dictionary.
+
+    Args:
+        parsed: 解析后的 URL 对象 / Parsed URL object.
+
+    Returns:
+        查询参数字典 / Query parameters dict.
+    """
     return {key: values[-1] for key, values in parse_qs(parsed.query).items()}
 
 
 def _add_ss_plugin(proxy: dict[str, object], plugin_value: str | None) -> None:
+    """向 Shadowsocks 代理字典添加插件配置。
+
+    Add plugin configuration to a Shadowsocks proxy dict.
+
+    Args:
+        proxy: 代理字典 / Proxy dict.
+        plugin_value: 插件配置字符串 / Plugin configuration string.
+    """
     if not plugin_value:
         return
     parts = [item for item in plugin_value.split(";") if item]
@@ -45,6 +89,14 @@ def _add_ss_plugin(proxy: dict[str, object], plugin_value: str | None) -> None:
 
 
 def _apply_transport_options(proxy: dict[str, object], query: dict[str, str]) -> None:
+    """应用传输层选项（network、tls、reality、ws、grpc 等）。
+
+    Apply transport options (network, tls, reality, ws, grpc, etc.).
+
+    Args:
+        proxy: 代理字典 / Proxy dict.
+        query: 查询参数字典 / Query parameters dict.
+    """
     network = query.get("type") or query.get("network")
     if network:
         proxy["network"] = network
@@ -89,6 +141,16 @@ def _apply_transport_options(proxy: dict[str, object], query: dict[str, str]) ->
 
 
 def _parse_vmess(link: str) -> dict[str, object]:
+    """解析 vmess:// 链接。
+
+    Parse a vmess:// link.
+
+    Args:
+        link: vmess:// 链接 / vmess:// link.
+
+    Returns:
+        代理字典 / Proxy dict.
+    """
     raw = link.removeprefix("vmess://")
     data = json.loads(_b64decode(raw))
     proxy = {
@@ -110,6 +172,16 @@ def _parse_vmess(link: str) -> dict[str, object]:
 
 
 def _parse_ss(link: str) -> dict[str, object]:
+    """解析 ss:// 链接。
+
+    Parse an ss:// link.
+
+    Args:
+        link: ss:// 链接 / ss:// link.
+
+    Returns:
+        代理字典 / Proxy dict.
+    """
     parsed = urlparse(link)
     query = _query(parsed)
     if parsed.hostname and parsed.username:
@@ -158,6 +230,16 @@ def _parse_ss(link: str) -> dict[str, object]:
 
 
 def _parse_url_link(link: str) -> dict[str, object]:
+    """解析通用 URL 格式的代理链接（ss/vless/trojan/hysteria2）。
+
+    Parse a generic URL-format proxy link (ss/vless/trojan/hysteria2).
+
+    Args:
+        link: 代理链接 / Proxy link.
+
+    Returns:
+        代理字典 / Proxy dict.
+    """
     if link.startswith("ss://"):
         return _parse_ss(link)
     parsed = urlparse(link)
@@ -185,6 +267,17 @@ def _parse_url_link(link: str) -> dict[str, object]:
 
 
 def parse_share_links_text(text: str, *, source: str) -> tuple[list[ProxyRecord], list[str]]:
+    """解析 share-link 文本，返回代理记录和警告列表。
+
+    Parse share-link text, returning proxy records and warnings.
+
+    Args:
+        text: share-link 文本内容 / Share-link text content.
+        source: 订阅源名称 / Source name.
+
+    Returns:
+        (代理记录列表, 警告列表) 元组 / Tuple of (proxy records list, warnings list).
+    """
     records: list[ProxyRecord] = []
     warnings: list[str] = []
     for line in (item.strip() for item in text.splitlines()):

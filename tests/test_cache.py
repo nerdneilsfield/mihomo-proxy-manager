@@ -1,3 +1,8 @@
+"""JSON 缓存存储的读写、权限和并发测试。
+
+JSON cache store read/write, permission, and concurrency tests.
+"""
+
 import asyncio
 import os
 import time
@@ -11,6 +16,17 @@ from mihomo_proxy_manager.models import CacheConfig, ProxyRecord, SourceCache
 
 @pytest.mark.asyncio
 async def test_cache_roundtrip_and_permissions(tmp_path) -> None:
+    """测试缓存的完整读写流程和文件权限。
+
+    Test cache roundtrip and file permissions.
+
+    Args:
+        tmp_path: pytest 提供的临时目录路径 / Temporary directory path provided by pytest.
+
+    Asserts:
+        - 读取的缓存对象与写入的一致 / The loaded cache equals the written cache.
+        - 文件权限为预期的 0o600 / File permission is 0o600.
+    """
     store = JsonSourceCacheStore(CacheConfig(tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7)))
     cache = SourceCache(
         source="airport_a",
@@ -35,6 +51,17 @@ async def test_cache_roundtrip_and_permissions(tmp_path) -> None:
 @pytest.mark.asyncio
 @pytest.mark.asyncio
 async def test_unknown_schema_version_is_treated_as_miss(tmp_path, caplog) -> None:
+    """测试未知 schema 版本被视为缓存未命中。
+
+    Test that an unknown schema version is treated as a cache miss.
+
+    Args:
+        tmp_path: pytest 提供的临时目录路径 / Temporary directory path provided by pytest.
+        caplog: pytest 的日志捕获 fixture / pytest log capture fixture.
+
+    Asserts:
+        get() 返回 None / get() returns None.
+    """
     path = tmp_path / "airport_a.json"
     path.write_text('{"schema_version": 99, "source": "airport_a"}', encoding="utf-8")
     store = JsonSourceCacheStore(CacheConfig(tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7)))
@@ -44,6 +71,16 @@ async def test_unknown_schema_version_is_treated_as_miss(tmp_path, caplog) -> No
 
 @pytest.mark.asyncio
 async def test_legacy_schema_version_zero_is_treated_as_miss(tmp_path) -> None:
+    """测试旧版 schema 版本 0 被视为缓存未命中。
+
+    Test that legacy schema version 0 is treated as a cache miss.
+
+    Args:
+        tmp_path: pytest 提供的临时目录路径 / Temporary directory path provided by pytest.
+
+    Asserts:
+        get() 返回 None / get() returns None.
+    """
     path = tmp_path / "airport_a.json"
     path.write_text(
         '{"schema_version": 0, "source": "airport_a", "proxies": []}',
@@ -56,6 +93,16 @@ async def test_legacy_schema_version_zero_is_treated_as_miss(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_cache_reloads_when_file_changes_from_another_process(tmp_path) -> None:
+    """测试当文件被另一个进程修改时缓存会重新加载。
+
+    Test that the cache reloads when the file changes from another process.
+
+    Args:
+        tmp_path: pytest 提供的临时目录路径 / Temporary directory path provided by pytest.
+
+    Asserts:
+        第二次读取返回新写入的数据 / The second read returns the newly written data.
+    """
     config = CacheConfig(tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7))
     server_store = JsonSourceCacheStore(config)
     cli_store = JsonSourceCacheStore(config)
@@ -82,6 +129,16 @@ async def test_cache_reloads_when_file_changes_from_another_process(tmp_path) ->
 
 @pytest.mark.asyncio
 async def test_malformed_cache_json_is_treated_as_miss(tmp_path) -> None:
+    """测试格式错误的 JSON 缓存被视为缓存未命中。
+
+    Test that malformed cache JSON is treated as a cache miss.
+
+    Args:
+        tmp_path: pytest 提供的临时目录路径 / Temporary directory path provided by pytest.
+
+    Asserts:
+        get() 返回 None / get() returns None.
+    """
     path = tmp_path / "airport_a.json"
     path.write_text("not json", encoding="utf-8")
     store = JsonSourceCacheStore(CacheConfig(tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7)))
@@ -91,6 +148,16 @@ async def test_malformed_cache_json_is_treated_as_miss(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_malformed_cache_missing_source_is_treated_as_miss(tmp_path) -> None:
+    """测试缺少 source 字段的缓存被视为缓存未命中。
+
+    Test that a cache missing the source field is treated as a cache miss.
+
+    Args:
+        tmp_path: pytest 提供的临时目录路径 / Temporary directory path provided by pytest.
+
+    Asserts:
+        get() 返回 None / get() returns None.
+    """
     path = tmp_path / "airport_a.json"
     path.write_text('{"schema_version": 1}', encoding="utf-8")
     store = JsonSourceCacheStore(CacheConfig(tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7)))
@@ -99,6 +166,17 @@ async def test_malformed_cache_missing_source_is_treated_as_miss(tmp_path) -> No
 
 
 async def test_cache_dir_is_created_lazily(tmp_path) -> None:
+    """测试缓存目录在首次写入时懒创建。
+
+    Test that the cache directory is created lazily on first write.
+
+    Args:
+        tmp_path: pytest 提供的临时目录路径 / Temporary directory path provided by pytest.
+
+    Asserts:
+        - 初始时目录不存在 / The directory does not exist initially.
+        - set() 后目录被创建 / The directory is created after set().
+    """
     config = CacheConfig(
         tmp_path / "lazy",
         2,
@@ -125,6 +203,16 @@ async def test_cache_dir_is_created_lazily(tmp_path) -> None:
 
 
 def test_read_or_miss_treats_race_condition_as_miss(tmp_path) -> None:
+    """测试 read_or_miss 将竞态条件视为缓存未命中。
+
+    Test that read_or_miss treats a race condition as a cache miss.
+
+    Args:
+        tmp_path: pytest 提供的临时目录路径 / Temporary directory path provided by pytest.
+
+    Asserts:
+        当文件在 stat 和 read 之间被删除时返回 (None, None) / Returns (None, None) when the file is deleted between stat and read.
+    """
     from unittest.mock import MagicMock
 
     config = CacheConfig(tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7))
@@ -138,6 +226,16 @@ def test_read_or_miss_treats_race_condition_as_miss(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_get_does_not_overwrite_newer_memory_with_older_disk(tmp_path) -> None:
+    """测试 get 不会用旧的磁盘数据覆盖新的内存数据。
+
+    Test that get does not overwrite newer in-memory data with older disk data.
+
+    Args:
+        tmp_path: pytest 提供的临时目录路径 / Temporary directory path provided by pytest.
+
+    Asserts:
+        内存中较新的数据被保留 / The newer in-memory data is preserved.
+    """
     import time
 
     config = CacheConfig(tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7))
@@ -179,6 +277,17 @@ async def test_get_does_not_overwrite_newer_memory_with_older_disk(tmp_path) -> 
 
 @pytest.mark.asyncio
 async def test_write_removes_stale_tmp_file(tmp_path) -> None:
+    """测试写入时清理过期的临时文件。
+
+    Test that writing removes stale temporary files.
+
+    Args:
+        tmp_path: pytest 提供的临时目录路径 / Temporary directory path provided by pytest.
+
+    Asserts:
+        - 过期的 .tmp 文件被删除 / The stale .tmp file is removed.
+        - 目标 .json 文件被创建 / The target .json file is created.
+    """
     config = CacheConfig(tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7))
     store = JsonSourceCacheStore(config)
     stale_tmp = tmp_path / "airport_a.json.tmp"
@@ -204,6 +313,16 @@ async def test_write_removes_stale_tmp_file(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_startup_cleans_stale_tmp_files(tmp_path) -> None:
+    """测试启动时清理过期的临时文件。
+
+    Test that startup cleans stale temporary files.
+
+    Args:
+        tmp_path: pytest 提供的临时目录路径 / Temporary directory path provided by pytest.
+
+    Asserts:
+        过期的 .tmp 文件在 _ensure_dir 后被删除 / The stale .tmp file is removed after _ensure_dir.
+    """
     config = CacheConfig(tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7))
     stale_tmp = tmp_path / "airport_a.json.tmp"
     stale_tmp.write_text("stale", encoding="utf-8")

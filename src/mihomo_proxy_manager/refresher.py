@@ -1,3 +1,8 @@
+"""订阅刷新核心逻辑：插件执行、抓取、解析、转换和缓存。
+
+Core refresh logic: plugin execution, fetch, parse, transform, and cache.
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -15,6 +20,11 @@ from .transform import apply_transform
 
 @dataclass(frozen=True)
 class RefreshResult:
+    """刷新结果，包含成功状态、节点数和错误信息。
+
+    Refresh result containing success status, node count, and error information.
+    """
+
     ok: bool
     source: str
     node_count: int = 0
@@ -24,6 +34,11 @@ class RefreshResult:
 
 
 class SourceRefresher:
+    """订阅源刷新器，负责执行完整的刷新流程。
+
+    Source refresher responsible for executing the full refresh pipeline.
+    """
+
     def __init__(
         self,
         *,
@@ -34,6 +49,18 @@ class SourceRefresher:
         http_plugin: HttpActionPlugin | None,
         refresh_lock_timeout: timedelta,
     ) -> None:
+        """初始化 SourceRefresher。
+
+        Initialize SourceRefresher.
+
+        Args:
+            sources: 订阅源配置字典 / Source configuration dict.
+            plugins: 插件配置字典 / Plugin configuration dict.
+            cache_store: 缓存存储实例 / Cache store instance.
+            fetcher: HTTP 抓取器实例 / HTTP fetcher instance.
+            http_plugin: HTTP Action 插件实例，可为 None / HTTP Action plugin instance, may be None.
+            refresh_lock_timeout: 刷新锁超时时间 / Refresh lock timeout.
+        """
         self.sources = sources
         self.plugins = plugins
         self.cache_store = cache_store
@@ -44,10 +71,30 @@ class SourceRefresher:
         self._inflight: dict[str, asyncio.Task[RefreshResult]] = {}
 
     def _lock(self, source_name: str) -> asyncio.Lock:
+        """获取或创建指定源的异步锁。
+
+        Get or create an async lock for the given source.
+
+        Args:
+            source_name: 订阅源名称 / Source name.
+
+        Returns:
+            该源的异步锁 / Async lock for the source.
+        """
         self._locks.setdefault(source_name, asyncio.Lock())
         return self._locks[source_name]
 
     async def refresh(self, source_name: str) -> RefreshResult:
+        """刷新指定订阅源，支持去重和超时保护。
+
+        Refresh the specified source with deduplication and timeout protection.
+
+        Args:
+            source_name: 订阅源名称 / Source name.
+
+        Returns:
+            刷新结果 / Refresh result.
+        """
         existing = self._inflight.get(source_name)
         if existing is not None:
             if existing.done():
@@ -69,6 +116,16 @@ class SourceRefresher:
         return await task
 
     async def _refresh_with_lock(self, source_name: str) -> RefreshResult:
+        """在获取锁后执行刷新。
+
+        Execute refresh after acquiring the lock.
+
+        Args:
+            source_name: 订阅源名称 / Source name.
+
+        Returns:
+            刷新结果 / Refresh result.
+        """
         lock = self._lock(source_name)
         try:
             await asyncio.wait_for(lock.acquire(), timeout=self.refresh_lock_timeout.total_seconds())
@@ -84,6 +141,16 @@ class SourceRefresher:
             lock.release()
 
     async def _refresh_locked(self, source_name: str) -> RefreshResult:
+        """持有锁时执行实际刷新逻辑。
+
+        Execute the actual refresh logic while holding the lock.
+
+        Args:
+            source_name: 订阅源名称 / Source name.
+
+        Returns:
+            刷新结果 / Refresh result.
+        """
         source = self.sources[source_name]
         now = datetime.now(UTC)
         old_cache: SourceCache | None = None

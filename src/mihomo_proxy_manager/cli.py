@@ -1,3 +1,8 @@
+"""命令行接口，提供 ``serve``、``check``、``refresh`` 子命令。
+
+Command-line interface providing ``serve``, ``check``, and ``refresh`` subcommands.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -18,6 +23,14 @@ from .scheduler import RefreshScheduler
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """构建并返回命令行参数解析器。
+
+    Build and return the command-line argument parser.
+
+    Returns:
+        argparse.ArgumentParser: 配置了 ``serve``、``check``、``refresh`` 子命令的解析器。
+            Parser configured with ``serve``, ``check``, and ``refresh`` subcommands.
+    """
     parser = argparse.ArgumentParser(prog="mpm")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -35,6 +48,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _cmd_check(config_path: str) -> int:
+    """验证配置文件并打印检查报告。
+
+    Validate the configuration file and print the check report.
+
+    Args:
+        config_path: 配置文件路径。
+            Path to the configuration file.
+
+    Returns:
+        int: 如果配置有效返回 0，否则返回 1。
+            0 if the configuration is valid, 1 otherwise.
+    """
     config_file = Path(config_path)
     config = load_config(config_file, validate=False)
     report = config.validate(config_path=config_file)
@@ -49,6 +74,18 @@ def _cmd_check(config_path: str) -> int:
 
 
 async def _build_runtime(config_path: str):
+    """构建运行时组件：配置、缓存、HTTP 客户端和刷新器。
+
+    Build runtime components: config, cache store, HTTP client, and refresher.
+
+    Args:
+        config_path: 配置文件路径。
+            Path to the configuration file.
+
+    Returns:
+        tuple: 包含 (config, cache_store, client, refresher) 的元组。
+            A tuple of (config, cache_store, client, refresher).
+    """
     config_file = Path(config_path)
     config = load_config(config_file)
     configure_logging(config)
@@ -68,6 +105,18 @@ async def _build_runtime(config_path: str):
 
 
 def _cmd_serve(config_path: str) -> int:
+    """启动 HTTP 服务。
+
+    Start the HTTP service.
+
+    Args:
+        config_path: 配置文件路径。
+            Path to the configuration file.
+
+    Returns:
+        int: 服务正常退出时返回 0。
+            0 when the server exits normally.
+    """
     async def run() -> int:
         config, cache_store, client, refresher = await _build_runtime(config_path)
         scheduler = RefreshScheduler(config, refresher)
@@ -84,6 +133,20 @@ def _cmd_serve(config_path: str) -> int:
 
 
 def _cmd_refresh(config_path: str, source_name: str) -> int:
+    """刷新指定数据源并打印结果。
+
+    Refresh the specified source and print the result.
+
+    Args:
+        config_path: 配置文件路径。
+            Path to the configuration file.
+        source_name: 要刷新的数据源名称。
+            Name of the source to refresh.
+
+    Returns:
+        int: 刷新成功返回 0，失败或找不到数据源返回 1。
+            0 on success, 1 if the source is unknown or refresh fails.
+    """
     async def run() -> int:
         config, _cache_store, client, refresher = await _build_runtime(config_path)
         try:
@@ -103,6 +166,18 @@ def _cmd_refresh(config_path: str, source_name: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI 入口函数，解析参数并派发到对应的子命令处理函数。
+
+    CLI entry point that parses arguments and dispatches to the appropriate command handler.
+
+    Args:
+        argv: 命令行参数列表，默认为 ``None``（使用 ``sys.argv``）。
+            Command-line argument list; defaults to ``None`` (uses ``sys.argv``).
+
+    Returns:
+        int: 进程退出码。0 表示成功，1 表示错误，2 表示不可达分支。
+            Process exit code. 0 for success, 1 for error, 2 for unreachable branch.
+    """
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command == "check":

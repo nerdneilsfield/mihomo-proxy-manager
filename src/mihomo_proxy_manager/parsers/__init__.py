@@ -1,3 +1,8 @@
+"""订阅格式检测和分发解析器，支持 YAML、share-links 和 base64 编码。
+
+Subscription format detection and dispatch parser supporting YAML, share-links, and base64 encoding.
+"""
+
 from __future__ import annotations
 
 import base64
@@ -14,20 +19,54 @@ from .yaml import parse_yaml_subscription
 
 
 class ParseError(ValueError):
+    """解析错误，在订阅解析失败时抛出。
+
+    Parse error raised when subscription parsing fails.
+    """
     pass
 
 
 @dataclass(frozen=True)
 class ParseResult:
+    """解析结果，包含代理记录列表和警告列表。
+
+    Parse result containing a list of proxy records and warnings.
+    """
+
     records: list[ProxyRecord]
     warnings: list[str]
 
 
 def _decode_text(body: bytes) -> str:
+    """将字节数据解码为 UTF-8 字符串（含 BOM 处理）。
+
+    Decode bytes to UTF-8 string (with BOM handling).
+
+    Args:
+        body: 字节数据 / Byte data.
+
+    Returns:
+        解码后的字符串 / Decoded string.
+    """
     return body.decode("utf-8-sig")
 
 
 def _try_base64_text(body: bytes) -> str:
+    """尝试以 Base64 解码字节数据为文本。
+
+    Attempt to decode bytes as Base64-encoded text.
+
+    Args:
+        body: 字节数据 / Byte data.
+
+    Returns:
+        解码后的字符串 / Decoded string.
+
+    Raises:
+        binascii.Error: 如果 Base64 解码失败 / If Base64 decoding fails.
+        ValueError: 如果 Base64 解码失败 / If Base64 decoding fails.
+        UnicodeDecodeError: 如果解码后的数据不是有效 UTF-8 / If decoded data is not valid UTF-8.
+    """
     raw = body.strip()
     padding = b"=" * (-len(raw) % 4)
     padded = raw + padding
@@ -38,6 +77,21 @@ def _try_base64_text(body: bytes) -> str:
 
 
 def _finalize(records: list[ProxyRecord], warnings: list[str], *, parse_error: Literal["skip", "fail"]) -> ParseResult:
+    """根据 parse_error 策略最终确定解析结果。
+
+    Finalize the parse result according to the parse_error strategy.
+
+    Args:
+        records: 解析出的代理记录 / Parsed proxy records.
+        warnings: 解析警告列表 / List of parse warnings.
+        parse_error: 解析错误处理策略 / Parse error handling strategy.
+
+    Returns:
+        最终解析结果 / Finalized parse result.
+
+    Raises:
+        ParseError: 如果策略为 "fail" 且有警告，或没有可用代理 / If strategy is "fail" with warnings, or no usable proxies.
+    """
     if parse_error == "fail" and warnings:
         raise ParseError("; ".join(warnings))
     if not records:
@@ -52,6 +106,22 @@ def parse_subscription(
     fmt: Literal["auto", "yaml", "share-links"],
     parse_error: Literal["skip", "fail"],
 ) -> ParseResult:
+    """解析订阅内容，自动检测格式或按指定格式解析。
+
+    Parse subscription content, auto-detecting format or using the specified format.
+
+    Args:
+        body: 订阅内容的原始字节 / Raw bytes of subscription content.
+        source: 订阅源名称 / Source name.
+        fmt: 解析格式（auto/yaml/share-links） / Parse format (auto/yaml/share-links).
+        parse_error: 解析错误处理策略 / Parse error handling strategy.
+
+    Returns:
+        解析结果 / Parse result.
+
+    Raises:
+        ParseError: 如果所有解析方式都失败 / If all parsing methods fail.
+    """
     yaml_error: Exception | None = None
     if fmt in {"auto", "yaml"}:
         try:

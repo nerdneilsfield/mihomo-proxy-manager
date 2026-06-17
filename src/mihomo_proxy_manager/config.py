@@ -1,3 +1,8 @@
+"""TOML 配置加载、解析和验证。
+
+TOML configuration loading, parsing, and validation.
+"""
+
 from __future__ import annotations
 
 import os
@@ -38,6 +43,21 @@ from .models import (
 
 
 def parse_duration(value: str) -> timedelta:
+    """解析持续时间字符串，返回 timedelta。
+
+    Parse a duration string and return a timedelta.
+
+    Args:
+        value: 持续时间字符串，如 ``30s``、``5m``、``2h``、``7d``。
+               Duration string, e.g. ``30s``, ``5m``, ``2h``, ``7d``.
+
+    Returns:
+        解析后的 timedelta 对象。
+        Parsed timedelta object.
+
+    Raises:
+        ValueError: 如果格式无效。If the format is invalid.
+    """
     match = re.fullmatch(r"(\d+)(s|m|h|d)", value.strip())
     if not match:
         raise ValueError(f"invalid duration {value!r}")
@@ -52,6 +72,20 @@ def parse_duration(value: str) -> timedelta:
 
 
 def parse_size(value: str) -> int:
+    """解析大小字符串，返回字节数。
+
+    Parse a size string and return the number of bytes.
+
+    Args:
+        value: 大小字符串，如 ``10 MB``、``512KB``、``128B``。
+               Size string, e.g. ``10 MB``, ``512KB``, ``128B``.
+
+    Returns:
+        对应的字节数。The corresponding number of bytes.
+
+    Raises:
+        ValueError: 如果格式无效。If the format is invalid.
+    """
     match = re.fullmatch(r"(\d+)\s*(B|KB|MB)", value.strip(), re.IGNORECASE)
     if not match:
         raise ValueError(f"invalid size {value!r}")
@@ -61,11 +95,23 @@ def parse_size(value: str) -> int:
 
 
 def parse_file_mode(value: str | int) -> int:
-    """Parse a file mode value.
+    """解析文件权限模式值。
+
+    Parse a file mode value.
 
     Integers are accepted as-is, so use an octal literal such as ``0o600`` in
     TOML. Strings are parsed as octal when they start with ``0`` or ``0o``;
     otherwise they are parsed as decimal integers.
+
+    Args:
+        value: 文件权限模式值（整数或字符串）。
+               File mode value (integer or string).
+
+    Returns:
+        解析后的整数权限值。Parsed integer permission value.
+
+    Raises:
+        ValueError: 如果格式无效。If the format is invalid.
     """
     if isinstance(value, int):
         return value
@@ -79,11 +125,34 @@ def parse_file_mode(value: str | int) -> int:
 
 
 def _table(data: dict[str, Any], key: str) -> dict[str, Any]:
+    """安全地从字典中获取子表。
+
+    Safely retrieve a sub-table from a dictionary.
+
+    Args:
+        data: 源字典。Source dictionary.
+        key: 键名。Key name.
+
+    Returns:
+        子表字典，如果不存在或不是字典则返回空字典。
+        The sub-table dictionary, or an empty dict if missing or not a dict.
+    """
     value = data.get(key, {})
     return value if isinstance(value, dict) else {}
 
 
 def _filter(data: dict[str, Any]) -> FilterConfig:
+    """从原始字典构建 FilterConfig。
+
+    Build a FilterConfig from a raw dictionary.
+
+    Args:
+        data: 包含过滤选项的字典。
+               Dictionary containing filter options.
+
+    Returns:
+        构建的 FilterConfig 对象。Constructed FilterConfig object.
+    """
     return FilterConfig(
         include=data.get("include"),
         exclude=data.get("exclude"),
@@ -93,10 +162,36 @@ def _filter(data: dict[str, Any]) -> FilterConfig:
 
 
 def _rename(data: dict[str, Any]) -> RenameConfig:
+    """从原始字典构建 RenameConfig。
+
+    Build a RenameConfig from a raw dictionary.
+
+    Args:
+        data: 包含重命名选项的字典。
+               Dictionary containing rename options.
+
+    Returns:
+        构建的 RenameConfig 对象。Constructed RenameConfig object.
+    """
     return RenameConfig(prefix=data.get("prefix", ""), suffix=data.get("suffix", ""))
 
 
 def _fetch(data: dict[str, Any], http: HttpConfig, security: SecurityConfig) -> FetchConfig:
+    """从原始字典构建 FetchConfig。
+
+    Build a FetchConfig from a raw dictionary.
+
+    Args:
+        data: 包含抓取选项的字典。
+               Dictionary containing fetch options.
+        http: 全局 HTTP 配置，用于提供默认值。
+               Global HTTP config, used to supply defaults.
+        security: 全局安全配置，用于提供默认值。
+                  Global security config, used to supply defaults.
+
+    Returns:
+        构建的 FetchConfig 对象。Constructed FetchConfig object.
+    """
     headers = _table(data, "headers")
     return FetchConfig(
         timeout=parse_duration(data.get("timeout", f"{int(http.timeout.total_seconds())}s")),
@@ -107,6 +202,17 @@ def _fetch(data: dict[str, Any], http: HttpConfig, security: SecurityConfig) -> 
 
 
 def _refresh(data: dict[str, Any]) -> RefreshConfig:
+    """从原始字典构建 RefreshConfig。
+
+    Build a RefreshConfig from a raw dictionary.
+
+    Args:
+        data: 包含刷新选项的字典。
+               Dictionary containing refresh options.
+
+    Returns:
+        构建的 RefreshConfig 对象。Constructed RefreshConfig object.
+    """
     interval = data.get("interval")
     cron = data.get("cron", ())
     if isinstance(cron, str):
@@ -118,6 +224,17 @@ def _refresh(data: dict[str, Any]) -> RefreshConfig:
 
 
 def _source_plugins(data: dict[str, Any]) -> SourcePluginConfig:
+    """从原始字典构建 SourcePluginConfig。
+
+    Build a SourcePluginConfig from a raw dictionary.
+
+    Args:
+        data: 包含源插件选项的字典。
+               Dictionary containing source plugin options.
+
+    Returns:
+        构建的 SourcePluginConfig 对象。Constructed SourcePluginConfig object.
+    """
     before_fetch_table = _table(data, "before_fetch")
     before_fetch = {}
     for name, values in before_fetch_table.items():
@@ -129,7 +246,37 @@ def _source_plugins(data: dict[str, Any]) -> SourcePluginConfig:
 
 
 class LoadedConfig(AppConfig):
+    """已加载并解析的完整应用配置。
+
+    A fully loaded and parsed application configuration.
+
+    该对象封装了所有配置节（server、cache、http、security、scheduler、parser、
+    output、sources、routes、plugins），并提供 validate() 方法进行一致性校验。
+
+    This object holds all configuration sections (server, cache, http, security,
+    scheduler, parser, output, sources, routes, plugins) and provides a
+    validate() method for consistency checking.
+    """
+
     def validate(self, config_path: Path | None = None) -> ValidationReport:
+        """验证配置的一致性，返回错误和警告列表。
+
+        Validate configuration consistency and return a list of errors and warnings.
+
+        检查项包括：路径冲突、正则表达式有效性、URL 安全性、时区有效性、
+        缓存/日志目录可写性、文件权限等。
+
+        Checks include: path collisions, regex validity, URL safety, timezone
+        validity, cache/log directory writability, file permissions, etc.
+
+        Args:
+            config_path: 可选的配置文件路径，用于检查文件权限。
+                         Optional config file path for permission checking.
+
+        Returns:
+            包含 errors 和 warnings 列表的 ValidationReport。
+            A ValidationReport containing lists of errors and warnings.
+        """
         errors: list[str] = []
         warnings: list[str] = []
 
@@ -230,6 +377,31 @@ class LoadedConfig(AppConfig):
 
 
 def load_config(path: Path, *, validate: bool = True) -> LoadedConfig:
+    """从 TOML 文件加载并解析配置。
+
+    Load and parse configuration from a TOML file.
+
+    读取指定路径的 TOML 配置文件，解析所有配置节（server、cache、http、security、
+    scheduler、parser、output、sources、routes、plugins），并可选择执行一致性验证。
+
+    Reads the TOML config file at the given path, parses all configuration
+    sections (server, cache, http, security, scheduler, parser, output, sources,
+    routes, plugins), and optionally runs consistency validation.
+
+    Args:
+        path: TOML 配置文件的路径。
+              Path to the TOML configuration file.
+        validate: 是否在加载后执行验证（默认 True）。
+                  Whether to run validation after loading (default True).
+
+    Returns:
+        完整的 LoadedConfig 对象。A fully populated LoadedConfig object.
+
+    Raises:
+        ValueError: 如果存在未知的顶级表，或验证失败（validate=True 时）。
+                    If unknown top-level tables are present, or if validation
+                    fails (when validate=True).
+    """
     raw = tomllib.loads(path.read_text(encoding="utf-8"))
     allowed_top_level = {
         "server", "cache", "logging", "http", "scheduler", "security",

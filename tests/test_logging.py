@@ -1,3 +1,8 @@
+"""日志脱敏和敏感值收集测试。
+
+Logging redaction and secret value collection tests.
+"""
+
 from __future__ import annotations
 
 from datetime import timedelta
@@ -30,6 +35,17 @@ if TYPE_CHECKING:
 
 
 def _minimal_config(tmp_path, plugins=None):
+    """创建最小应用配置用于测试。
+
+    Create a minimal app config for testing.
+
+    Args:
+        tmp_path: 临时目录路径 / Temporary directory path.
+        plugins: 插件配置字典 / Plugin config dict.
+
+    Returns:
+        AppConfig: 应用配置对象 / App config object.
+    """
     source = SourceConfig(
         name="airport_a",
         url="https://example.com/sub",
@@ -58,6 +74,10 @@ def _minimal_config(tmp_path, plugins=None):
 
 
 def test_log_record_redaction_covers_message_and_extra() -> None:
+    """测试日志记录脱敏覆盖消息和 extra 字段。
+
+    Test that log record redaction covers message and extra fields.
+    """
     secret_path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml"
     record = {
         "message": f"GET {secret_path} https://x.test/sub?token=secret Authorization=Bearer abc",
@@ -73,6 +93,10 @@ def test_log_record_redaction_covers_message_and_extra() -> None:
 
 
 def test_log_record_redaction_recursively_covers_nested_extra() -> None:
+    """测试日志记录脱敏递归覆盖嵌套的 extra 字段。
+
+    Test that log record redaction recursively covers nested extra fields.
+    """
     secret_path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml"
     record = {
         "message": "ok",
@@ -91,6 +115,10 @@ def test_log_record_redaction_recursively_covers_nested_extra() -> None:
 
 
 def test_collect_secret_values_includes_plugin_body(tmp_path) -> None:
+    """测试收集敏感值包含插件请求体。
+
+    Test that secret value collection includes plugin body.
+    """
     body = "sensitive-plugin-body"
     config = _minimal_config(
         tmp_path,

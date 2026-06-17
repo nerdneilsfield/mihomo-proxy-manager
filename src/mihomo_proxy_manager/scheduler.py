@@ -1,3 +1,8 @@
+"""定时刷新调度器，支持固定间隔和 cron 表达式，带随机抖动。
+
+Refresh scheduler supporting fixed intervals and cron expressions with jitter.
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -13,13 +18,30 @@ from .models import AppConfig
 
 
 class RefreshScheduler:
+    """定时刷新调度器，管理所有订阅源的定时刷新任务。
+
+    Refresh scheduler that manages scheduled refresh tasks for all sources.
+    """
+
     def __init__(self, config: AppConfig, refresher) -> None:
+        """初始化 RefreshScheduler。
+
+        Initialize RefreshScheduler.
+
+        Args:
+            config: 应用配置 / Application configuration.
+            refresher: SourceRefresher 实例 / SourceRefresher instance.
+        """
         self.config = config
         self.refresher = refresher
         self._tasks: list[asyncio.Task[Any]] = []
         self._stopping = asyncio.Event()
 
     async def start(self) -> None:
+        """启动调度器，执行启动刷新并注册定时任务。
+
+        Start the scheduler, perform startup refresh and register scheduled tasks.
+        """
         if self.config.scheduler.startup_refresh:
             if self.config.scheduler.startup_refresh_mode == "blocking":
                 await asyncio.gather(*(self.refresher.refresh(name) for name in self.config.sources))
@@ -35,12 +57,24 @@ class RefreshScheduler:
                 self._tasks.append(asyncio.create_task(self._cron_loop(name, expr)))
 
     async def stop(self) -> None:
+        """停止调度器，取消所有运行中的任务。
+
+        Stop the scheduler and cancel all running tasks.
+        """
         self._stopping.set()
         for task in self._tasks:
             task.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
 
     def _track_startup_refresh(self, task: asyncio.Task[Any], source_name: str) -> None:
+        """跟踪启动刷新任务的结果并记录警告。
+
+        Track startup refresh task results and log warnings.
+
+        Args:
+            task: 异步任务 / Async task.
+            source_name: 订阅源名称 / Source name.
+        """
         try:
             result = task.result()
         except asyncio.CancelledError:
@@ -53,12 +87,27 @@ class RefreshScheduler:
             logger.warning("startup refresh failed for source {source}: {error}", source=source_name, error=error)
 
     def _jitter_seconds(self) -> float:
+        """计算随机抖动的秒数。
+
+        Calculate random jitter seconds.
+
+        Returns:
+            抖动秒数 / Jitter seconds.
+        """
         seconds = self.config.scheduler.jitter.total_seconds()
         if seconds > 0:
             return random.uniform(0, seconds)
         return 0.0
 
     async def _interval_loop(self, source_name: str, interval_seconds: float) -> None:
+        """固定间隔刷新循环。
+
+        Fixed-interval refresh loop.
+
+        Args:
+            source_name: 订阅源名称 / Source name.
+            interval_seconds: 间隔秒数 / Interval in seconds.
+        """
         loop = asyncio.get_running_loop()
         next_target = loop.time() + interval_seconds
         jitter_seconds = self.config.scheduler.jitter.total_seconds()
@@ -79,6 +128,14 @@ class RefreshScheduler:
             next_target += interval_seconds
 
     async def _cron_loop(self, source_name: str, expr: str) -> None:
+        """Cron 表达式刷新循环。
+
+        Cron-expression refresh loop.
+
+        Args:
+            source_name: 订阅源名称 / Source name.
+            expr: Cron 表达式 / Cron expression.
+        """
         tz = ZoneInfo(self.config.server.timezone)
         iterator = croniter(expr, datetime.now(tz))
         while not self._stopping.is_set():

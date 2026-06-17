@@ -1,3 +1,8 @@
+"""HTTP 抓取器安全重定向、Cookie 隔离和大小限制测试。
+
+HTTP fetcher safe redirect, cookie isolation, and size limit tests.
+"""
+
 import httpx
 import pytest
 
@@ -7,6 +12,14 @@ from mihomo_proxy_manager.models import FetchConfig, HttpConfig
 
 @pytest.mark.asyncio
 async def test_fetch_sends_conditional_headers() -> None:
+    """测试抓取时发送条件请求头 / Test that fetch sends conditional headers.
+
+    Args:
+        None.
+
+    Returns:
+        None. 断言 not_modified 为 True / Asserts not_modified is True.
+    """
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["If-None-Match"] == '"abc"'
         assert request.headers["If-Modified-Since"] == "Wed, 17 Jun 2026 04:00:00 GMT"
@@ -26,6 +39,14 @@ async def test_fetch_sends_conditional_headers() -> None:
 
 @pytest.mark.asyncio
 async def test_fetch_rejects_oversized_response() -> None:
+    """测试抓取拒绝超过大小限制的响应 / Test that fetch rejects oversized responses.
+
+    Args:
+        None.
+
+    Returns:
+        None. 断言抛出 ValueError / Asserts ValueError is raised.
+    """
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, content=b"x" * 1025)
 
@@ -38,6 +59,14 @@ async def test_fetch_rejects_oversized_response() -> None:
 
 @pytest.mark.asyncio
 async def test_fetch_revalidates_redirect_target() -> None:
+    """测试抓取拒绝重定向到私有网络地址 / Test that fetch rejects redirects to private network addresses.
+
+    Args:
+        None.
+
+    Returns:
+        None. 断言抛出 ValueError / Asserts ValueError is raised.
+    """
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(302, headers={"Location": "http://127.0.0.1/sub"})
 
@@ -50,6 +79,14 @@ async def test_fetch_revalidates_redirect_target() -> None:
 
 @pytest.mark.asyncio
 async def test_redirect_302_rewrites_method_to_get_and_drops_body() -> None:
+    """测试 302 重定向将方法改为 GET 并丢弃请求体 / Test that 302 redirect rewrites method to GET and drops the body.
+
+    Args:
+        None.
+
+    Returns:
+        None. 断言最终请求为 GET 且 body 为空 / Asserts final request is GET with empty body.
+    """
     requests: list[tuple[str, bytes]] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -76,6 +113,14 @@ async def test_redirect_302_rewrites_method_to_get_and_drops_body() -> None:
 
 @pytest.mark.asyncio
 async def test_redirect_307_preserves_method_and_body() -> None:
+    """测试 307 重定向保留方法和请求体 / Test that 307 redirect preserves method and body.
+
+    Args:
+        None.
+
+    Returns:
+        None. 断言两次请求均为 POST 且 body 相同 / Asserts both requests are POST with same body.
+    """
     requests: list[tuple[str, bytes]] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -102,6 +147,14 @@ async def test_redirect_307_preserves_method_and_body() -> None:
 
 @pytest.mark.asyncio
 async def test_redirect_cross_origin_strips_sensitive_and_custom_headers() -> None:
+    """测试跨域重定向时移除敏感和自定义请求头 / Test that cross-origin redirect strips sensitive and custom headers.
+
+    Args:
+        None.
+
+    Returns:
+        None. 断言跨域请求中 Authorization、Cookie 和 X-Custom-Token 被移除，User-Agent 保留 / Asserts Authorization, Cookie, X-Custom-Token are stripped on cross-origin redirect; User-Agent preserved.
+    """
     requests: list[httpx.Headers] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -141,6 +194,14 @@ async def test_redirect_cross_origin_strips_sensitive_and_custom_headers() -> No
 
 @pytest.mark.asyncio
 async def test_redirect_same_origin_preserves_custom_headers() -> None:
+    """测试同源重定向保留自定义请求头 / Test that same-origin redirect preserves custom headers.
+
+    Args:
+        None.
+
+    Returns:
+        None. 断言同源重定向后 X-Custom-Token 仍存在 / Asserts X-Custom-Token is preserved after same-origin redirect.
+    """
     requests: list[httpx.Headers] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -166,6 +227,14 @@ async def test_redirect_same_origin_preserves_custom_headers() -> None:
 
 @pytest.mark.asyncio
 async def test_fetch_redacts_url_on_http_error() -> None:
+    """测试抓取在 HTTP 错误时对 URL 进行脱敏 / Test that fetch redacts the URL on HTTP error.
+
+    Args:
+        None.
+
+    Returns:
+        None. 断言异常消息中不包含原始 token / Asserts exception message does not contain the raw token.
+    """
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500)
 
@@ -189,6 +258,14 @@ async def test_fetch_redacts_url_on_http_error() -> None:
 
 @pytest.mark.asyncio
 async def test_redirect_to_default_port_is_same_origin(tmp_path) -> None:
+    """测试重定向到默认端口被视为同源 / Test that redirect to default port is treated as same origin.
+
+    Args:
+        tmp_path: pytest 提供的临时目录 / Temporary directory provided by pytest.
+
+    Returns:
+        None. 断言重定向后自定义请求头仍保留 / Asserts custom headers are preserved after redirect.
+    """
     requests: list[httpx.Headers] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -216,6 +293,14 @@ async def test_redirect_to_default_port_is_same_origin(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_shared_client_does_not_leak_cookies() -> None:
+    """测试共享客户端不会泄露 Cookie / Test that the shared client does not leak cookies.
+
+    Args:
+        None.
+
+    Returns:
+        None. 断言第二个请求不携带 Cookie / Asserts the second request does not carry cookies.
+    """
     requests: list[httpx.Headers] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -249,8 +334,14 @@ async def test_shared_client_does_not_leak_cookies() -> None:
 
 @pytest.mark.asyncio
 async def test_redirect_body_ignored_without_size_limit() -> None:
-    """Redirect bodies must not be buffered or subject to max_response_size."""
+    """测试重定向响应体不受大小限制影响 / Test that redirect bodies are not subject to size limits.
 
+    Args:
+        None.
+
+    Returns:
+        None. 断言最终响应为 200 且内容为 b"ok" / Asserts final response is 200 with content b"ok".
+    """
     async def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/start":
             return httpx.Response(302, headers={"Location": "/done"}, content=b"x" * 2048)
@@ -273,6 +364,14 @@ async def test_redirect_body_ignored_without_size_limit() -> None:
 
 @pytest.mark.asyncio
 async def test_max_redirects_is_enforced_for_long_chains() -> None:
+    """测试最大重定向次数被强制执行 / Test that max redirects is enforced for long chains.
+
+    Args:
+        None.
+
+    Returns:
+        None. 断言抛出 ValueError 且实际请求次数为 3 / Asserts ValueError is raised and only 3 requests were made.
+    """
     requests: list[str] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -300,6 +399,14 @@ async def test_max_redirects_is_enforced_for_long_chains() -> None:
 
 @pytest.mark.asyncio
 async def test_endless_redirect_loop_is_rejected() -> None:
+    """测试无限重定向循环被拒绝 / Test that an endless redirect loop is rejected.
+
+    Args:
+        None.
+
+    Returns:
+        None. 断言抛出 ValueError / Asserts ValueError is raised.
+    """
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(302, headers={"Location": "/loop"})
 

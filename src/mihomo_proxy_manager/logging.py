@@ -1,3 +1,8 @@
+"""基于 Loguru 的日志配置，自动对消息和 extra 中的敏感信息进行脱敏。
+
+Loguru-based logging configuration with automatic secret redaction in messages and extras.
+"""
+
 from __future__ import annotations
 
 import sys
@@ -13,6 +18,16 @@ if TYPE_CHECKING:
 
 
 def _collect_secret_values(config: AppConfig) -> list[str]:
+    """从配置中收集所有需要脱敏的敏感值。
+
+    Collect all sensitive values from config that need redaction.
+
+    Args:
+        config: 应用配置 / Application configuration.
+
+    Returns:
+        需要脱敏的字符串列表 / List of strings that need redaction.
+    """
     secrets: list[str] = []
     if config.server.status_path:
         secrets.append(config.server.status_path)
@@ -29,6 +44,17 @@ def _collect_secret_values(config: AppConfig) -> list[str]:
 
 
 def _redact_value(value: object, secrets: list[str]) -> object:
+    """递归脱敏值中的敏感信息。
+
+    Recursively redact sensitive information from a value.
+
+    Args:
+        value: 需要脱敏的值 / The value to redact.
+        secrets: 敏感字符串列表 / List of sensitive strings.
+
+    Returns:
+        脱敏后的值 / The redacted value.
+    """
     if isinstance(value, str):
         return redact_secret(value, extra_secrets=secrets)
     if isinstance(value, dict):
@@ -39,12 +65,27 @@ def _redact_value(value: object, secrets: list[str]) -> object:
 
 
 def _redact_record(record: "Record", secrets: list[str]) -> None:
+    """对日志记录的消息和 extra 字段进行脱敏。
+
+    Redact sensitive information from log record message and extra fields.
+
+    Args:
+        record: Loguru 日志记录 / Loguru log record.
+        secrets: 敏感字符串列表 / List of sensitive strings.
+    """
     record["message"] = redact_secret(str(record["message"]), extra_secrets=secrets)
     for key, value in list(record["extra"].items()):
         record["extra"][key] = _redact_value(value, secrets)
 
 
 def configure_logging(config: AppConfig) -> None:
+    """配置 Loguru 日志系统，包含敏感信息脱敏。
+
+    Configure the Loguru logging system with sensitive information redaction.
+
+    Args:
+        config: 应用配置 / Application configuration.
+    """
     secrets = _collect_secret_values(config)
     logger.remove()
     logger.configure(patcher=lambda record: _redact_record(record, secrets))

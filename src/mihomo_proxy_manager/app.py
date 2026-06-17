@@ -1,3 +1,8 @@
+"""Starlette Web 应用，提供健康检查、状态查询和 provider 路由。
+
+Starlette web application providing health, status, and provider routes.
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -20,21 +25,75 @@ from .status import build_status
 
 
 class _Refresher(Protocol):
-    async def refresh(self, source_name: str) -> Any: ...
+    """刷新器协议，定义异步刷新接口。
+
+    Refresher protocol defining the asynchronous refresh interface.
+    """
+
+    async def refresh(self, source_name: str) -> Any:
+        """异步刷新指定名称的源。
+
+        Asynchronously refresh the source identified by the given name.
+
+        Args:
+            source_name: 要刷新的源名称 / The name of the source to refresh.
+
+        Returns:
+            刷新结果，具体类型由实现决定 / The refresh result, type depends on implementation.
+        """
 
 
 class _Scheduler(Protocol):
-    async def start(self) -> None: ...
-    async def stop(self) -> None: ...
+    """调度器协议，定义异步启动和停止接口。
+
+    Scheduler protocol defining the asynchronous start and stop interface.
+    """
+
+    async def start(self) -> None:
+        """启动调度器。
+
+        Start the scheduler.
+        """
+
+    async def stop(self) -> None:
+        """停止调度器。
+
+        Stop the scheduler.
+        """
 
 
 def _is_still_valid(cache: SourceCache | None, max_stale: timedelta) -> TypeGuard[SourceCache]:
+    """检查缓存是否仍在最大过期时间内有效。
+
+    Check whether the cache is still valid within the maximum staleness duration.
+
+    Args:
+        cache: 源缓存对象，可能为 None / The source cache object, may be None.
+        max_stale: 允许的最大过期时间 / The maximum allowed staleness.
+
+    Returns:
+        如果缓存存在且未超过过期时间则返回 True，否则返回 False /
+        True if the cache exists and has not exceeded the staleness threshold, False otherwise.
+    """
     if cache is None or cache.last_success_at is None:
         return False
     return datetime.now(UTC) - cache.last_success_at <= max_stale
 
 
 def _is_due(cache: SourceCache | None, source: SourceConfig, timezone: str) -> bool:
+    """根据间隔或 cron 表达式判断源是否该刷新了。
+
+    Determine whether a source is due for refresh based on interval or cron expression.
+
+    Args:
+        cache: 源缓存对象，可能为 None / The source cache object, may be None.
+        source: 源配置 / The source configuration.
+        timezone: 用于 cron 计算的时区字符串 / The timezone string used for cron evaluation.
+
+    Returns:
+        如果源需要刷新则返回 True，否则返回 False /
+        True if the source is due for a refresh, False otherwise.
+    """
     if not cache or not cache.last_success_at:
         return True
     now = datetime.now(UTC)
@@ -53,6 +112,14 @@ def _is_due(cache: SourceCache | None, source: SourceConfig, timezone: str) -> b
 
 
 def _track_background_refresh(task: asyncio.Task[Any], source_name: str) -> None:
+    """记录后台刷新任务的结果（成功或失败）。
+
+    Log the result (success or failure) of a background refresh task.
+
+    Args:
+        task: 已完成的后台刷新任务 / The completed background refresh task.
+        source_name: 被刷新的源名称 / The name of the source that was refreshed.
+    """
     try:
         result = task.result()
     except asyncio.CancelledError:
@@ -76,18 +143,62 @@ def create_app(
     refresher: _Refresher | None,
     scheduler: _Scheduler | None,
 ) -> Starlette:
+    """创建并配置 Starlette 应用。
+
+    Create and configure the Starlette application.
+
+    注册健康检查、状态和 provider 路由，并管理生命周期（调度器启停、后台任务清理）。
+    Registers health, status, and provider routes, and manages the lifecycle
+    (scheduler start/stop, background task cleanup).
+
+    Args:
+        config: 应用配置 / The application configuration.
+        cache_store: 源缓存存储实例 / The source cache store instance.
+        refresher: 可选的刷新器，用于刷新源缓存 / Optional refresher for refreshing source caches.
+        scheduler: 可选的调度器，用于定时刷新 / Optional scheduler for periodic refreshes.
+
+    Returns:
+        配置完成的 Starlette 应用实例 / The configured Starlette application instance.
+    """
     renderer = ProviderRenderer(yaml_sort_keys=config.output.yaml_sort_keys)
     route_by_path = {route.path: route for route in config.routes.values()}
     background_tasks: set[asyncio.Task[Any]] = set()
     secrets = _collect_secret_values(config)
 
     async def health(request):
+        """健康检查端点。
+
+        Health check endpoint.
+
+        Args:
+            request: HTTP 请求对象 / The HTTP request object.
+
+        Returns:
+            包含 ok 状态的 JSON 响应 / A JSON response containing the ok status.
+        """
         return JSONResponse({"ok": True})
 
     async def status(request):
+        """状态端点，返回各源的刷新状态。
+
+        Status endpoint returning the refresh status of each source.
+
+        Args:
+            request: HTTP 请求对象 / The HTTP request object.
+
+        Returns:
+            包含各源刷新状态的 JSON 响应 / A JSON response containing the refresh status of each source.
+        """
         return JSONResponse(await build_status(cache_store, list(config.sources), extra_secrets=secrets))
 
     def _spawn_background_refresh(source_name: str) -> None:
+        """在后台触发源的刷新。
+
+        Trigger a background refresh for the given source.
+
+        Args:
+            source_name: 要刷新的源名称 / The name of the source to refresh.
+        """
         if refresher is None:
             return
         task = asyncio.create_task(refresher.refresh(source_name))
@@ -96,6 +207,22 @@ def create_app(
         task.add_done_callback(lambda item, name=source_name: _track_background_refresh(item, name))
 
     async def provider(request):
+        """Provider 端点，返回合并后的代理 YAML。
+
+        Provider endpoint returning the merged proxy YAML.
+
+        Args:
+            request: HTTP 请求对象 / The HTTP request object.
+
+        Returns:
+            YAML 格式的响应，包含合并后的代理配置 /
+            A YAML response containing the merged proxy configuration.
+
+        Raises:
+            不直接抛出异常，但在源不可用时返回 404 或 503 状态码 /
+            Does not raise exceptions directly, but returns 404 or 503 status codes
+            when sources are unavailable.
+        """
         route = route_by_path.get(request.url.path)
         if route is None:
             return PlainTextResponse("not found", status_code=404)
@@ -166,6 +293,17 @@ def create_app(
 
     @contextlib.asynccontextmanager
     async def lifespan(app: Starlette):
+        """应用生命周期：启动调度器，关闭时停止调度器并取消后台任务。
+
+        Application lifecycle: start the scheduler on startup, stop the scheduler
+        and cancel background tasks on shutdown.
+
+        Args:
+            app: Starlette 应用实例 / The Starlette application instance.
+
+        Yields:
+            无 / None.
+        """
         if scheduler:
             try:
                 await scheduler.start()

@@ -61,9 +61,18 @@ def parse_size(value: str) -> int:
 
 
 def parse_file_mode(value: str | int) -> int:
+    """Parse a file mode value.
+
+    Integers are accepted as-is, so use an octal literal such as ``0o600`` in
+    TOML. Strings are parsed as octal when they start with ``0`` or ``0o``;
+    otherwise they are parsed as decimal integers.
+    """
     if isinstance(value, int):
         return value
-    return int(str(value), 8)
+    s = str(value).strip()
+    if s.startswith(("0o", "0O")) or (len(s) > 1 and s.startswith("0") and s.isdigit()):
+        return int(s, 8)
+    return int(s)
 
 
 def _table(data: dict[str, Any], key: str) -> dict[str, Any]:
@@ -97,6 +106,8 @@ def _fetch(data: dict[str, Any], http: HttpConfig, security: SecurityConfig) -> 
 def _refresh(data: dict[str, Any]) -> RefreshConfig:
     interval = data.get("interval")
     cron = data.get("cron", ())
+    if isinstance(cron, str):
+        cron = (cron,)
     return RefreshConfig(
         interval=parse_duration(interval) if interval else None,
         cron=tuple(cron),
@@ -267,7 +278,7 @@ def load_config(path: Path, *, validate: bool = True) -> LoadedConfig:
         colorize=bool(console_raw.get("colorize", True)),
     )
     logging_file = LoggingSinkConfig(
-        enabled=bool(file_raw.get("enabled", True)),
+        enabled=bool(file_raw.get("enabled", False)),
         level=file_raw.get("level", "DEBUG"),
         path=Path(file_raw.get("path", "logs/mihomo-proxy-manager.log")),
         rotation=file_raw.get("rotation", "10 MB"),
@@ -277,13 +288,16 @@ def load_config(path: Path, *, validate: bool = True) -> LoadedConfig:
 
     plugins = {}
     for name, values in _table(raw, "plugins").items():
+        success_status = values.get("success_status", (200,))
+        if isinstance(success_status, int):
+            success_status = (success_status,)
         plugins[name] = PluginConfig(
             name=name,
             type=values.get("type", "http_action"),
             method=values.get("method", "GET"),
             url=values.get("url", ""),
             headers={str(k): str(v) for k, v in _table(values, "headers").items()},
-            success_status=tuple(values.get("success_status", (200,))),
+            success_status=tuple(success_status),
             timeout=parse_duration(values.get("timeout", f"{int(http.timeout.total_seconds())}s")),
             allow_private_network=bool(values.get("allow_private_network", security.allow_private_network_urls)),
             body=values.get("body"),

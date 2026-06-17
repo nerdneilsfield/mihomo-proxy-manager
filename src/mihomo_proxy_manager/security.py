@@ -10,11 +10,30 @@ class SecurityError(ValueError):
     pass
 
 
+_IpAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
+
 _SECRET_QUERY_KEYS = {"token", "secret", "key", "apikey", "api_key", "access_token"}
-_BEARER_RE = re.compile(r"Bearer\s+[A-Za-z0-9._~+\-/=]+")
+_AUTHORIZATION_RE = re.compile(
+    r"(?i)(Authorization[=:]\s*)(Bearer\s+\S+|.+)"
+)
+
+# Hostnames that are commonly used for private/loopback/link-local addresses.
+# These are rejected even when DNS resolution is disabled to keep ``mpm check``
+# fully offline.
+_PRIVATE_HOSTNAMES = frozenset(
+    {
+        "localhost",
+        "localhost.localdomain",
+        "ip6-localhost",
+        "ip6-loopback",
+        "metadata",
+        "metadata.google.internal",
+    }
+)
+_PRIVATE_HOSTNAME_SUFFIXES = (".local", ".localdomain", ".internal", ".localhost")
 
 
-def _is_public_ip(ip: ipaddress._BaseAddress) -> bool:
+def _is_public_ip(ip: _IpAddress) -> bool:
     return not (
         ip.is_private
         or ip.is_loopback
@@ -25,13 +44,20 @@ def _is_public_ip(ip: ipaddress._BaseAddress) -> bool:
     )
 
 
-def _resolve_host(host: str) -> list[ipaddress._BaseAddress]:
+def _resolve_host(host: str) -> list[_IpAddress]:
     try:
         return [ipaddress.ip_address(host)]
     except ValueError:
         pass
     infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
     return sorted({ipaddress.ip_address(info[4][0]) for info in infos}, key=str)
+
+
+def _is_blocked_hostname(hostname: str) -> bool:
+    lowered = hostname.lower()
+    if lowered in _PRIVATE_HOSTNAMES:
+        return True
+    return any(lowered.endswith(suffix) for suffix in _PRIVATE_HOSTNAME_SUFFIXES)
 
 
 _BASE64URL_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -48,6 +74,8 @@ def assert_safe_url(url: str, *, allow_private_network: bool, resolve_dns: bool 
     try:
         ips = [ipaddress.ip_address(parsed.hostname)]
     except ValueError:
+        if _is_blocked_hostname(parsed.hostname):
+            raise SecurityError(f"URL host is blocked: {parsed.hostname}")
         if not resolve_dns:
             return
         ips = _resolve_host(parsed.hostname)
@@ -72,9 +100,12 @@ def redact_url(url: str) -> str:
 
 
 def redact_secret(text: str, *, extra_secrets: list[str] | None = None) -> str:
-    redacted = _BEARER_RE.sub("Bearer ***", text)
-    redacted = re.sub(r"(?i)(Authorization=)([^\s]+)(\s+Bearer\s+[^\s]+)?", r"\1***", redacted)
-    redacted = re.sub(r"([?&](?:token|secret|key|apikey|api_key|access_token)=)[^&\s]+", r"\1***", redacted)
+    redacted = _AUTHORIZATION_RE.sub(r"\1***", text)
+    redacted = re.sub(
+        r"([?&](?:token|secret|key|apikey|api_key|access_token)=)[^&\s]+",
+        r"\1***",
+        redacted,
+    )
     for secret in extra_secrets or []:
         redacted = redacted.replace(secret, "***")
     return redacted

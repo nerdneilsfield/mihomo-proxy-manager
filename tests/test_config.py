@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from mihomo_proxy_manager.config import load_config, parse_duration, parse_size
+from mihomo_proxy_manager.config import load_config, parse_duration, parse_file_mode, parse_size
 
 
 def write_config(path: Path, body: str) -> Path:
@@ -110,3 +110,35 @@ file_mode = 0o600
     config = load_config(write_config(temp_config_path, body))
 
     assert config.cache.file_mode == 0o600
+
+
+def test_parse_file_mode() -> None:
+    assert parse_file_mode(0o600) == 0o600
+    assert parse_file_mode("0600") == 0o600
+    assert parse_file_mode("0o600") == 0o600
+    assert parse_file_mode(384) == 384
+    assert parse_file_mode("600") == 600
+
+
+def test_cron_accepts_single_string(temp_config_path: Path) -> None:
+    body = minimal_config() + """
+[sources.airport_a.refresh]
+cron = "0 * * * *"
+"""
+    config = load_config(write_config(temp_config_path, body))
+    assert config.sources["airport_a"].refresh.cron == ("0 * * * *",)
+
+
+def test_success_status_accepts_single_int(temp_config_path: Path) -> None:
+    body = minimal_config() + """
+[plugins.turn_on]
+url = "https://example.com/action"
+success_status = 204
+"""
+    config = load_config(write_config(temp_config_path, body))
+    assert config.plugins["turn_on"].success_status == (204,)
+
+
+def test_file_logging_defaults_to_disabled(temp_config_path: Path) -> None:
+    config = load_config(write_config(temp_config_path, minimal_config()))
+    assert not config.logging_file.enabled

@@ -46,6 +46,10 @@ clean: ## Remove caches and build artifacts
 format: ## Format source with ruff (if installed)
 	uv run ruff format src tests || echo "ruff not installed; skipping"
 
+requirements: ## Export pinned requirements.txt (excluding editable installs)
+	uv pip freeze | grep -v '^-e' > requirements.txt
+	@echo "✓ Wrote requirements.txt ($$(wc -l < requirements.txt | tr -d ' ') packages)"
+
 help: ## Show this help
 	@awk 'BEGIN { \
 		printf "\n\033[1m\033[34m%s\033[0m\n", "mihomo-proxy-manager"; \

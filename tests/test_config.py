@@ -174,7 +174,7 @@ user_agent = "mihomo-proxy-manager/0.1"
 url = "https://example.com/sub"
 
 [sources.airport_a.fetch]
-user_agent = "clash.meta/1.19.5"
+user_agent = "bad-client/1.19.5"
 
 [sources.airport_a.fetch.headers]
 User-Agent = "custom-UA"
@@ -211,7 +211,34 @@ user_agent = "mihomo/1.19.5"
 url = "https://example.com/sub"
 
 [sources.airport_a.fetch]
+user_agent = "clash.meta/1.19.5"
+
+[routes.phone]
+path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml"
+sources = ["airport_a"]
+"""
+    config = load_config(write_config(temp_config_path, body), validate=False)
+    report = config.validate(config_path=temp_config_path)
+
+    assert report.ok
+
+
+def test_validation_accepts_clash_meta_dash_user_agent(
+    temp_config_path: Path,
+) -> None:
+    """测试验证接受 clash-meta 格式的 User-Agent。
+
+    Test that validation accepts the clash-meta User-Agent format.
+
+    Args:
+        temp_config_path: 临时配置文件路径 / Temporary config file path.
+    """
+    body = """
+[http]
 user_agent = "clash-meta/1.19.5"
+
+[sources.airport_a]
+url = "https://example.com/sub"
 
 [routes.phone]
 path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml"

@@ -5,7 +5,7 @@
 A small upstream provider service that turns multiple Clash/Mihomo subscriptions into stable, reusable provider feeds.
 
 [![CI](https://github.com/nerdneilsfield/mihomo-proxy-manager/actions/workflows/ci.yml/badge.svg)](https://github.com/nerdneilsfield/mihomo-proxy-manager/actions/workflows/ci.yml)
-[![Docker Image](https://img.shields.io/badge/docker-ghcr.io-2496ED?logo=docker&logoColor=white)](https://ghcr.io/nerdneislfield/mihomo-proxy-manager)
+[![Docker Image](https://img.shields.io/badge/docker-ghcr.io-2496ED?logo=docker&logoColor=white)](https://ghcr.io/nerdneilsfield/mihomo-proxy-manager)
 [![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13%20%7C%203.14-3776AB?logo=python&logoColor=white)](https://github.com/nerdneilsfield/mihomo-proxy-manager)
 [![License](https://img.shields.io/github/license/nerdneilsfield/mihomo-proxy-manager?color=blue)](https://github.com/nerdneilsfield/mihomo-proxy-manager/blob/main/LICENSE)
 [![Stars](https://img.shields.io/github/stars/nerdneilsfield/mihomo-proxy-manager?style=social)](https://github.com/nerdneilsfield/mihomo-proxy-manager/stargazers)
@@ -78,7 +78,7 @@ docker run --rm \
   -v "$PWD/examples/config.toml:/app/config.toml:ro" \
   -v "$PWD/data:/app/data" \
   -v "$PWD/logs:/app/logs" \
-  ghcr.io/nerdneislfield/mihomo-proxy-manager:latest
+  ghcr.io/nerdneilsfield/mihomo-proxy-manager:latest
 ```
 
 Or use the Docker Hub image:

@@ -42,7 +42,7 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: |
-            ghcr.io/nerdneislfield/mihomo-proxy-manager
+            ghcr.io/nerdneilsfield/mihomo-proxy-manager
             docker.io/${{ secrets.DOCKER_USERNAME }}/mihomo-proxy-manager
           tags: |
             type=semver,pattern={{raw}}

@@ -5,7 +5,7 @@
 把多个 Clash/Mihomo 订阅整理成稳定、可控、可复用的 provider 上游服务。
 
 [![CI](https://github.com/nerdneilsfield/mihomo-proxy-manager/actions/workflows/ci.yml/badge.svg)](https://github.com/nerdneilsfield/mihomo-proxy-manager/actions/workflows/ci.yml)
-[![Docker Image](https://img.shields.io/badge/docker-ghcr.io-2496ED?logo=docker&logoColor=white)](https://ghcr.io/nerdneislfield/mihomo-proxy-manager)
+[![Docker Image](https://img.shields.io/badge/docker-ghcr.io-2496ED?logo=docker&logoColor=white)](https://ghcr.io/nerdneilsfield/mihomo-proxy-manager)
 [![Python](https://img.shields.io/badge/python-3.12%20%7C%203.13%20%7C%203.14-3776AB?logo=python&logoColor=white)](https://github.com/nerdneilsfield/mihomo-proxy-manager)
 [![License](https://img.shields.io/github/license/nerdneilsfield/mihomo-proxy-manager?color=blue)](https://github.com/nerdneilsfield/mihomo-proxy-manager/blob/main/LICENSE)
 [![Stars](https://img.shields.io/github/stars/nerdneilsfield/mihomo-proxy-manager?style=social)](https://github.com/nerdneilsfield/mihomo-proxy-manager/stargazers)
@@ -78,7 +78,7 @@ docker run --rm \
   -v "$PWD/examples/config.toml:/app/config.toml:ro" \
   -v "$PWD/data:/app/data" \
   -v "$PWD/logs:/app/logs" \
-  ghcr.io/nerdneislfield/mihomo-proxy-manager:latest
+  ghcr.io/nerdneilsfield/mihomo-proxy-manager:latest
 ```
 
 也可以使用 Docker Hub 镜像：

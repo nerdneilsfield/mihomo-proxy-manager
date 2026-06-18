@@ -139,33 +139,33 @@ user_agent = []
 Run:
 
 ```bash
-rtk pytest tests/test_config.py -q
+rtk uv run pytest tests/test_config.py -q
 ```
 
 Expected: FAIL with missing `dns`/`access` attributes or unsupported top-level table `"dns"`.
 
 - [ ] **Step 3: Add dataclasses**
 
-In `src/mihomo_proxy_manager/models.py`, add:
+In `src/mihomo_proxy_manager/models.py`, add these config models with defaults so existing direct test constructors remain compatible:
 
 ```python
 @dataclass(frozen=True)
 class DnsConfig:
     """Global DNS resolution defaults."""
 
-    servers: tuple[str, ...]
-    timeout: timedelta
-    failure: Literal["keep", "drop", "fail"]
+    servers: tuple[str, ...] = ("udp://1.1.1.1:53",)
+    timeout: timedelta = field(default_factory=lambda: timedelta(seconds=5))
+    failure: Literal["keep", "drop", "fail"] = "keep"
 
 
 @dataclass(frozen=True)
 class SourceDnsConfig:
     """Per-source DNS resolution behavior."""
 
-    enabled: bool
-    servers: tuple[str, ...]
-    timeout: timedelta
-    failure: Literal["keep", "drop", "fail"]
+    enabled: bool = False
+    servers: tuple[str, ...] = ("udp://1.1.1.1:53",)
+    timeout: timedelta = field(default_factory=lambda: timedelta(seconds=5))
+    failure: Literal["keep", "drop", "fail"] = "keep"
 
 
 @dataclass(frozen=True)
@@ -175,7 +175,7 @@ class RouteAccessConfig:
     user_agent: tuple[str, ...] = ()
 ```
 
-Update existing dataclasses by adding these fields to the existing class definitions:
+Update existing dataclasses by adding these fields at the end of the existing class definitions. Keep defaulted fields at the end so dataclass field ordering stays valid:
 
 ```python
 class SourceConfig:
@@ -188,7 +188,7 @@ class SourceConfig:
     rename: RenameConfig
     filter: FilterConfig
     plugins: SourcePluginConfig
-    dns: SourceDnsConfig
+    dns: SourceDnsConfig = field(default_factory=SourceDnsConfig)
 
 
 class RouteConfig:
@@ -199,7 +199,7 @@ class RouteConfig:
     output: RouteOutputConfig
     rename: RenameConfig
     filter: FilterConfig
-    access: RouteAccessConfig
+    access: RouteAccessConfig = field(default_factory=RouteAccessConfig)
 
 
 class AppConfig:
@@ -208,7 +208,6 @@ class AppConfig:
     logging_console: LoggingSinkConfig
     logging_file: LoggingSinkConfig
     http: HttpConfig
-    dns: DnsConfig
     scheduler: SchedulerConfig
     security: SecurityConfig
     parser: ParserConfig
@@ -216,7 +215,16 @@ class AppConfig:
     sources: dict[str, SourceConfig]
     routes: dict[str, RouteConfig]
     plugins: dict[str, PluginConfig]
+    dns: DnsConfig = field(default_factory=DnsConfig)
 ```
+
+Before editing models, identify direct constructors that may be affected:
+
+```bash
+rtk grep -n "SourceConfig\\(|RouteConfig\\(|AppConfig\\(|LoadedConfig\\(" src tests
+```
+
+Expected current direct constructor sites include `tests/test_coverage_gaps.py`, `tests/test_logging.py`, `tests/test_plugins_refresher.py`, `tests/test_render.py`, and `tests/test_scheduler.py`. The default factories above should keep those call sites working; update them only if a test needs to assert DNS or access fields explicitly.
 
 - [ ] **Step 4: Add config parsing and validation**
 
@@ -305,6 +313,66 @@ def _validate_dns_servers(
 
 Update `allowed_top_level` to include `"dns"`, parse `dns_raw = _table(raw, "dns")`, construct `dns = _dns(dns_raw)`, pass it into source parsing, parse route access, and pass `dns=dns` into `LoadedConfig`.
 
+Use these exact constructor additions in `load_config()`:
+
+```python
+dns_raw = _table(raw, "dns")
+dns = _dns(dns_raw)
+```
+
+```python
+sources[name] = SourceConfig(
+    name=name,
+    url=values.get("url", ""),
+    format=values.get("format", parser.default_format),
+    parse_error=values.get("parse_error", parser.default_parse_error),
+    fetch=source_fetch,
+    refresh=_refresh(_table(values, "refresh")),
+    rename=_rename(_table(values, "rename")),
+    filter=_filter(_table(values, "filter")),
+    plugins=_source_plugins(_table(values, "plugins")),
+    dns=_source_dns(_table(values, "dns"), dns),
+)
+```
+
+```python
+routes[name] = RouteConfig(
+    name=name,
+    path=values.get("path", ""),
+    sources=tuple(values.get("sources", ())),
+    require_all_sources=bool(values.get("require_all_sources", False)),
+    output=RouteOutputConfig(
+        format=output_values.get("format", "provider"),
+        include_meta_comments=bool(
+            output_values.get(
+                "include_meta_comments", output.default_include_meta_comments
+            )
+        ),
+    ),
+    rename=_rename(_table(values, "rename")),
+    filter=_filter(_table(values, "filter")),
+    access=_route_access(_table(values, "access")),
+)
+```
+
+```python
+config = LoadedConfig(
+    server=server,
+    cache=cache,
+    logging_console=logging_console,
+    logging_file=logging_file,
+    http=http,
+    scheduler=scheduler,
+    security=security,
+    parser=parser,
+    output=output,
+    sources=sources,
+    routes=routes,
+    plugins=plugins,
+    dns=dns,
+)
+```
+
 In `LoadedConfig.validate()`, add:
 
 ```python
@@ -336,10 +404,10 @@ errors.extend(
 Run:
 
 ```bash
-rtk pytest tests/test_config.py -q
+rtk uv run pytest tests/test_config.py tests/test_logging.py tests/test_scheduler.py tests/test_render.py tests/test_plugins_refresher.py tests/test_coverage_gaps.py -q
 ```
 
-Expected: PASS.
+Expected: PASS. This verifies both new config behavior and compatibility for existing direct dataclass constructors.
 
 - [ ] **Step 6: Commit**
 
@@ -471,7 +539,7 @@ def test_health_ignores_route_user_agent_access(tmp_path) -> None:
 Run:
 
 ```bash
-rtk pytest tests/test_app.py -q
+rtk uv run pytest tests/test_app.py -q
 ```
 
 Expected: FAIL because route access is not enforced.
@@ -536,7 +604,7 @@ In `provider()`, immediately after route lookup succeeds and before `records = [
 Run:
 
 ```bash
-rtk pytest tests/test_app.py -q
+rtk uv run pytest tests/test_app.py -q
 ```
 
 Expected: PASS.
@@ -627,7 +695,7 @@ def test_decode_rejects_mismatched_transaction_id() -> None:
 Run:
 
 ```bash
-rtk pytest tests/test_dns.py -q
+rtk uv run pytest tests/test_dns.py -q
 ```
 
 Expected: FAIL because `mihomo_proxy_manager.dns` does not exist.
@@ -758,7 +826,7 @@ def _read_name(message: bytes, offset: int, *, depth: int = 0) -> tuple[str, int
         labels.append(label.decode("idna"))
         offset += length
     name = ".".join(item for item in labels if item)
-    return name, offset if jumped else offset
+    return name, offset
 ```
 
 ```python
@@ -822,7 +890,7 @@ def decode_addresses(
 Run:
 
 ```bash
-rtk pytest tests/test_dns.py -q
+rtk uv run pytest tests/test_dns.py -q
 ```
 
 Expected: PASS.
@@ -916,7 +984,7 @@ async def test_dns_client_rejects_oversized_doh_message() -> None:
 Run:
 
 ```bash
-rtk pytest tests/test_dns.py -q
+rtk uv run pytest tests/test_dns.py -q
 ```
 
 Expected: FAIL because `DnsClient` does not exist.
@@ -1097,7 +1165,7 @@ class _DnsDatagramProtocol(asyncio.DatagramProtocol):
 Run:
 
 ```bash
-rtk pytest tests/test_dns.py -q
+rtk uv run pytest tests/test_dns.py -q
 ```
 
 Expected: PASS.
@@ -1247,7 +1315,7 @@ async def test_resolver_drop_policy_removes_failed_records() -> None:
 Run:
 
 ```bash
-rtk pytest tests/test_dns.py -q
+rtk uv run pytest tests/test_dns.py -q
 ```
 
 Expected: FAIL because `DnsResolver` is missing.
@@ -1400,7 +1468,7 @@ class DnsResolver:
 Run:
 
 ```bash
-rtk pytest tests/test_dns.py -q
+rtk uv run pytest tests/test_dns.py -q
 ```
 
 Expected: PASS.
@@ -1577,7 +1645,7 @@ async def test_dns_enabled_source_skips_conditional_fetch_headers(tmp_path) -> N
 Run:
 
 ```bash
-rtk pytest tests/test_refresher_dns.py -q
+rtk uv run pytest tests/test_refresher_dns.py -q
 ```
 
 Expected: FAIL because `SourceRefresher.__init__` has no `dns_resolver` parameter and does not call DNS.
@@ -1653,6 +1721,7 @@ In `src/mihomo_proxy_manager/cli.py`, find construction of `SafeHttpClient`, `Su
 
 ```python
 from .dns import DnsClient, DnsResolver
+from .models import HttpConfig
 ```
 
 Replace the runtime HTTP component construction in `_build_runtime()` with explicit shared `SafeHttpClient` instances:
@@ -1660,7 +1729,13 @@ Replace the runtime HTTP component construction in `_build_runtime()` with expli
 ```python
 client = httpx.AsyncClient(cookies=_NoOpCookies())
 plugin_safe_http = SafeHttpClient(client, config.http)
-dns_safe_http = SafeHttpClient(client, config.http)
+dns_http_config = HttpConfig(
+    timeout=config.http.timeout,
+    user_agent=config.http.user_agent,
+    max_response_size=4096,
+    max_redirects=config.http.max_redirects,
+)
+dns_safe_http = SafeHttpClient(client, dns_http_config)
 fetcher = SubscriptionFetcher(client, config.http)
 plugin = HttpActionPlugin(plugin_safe_http)
 dns_client = DnsClient(safe_http=dns_safe_http)
@@ -1689,7 +1764,7 @@ refresher = SourceRefresher(
 Run:
 
 ```bash
-rtk pytest tests/test_refresher_dns.py -q
+rtk uv run pytest tests/test_refresher_dns.py -q
 ```
 
 Expected: PASS.
@@ -1699,7 +1774,7 @@ Expected: PASS.
 Run:
 
 ```bash
-rtk pytest tests/test_config.py tests/test_app.py tests/test_dns.py tests/test_refresher_dns.py tests/test_coverage_gaps.py -q
+rtk uv run pytest tests/test_config.py tests/test_app.py tests/test_dns.py tests/test_refresher_dns.py tests/test_coverage_gaps.py -q
 ```
 
 Expected: PASS.
@@ -1788,12 +1863,12 @@ Do not enable DNS for existing sample sources unless the user wants it.
 Run:
 
 ```bash
-rtk ruff check
-rtk ty check
-rtk pytest -q
+rtk uv run ruff check
+rtk uv run ty check
+rtk uv run pytest -q
 ```
 
-Expected: all pass. If `rtk ty check` is not the project command, use the existing project type-check command from `Makefile` or skip only with a note in the final report.
+Expected: all pass. If `rtk uv run ty check` is not the project command, use the existing project type-check command from `Makefile` or skip only with a note in the final report.
 
 - [ ] **Step 5: Commit**
 
@@ -1804,11 +1879,11 @@ rtk git commit -m "docs: document dns and user agent access config"
 
 ## Final Verification Checklist
 
-- [ ] `rtk pytest tests/test_config.py -q` passes.
-- [ ] `rtk pytest tests/test_app.py -q` passes.
-- [ ] `rtk pytest tests/test_dns.py -q` passes.
-- [ ] `rtk pytest tests/test_refresher_dns.py -q` passes.
-- [ ] `rtk pytest -q` passes.
-- [ ] `rtk ruff check` passes.
+- [ ] `rtk uv run pytest tests/test_config.py -q` passes.
+- [ ] `rtk uv run pytest tests/test_app.py -q` passes.
+- [ ] `rtk uv run pytest tests/test_dns.py -q` passes.
+- [ ] `rtk uv run pytest tests/test_refresher_dns.py -q` passes.
+- [ ] `rtk uv run pytest -q` passes.
+- [ ] `rtk uv run ruff check` passes.
 - [ ] Type check command passes or skipped with a concrete reason.
 - [ ] Manual config check succeeds with a config containing `[dns]`, `[sources.<name>.dns]`, and `[routes.<name>.access]`.

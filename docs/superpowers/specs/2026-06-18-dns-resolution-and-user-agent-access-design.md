@@ -60,13 +60,24 @@ Validation rejects empty `servers`, unsupported schemes, missing hosts, invalid 
 
 ## DNS Resolution Behavior
 
-The resolver only examines proxy records whose `data["server"]` is a domain name. It leaves IP literals, missing values, empty strings, and non-string values unchanged.
+The resolver only examines proxy records whose `data["server"]` is a domain name. It leaves IP literals, missing values, empty strings, and non-string values unchanged. It must work on copied proxy data and must not mutate the input `ProxyRecord` objects in place.
 
 Resolution uses the source DNS server list in order. For a node, the resolver queries the first server; if it fails or times out, it tries the next server. The first successful IP address is used. If every server fails, the source-level `failure` policy decides whether to keep, drop, or fail.
 
-Only `data["server"]` is rewritten. TLS and HTTP host fields such as `sni`, `servername`, `ws-opts.headers.Host`, plugin options, and names remain unchanged so the upstream protocol handshake still uses the original host metadata when required.
+The top-level `data["server"]` field is the target field to rewrite. Host metadata fields are not interchangeable with `server`:
 
-The resolver should support A and AAAA answers. If both are available, use the first address returned by the DNS response. Address family preference is not part of this feature.
+- Existing `servername`, `sni`, `ws-opts.headers.Host`, plugin options, and names must be preserved exactly and must not be overwritten with the resolved IP.
+- If a TLS-like node has no explicit `servername` or `sni`, the resolver should add `servername` with the original domain before replacing `server`, so Mihomo does not implicitly use the resolved IP as the TLS hostname.
+- If a WebSocket node has no explicit `ws-opts.headers.Host`, the resolver should add that Host value with the original domain before replacing `server`, so virtual-host routing remains stable.
+- Existing explicit host metadata always wins. The resolver only fills missing metadata needed to preserve the original hostname semantics.
+
+The resolver supports A and AAAA answers with deterministic selection. For each DNS server, query A first. If the A response has at least one usable address, use the first A address from that response. If no A address is usable, query AAAA and use the first usable AAAA address. IPv6 addresses are written as plain string values in `server`. Address family preference configuration is not part of this feature.
+
+Any server attempt that produces no usable address counts as a failed attempt for that server. This includes timeout, transport failure, malformed or mismatched response, truncated UDP response, SERVFAIL, REFUSED, NXDOMAIN, NODATA, CNAME-only response with no final A/AAAA answer, or response without a matching question. The resolver then tries the next configured server. After all configured servers fail, the source-level `failure` policy applies.
+
+When `failure = "drop"` removes every transformed proxy from a source, the source refresh fails with the same stale-cache behavior as other refresh failures. Successful cache writes must never contain an empty proxy list.
+
+DNS-enabled sources should not use conditional subscription fetches. Because the cache stores resolved `server` values, a `304 Not Modified` response would not provide the original domains needed for re-resolution after DNS answers, DNS config, or failure policy changes. For DNS-enabled sources, refresh should fetch the full subscription body without `If-None-Match` or `If-Modified-Since`.
 
 ## DNS Protocol Implementation
 
@@ -76,9 +87,17 @@ Implement a small internal DNS client module rather than introducing a large dep
 - Decode DNS wire-format responses enough to read A and AAAA answers.
 - Support UDP with a single request/response exchange.
 - Support TCP and TLS using DNS-over-TCP framing with a two-byte length prefix.
-- Support DNS-over-HTTPS by POSTing `application/dns-message` to the configured endpoint with the existing HTTP stack or a small local HTTPX client.
+- Support DNS-over-HTTPS by POSTing `application/dns-message` to the configured endpoint.
 
-Each server attempt uses the configured timeout. The source refresh remains async.
+DoH and DoT must preserve the existing network safety posture:
+
+- DoH must bound response size, avoid unsafe redirects, redact configured endpoint secrets in errors, and avoid leaking raw DNS payloads in logs.
+- DoT must use `ssl.create_default_context`, pass the DNS server host as `server_hostname`, validate certificates, and avoid plaintext fallback.
+- TCP, TLS, and DoH responses must enforce reasonable DNS message size bounds.
+
+Each server attempt uses the configured timeout. DNS work in the source refresh remains async, cancellation-safe, and must close sockets or HTTP responses on cancellation. The resolver should process nodes with bounded per-source concurrency so `nodes x servers x A/AAAA x timeout` does not serialize the entire refresh unnecessarily.
+
+`SourceRefresher` should receive a resolver dependency through its constructor or another explicit injection point. Tests must be able to use a fake resolver without real DNS or monkeypatching private implementation details.
 
 ## User-Agent Access Configuration
 
@@ -107,7 +126,9 @@ DNS warnings are source refresh warnings and are stored with the source cache wh
 
 For `failure = "fail"`, the refresh result becomes a failed refresh and stale cache behavior remains the same as existing refresh failures.
 
-Route User-Agent denials should log route name and a sanitized `User-Agent` value at debug or info level. They should not trigger source refresh.
+For successful DNS-enabled refreshes, DNS warnings are appended to parser warnings, stored in `SourceCache.warnings`, and included in `RefreshResult.warning_count`. Warning fields derived from proxy names or DNS errors must be sanitized and length-limited because subscription content is attacker-controlled.
+
+Route User-Agent denials should log route name and a sanitized `User-Agent` value at debug or info level. Sanitization strips control characters and truncates long values. Denials must run immediately after route lookup and before cache reads, background refresh spawning, blocking refresh waits, or rendering.
 
 ## Testing Strategy
 
@@ -125,7 +146,26 @@ DNS resolver tests cover:
 - IP literals and non-domain values are unchanged.
 - Ordered failover tries the second server after the first fails.
 - `keep`, `drop`, and `fail` failure policies.
-- TLS/HTTP host metadata is preserved when `server` is rewritten.
+- Existing `servername`, `sni`, `ws-opts.headers.Host`, plugin options, and names are preserved when `server` is rewritten.
+- Missing `servername` and WebSocket Host metadata are filled with the original domain only when needed to preserve hostname semantics.
+- Input `ProxyRecord` objects are not mutated.
+- `drop` failure that removes every node fails the refresh rather than writing an empty cache.
+
+DNS client tests cover:
+
+- DNS query encoding for A and AAAA.
+- DNS response decoding for A, AAAA, compressed names, NXDOMAIN, NODATA, CNAME-only responses, malformed responses, mismatched transaction IDs, and truncated packets.
+- TCP and TLS two-byte length framing.
+- DoH uses POST with `application/dns-message`, bounds response size, and parses response messages.
+- UDP, TCP, TLS, and DoH transports are tested with fake/injected transports and do not use real network.
+
+Refresher integration tests cover:
+
+- Disabled DNS makes no resolver calls.
+- Enabled DNS runs after source rename/filter and before cache write.
+- DNS-enabled refresh does not send conditional request validators.
+- DNS warnings are appended to parser warnings and reflected in `RefreshResult.warning_count`.
+- `failure = "fail"` preserves stale cache and records `last_error`.
 
 Provider route tests cover:
 
@@ -134,6 +174,10 @@ Provider route tests cover:
 - Non-matching `User-Agent` is forbidden.
 - Matching `User-Agent` receives provider YAML.
 - Health and status endpoints ignore route access patterns.
+- Missing or non-matching `User-Agent` returns before `cache_store.get`, `refresher.refresh`, background refresh spawning, or rendering.
+- Matching is case-sensitive: `mihomo/1.19.5` matches `mihomo/*`, while `Mihomo/1.19.5` does not.
+- Empty configured pattern lists behave like omitted access config and keep the route open.
+- Logged denied `User-Agent` values are sanitized and length-limited.
 
 ## Non-Goals
 

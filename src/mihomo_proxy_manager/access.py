@@ -15,7 +15,9 @@ def user_agent_allowed(config: RouteAccessConfig, user_agent: str | None) -> boo
         return True
     if not user_agent:
         return False
-    return any(fnmatch.fnmatchcase(user_agent, pattern) for pattern in config.user_agent)
+    return any(
+        fnmatch.fnmatchcase(user_agent, pattern) for pattern in config.user_agent
+    )
 
 
 def sanitize_user_agent(value: str | None, *, limit: int = 200) -> str:

@@ -555,6 +555,12 @@ class ExplodingCacheStore:
     async def get(self, source_name: str):
         raise AssertionError("cache must not be read")
 
+    async def set(self, source_name: str, cache) -> None:
+        raise AssertionError("cache must not be written")
+
+    async def status(self, source_name: str):
+        raise AssertionError("cache must not be queried")
+
     def set_refreshing(self, source_name: str, refreshing: bool) -> None:
         raise AssertionError("refresh state must not change")
 

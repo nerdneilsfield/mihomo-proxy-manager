@@ -11,7 +11,7 @@ import struct
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Protocol
+from typing import Any, Protocol, cast
 from urllib.parse import parse_qs, urlparse
 
 from loguru import logger
@@ -72,7 +72,9 @@ def validate_dns_endpoint_static(
                 resolve_dns=False,
             )
         except SecurityError as exc:
-            raise ValueError(f"DNS server resolves to non-public address: {exc}") from exc
+            raise ValueError(
+                f"DNS server resolves to non-public address: {exc}"
+            ) from exc
         return
     try:
         assert_safe_url(
@@ -167,7 +169,9 @@ def decode_addresses(
         qname, offset = _read_name(message, offset)
         if offset + 4 > len(message):
             raise DnsMessageError("truncated question")
-        question_type, question_class = struct.unpack("!HH", message[offset : offset + 4])
+        question_type, question_class = struct.unpack(
+            "!HH", message[offset : offset + 4]
+        )
         offset += 4
         if qname.rstrip(".").lower() != name.rstrip(".").lower():
             raise DnsMessageError("question name mismatch")
@@ -216,7 +220,7 @@ async def validate_dns_endpoint_runtime(
     addresses: list[str] = []
     seen: set[str] = set()
     for info in infos:
-        ip = info[4][0]
+        ip = str(info[4][0])
         if ip in seen:
             continue
         seen.add(ip)
@@ -226,13 +230,13 @@ async def validate_dns_endpoint_runtime(
             except ValueError as exc:
                 raise ValueError(f"unparseable DNS server address: {ip!r}") from exc
             if parsed_ip.is_private or parsed_ip.is_loopback or parsed_ip.is_link_local:
-                raise ValueError(
-                    f"DNS server resolves to non-public address: {ip}"
-                )
-            if parsed_ip.is_multicast or parsed_ip.is_reserved or parsed_ip.is_unspecified:
-                raise ValueError(
-                    f"DNS server resolves to non-public address: {ip}"
-                )
+                raise ValueError(f"DNS server resolves to non-public address: {ip}")
+            if (
+                parsed_ip.is_multicast
+                or parsed_ip.is_reserved
+                or parsed_ip.is_unspecified
+            ):
+                raise ValueError(f"DNS server resolves to non-public address: {ip}")
         addresses.append(ip)
     if not addresses:
         raise ValueError(f"DNS server has no usable address: {endpoint.host!r}")
@@ -256,11 +260,7 @@ class DnsClient:
         resolved_ips = await validate_dns_endpoint_runtime(
             endpoint, allow_private_network=allow_private_network
         )
-        tid = (
-            transaction_id
-            if transaction_id is not None
-            else secrets.randbelow(65536)
-        )
+        tid = transaction_id if transaction_id is not None else secrets.randbelow(65536)
         query = build_query(name, qtype, transaction_id=tid)
         if endpoint.scheme == "https":
             response = await self._query_https(
@@ -392,10 +392,12 @@ class DnsClient:
 class _DnsDatagramProtocol(asyncio.DatagramProtocol):
     def __init__(self, query: bytes) -> None:
         self.query = query
-        self.response: asyncio.Future[bytes] = asyncio.get_running_loop().create_future()
+        self.response: asyncio.Future[bytes] = (
+            asyncio.get_running_loop().create_future()
+        )
 
-    def connection_made(self, transport: asyncio.BaseTransport) -> None:
-        transport.sendto(self.query)  # type: ignore[attr-defined]
+    def connection_made(self, transport: asyncio.DatagramTransport) -> None:
+        transport.sendto(self.query)
 
     def datagram_received(self, data: bytes, addr: object) -> None:
         if len(data) > DNS_UDP_MAX_SIZE:
@@ -423,6 +425,16 @@ class DnsClientProtocol(Protocol):
         raise NotImplementedError
 
 
+class DnsResolverProtocol(Protocol):
+    async def resolve_records(
+        self,
+        records: list[ProxyRecord],
+        config: SourceDnsConfig,
+        *,
+        source: str,
+    ) -> tuple[list[ProxyRecord], list[str]]: ...
+
+
 def _is_ip_literal(value: str) -> bool:
     try:
         ipaddress.ip_address(value)
@@ -443,19 +455,23 @@ def _preserve_host_metadata(data: dict[str, object], original_host: str) -> None
     if _is_tls_like(data) and "servername" not in data and "sni" not in data:
         data["servername"] = original_host
     if _is_ws(data):
-        ws_opts = data.get("ws-opts")
-        if not isinstance(ws_opts, dict):
-            ws_opts = {}
-            data["ws-opts"] = ws_opts
-        headers = ws_opts.get("headers")
-        if not isinstance(headers, dict):
-            headers = {}
-            ws_opts["headers"] = headers
+        ws_opts_raw = data.get("ws-opts")
+        if not isinstance(ws_opts_raw, dict):
+            ws_opts_raw = {}
+            data["ws-opts"] = ws_opts_raw
+        ws_opts = cast(dict[str, Any], ws_opts_raw)
+        headers_raw = ws_opts.get("headers")
+        if not isinstance(headers_raw, dict):
+            headers_raw = {}
+            ws_opts["headers"] = headers_raw
+        headers = cast(dict[str, Any], headers_raw)
         headers.setdefault("Host", original_host)
 
 
 class DnsResolver:
-    def __init__(self, *, client: DnsClientProtocol, allow_private_network: bool) -> None:
+    def __init__(
+        self, *, client: DnsClientProtocol, allow_private_network: bool
+    ) -> None:
         self.client = client
         self.allow_private_network = allow_private_network
 
@@ -481,7 +497,9 @@ class DnsResolver:
 
         async def resolve_one(record: ProxyRecord) -> ProxyRecord | None:
             async with semaphore:
-                return await self._resolve_one(record, config, endpoints, source, warnings)
+                return await self._resolve_one(
+                    record, config, endpoints, source, warnings
+                )
 
         resolved = await asyncio.gather(*(resolve_one(record) for record in records))
         kept = [record for record in resolved if record is not None]

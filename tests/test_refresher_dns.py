@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 import pytest
 
@@ -61,7 +62,9 @@ class FakeResolver:
         return self.records, self.warnings
 
 
-def _source_config(*, dns_enabled: bool, failure: str = "keep") -> SourceConfig:
+def _source_config(
+    *, dns_enabled: bool, failure: Literal["keep", "drop", "fail"] = "keep"
+) -> SourceConfig:
     return SourceConfig(
         name="airport_a",
         url="https://example.com/sub",
@@ -76,7 +79,7 @@ def _source_config(*, dns_enabled: bool, failure: str = "keep") -> SourceConfig:
             dns_enabled,
             ("udp://1.1.1.1:53",),
             timedelta(seconds=5),
-            failure,  # type: ignore[arg-type]
+            failure,
         ),
     )
 

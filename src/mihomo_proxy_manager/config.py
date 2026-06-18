@@ -429,9 +429,7 @@ class LoadedConfig(AppConfig):
         errors: list[str] = []
         warnings: list[str] = []
 
-        http_user_agent_error = _validate_user_agent(
-            self.http.user_agent, label="http"
-        )
+        http_user_agent_error = _validate_user_agent(self.http.user_agent, label="http")
         if http_user_agent_error:
             errors.append(http_user_agent_error)
 

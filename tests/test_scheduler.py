@@ -392,7 +392,9 @@ async def test_scheduler_start_failure_stops_pending_tasks(tmp_path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _config_with_cron(tmp_path, cron_expr: str, *, startup_refresh: bool = False) -> AppConfig:
+def _config_with_cron(
+    tmp_path, cron_expr: str, *, startup_refresh: bool = False
+) -> AppConfig:
     """Create a config whose source has a cron expression / 创建带 cron 的配置。"""
     import dataclasses
 

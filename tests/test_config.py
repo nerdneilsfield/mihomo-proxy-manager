@@ -520,4 +520,3 @@ user_agent = []
     config = load_config(write_config(temp_config_path, body))
 
     assert config.routes["phone"].access.user_agent == ()
-

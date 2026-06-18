@@ -74,9 +74,7 @@ def test_read_name_rejects_reserved_label_type() -> None:
     # Replace the qname length byte 0x07 with 0x40 (reserved label type)
     corrupted = query[:12] + b"\x40" + query[13:]
     response = (
-        corrupted[:2]
-        + b"\x81\x80\x00\x01\x00\x00\x00\x00\x00\x00"
-        + corrupted[12:]
+        corrupted[:2] + b"\x81\x80\x00\x01\x00\x00\x00\x00\x00\x00" + corrupted[12:]
     )
     with pytest.raises(DnsMessageError, match="reserved DNS label type"):
         decode_addresses(response, "example.com", "A", transaction_id=0x1234)
@@ -190,7 +188,9 @@ async def test_resolver_rewrites_server_and_preserves_existing_servername() -> N
     ]
     config = SourceDnsConfig(True, ("udp://1.1.1.1:53",), timedelta(seconds=5), "keep")
 
-    resolved, warnings = await resolver.resolve_records(records, config, source="airport_a")
+    resolved, warnings = await resolver.resolve_records(
+        records, config, source="airport_a"
+    )
 
     assert warnings == []
     assert resolved[0].data["server"] == "93.184.216.34"
@@ -217,7 +217,9 @@ async def test_resolver_fills_missing_tls_servername_and_ws_host() -> None:
     ]
     config = SourceDnsConfig(True, ("udp://1.1.1.1:53",), timedelta(seconds=5), "keep")
 
-    resolved, warnings = await resolver.resolve_records(records, config, source="airport_a")
+    resolved, warnings = await resolver.resolve_records(
+        records, config, source="airport_a"
+    )
 
     data = resolved[0].data
     assert warnings == []
@@ -243,7 +245,9 @@ async def test_resolver_failover_uses_second_server() -> None:
         "keep",
     )
 
-    resolved, warnings = await resolver.resolve_records(records, config, source="airport_a")
+    resolved, warnings = await resolver.resolve_records(
+        records, config, source="airport_a"
+    )
 
     assert warnings == []
     assert resolved[0].data["server"] == "93.184.216.34"
@@ -272,7 +276,9 @@ async def test_resolver_queries_aaaa_when_enable_ipv6_is_true() -> None:
         enable_ipv6=True,
     )
 
-    resolved, warnings = await resolver.resolve_records(records, config, source="airport_a")
+    resolved, warnings = await resolver.resolve_records(
+        records, config, source="airport_a"
+    )
 
     assert warnings == []
     assert resolved[0].data["server"] == "93.184.216.34"
@@ -290,7 +296,9 @@ async def test_resolver_drop_policy_removes_failed_records() -> None:
     records = [ProxyRecord("airport_a", {"name": "HK", "server": "example.com"})]
     config = SourceDnsConfig(True, ("udp://1.1.1.1:53",), timedelta(seconds=5), "drop")
 
-    resolved, warnings = await resolver.resolve_records(records, config, source="airport_a")
+    resolved, warnings = await resolver.resolve_records(
+        records, config, source="airport_a"
+    )
 
     assert resolved == []
     assert len(warnings) == 1
@@ -336,14 +344,25 @@ async def test_resolver_warning_includes_error_type_for_empty_str_exc() -> None:
             return ""
 
     class _EmptyStrClient:
-        async def query(self, endpoint, name, qtype, *, timeout, allow_private_network, transaction_id=None):
+        async def query(
+            self,
+            endpoint,
+            name,
+            qtype,
+            *,
+            timeout,
+            allow_private_network,
+            transaction_id=None,
+        ):
             raise _EmptyStrError()
 
     resolver = DnsResolver(client=_EmptyStrClient(), allow_private_network=False)
     records = [ProxyRecord("airport_a", {"name": "HK", "server": "example.com"})]
     config = SourceDnsConfig(True, ("udp://1.1.1.1:53",), timedelta(seconds=5), "keep")
 
-    _resolved, warnings = await resolver.resolve_records(records, config, source="airport_a")
+    _resolved, warnings = await resolver.resolve_records(
+        records, config, source="airport_a"
+    )
 
     assert len(warnings) == 1
     assert "_EmptyStrError" in warnings[0]

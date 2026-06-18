@@ -13,7 +13,7 @@ from typing import Any
 from loguru import logger
 
 from .cache import CURRENT_SCHEMA_VERSION, SourceCacheStore
-from .dns import DnsResolver
+from .dns import DnsResolverProtocol
 from .models import PluginConfig, SourceCache, SourceConfig
 from .parsers import ParseError, parse_subscription
 from .plugins.http_action import HttpActionPlugin, PluginContext
@@ -51,7 +51,7 @@ class SourceRefresher:
         fetcher: Any,
         http_plugin: HttpActionPlugin | None,
         refresh_lock_timeout: timedelta,
-        dns_resolver: DnsResolver | None = None,
+        dns_resolver: DnsResolverProtocol | None = None,
     ) -> None:
         """初始化 SourceRefresher。
 

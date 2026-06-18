@@ -14,6 +14,8 @@ from datetime import timedelta
 from typing import Protocol
 from urllib.parse import parse_qs, urlparse
 
+from loguru import logger
+
 from .fetcher import SafeHttpClient
 from .models import ProxyRecord, SourceDnsConfig
 from .security import SecurityError, assert_safe_url, redact_secret
@@ -467,6 +469,13 @@ class DnsResolver:
         if not config.enabled:
             return records, []
         endpoints = [parse_dns_endpoint(value) for value in config.servers]
+        logger.debug(
+            "dns resolve start: source={source} nodes={nodes} endpoints={endpoints} failure={failure}",
+            source=source,
+            nodes=len(records),
+            endpoints=len(endpoints),
+            failure=config.failure,
+        )
         semaphore = asyncio.Semaphore(DNS_NODE_CONCURRENCY)
         warnings: list[str] = []
 
@@ -481,6 +490,14 @@ class DnsResolver:
             warnings = warnings[:DNS_WARNING_LIMIT] + [
                 f"dns warning limit reached for source {source!r}; omitted {omitted} warnings"
             ]
+        logger.info(
+            "dns resolve done: source={source} input={input} kept={kept} dropped={dropped} warnings={warnings}",
+            source=source,
+            input=len(records),
+            kept=len(kept),
+            dropped=len(records) - len(kept),
+            warnings=len(warnings),
+        )
         return kept, warnings
 
     async def _resolve_one(
@@ -507,16 +524,39 @@ class DnsResolver:
                     )
                 except Exception as exc:
                     last_error = redact_secret(str(exc))[:200]
+                    logger.debug(
+                        "dns query failed: source={source} server={server} scheme={scheme} qtype={qtype} error={error}",
+                        source=source,
+                        server=server,
+                        scheme=endpoint.scheme,
+                        qtype=qtype,
+                        error=last_error,
+                    )
                     continue
                 if addresses:
                     data = deepcopy(record.data)
                     _preserve_host_metadata(data, server)
                     data["server"] = addresses[0]
+                    logger.debug(
+                        "dns query ok: source={source} server={server} scheme={scheme} qtype={qtype} ip={ip}",
+                        source=source,
+                        server=server,
+                        scheme=endpoint.scheme,
+                        qtype=qtype,
+                        ip=addresses[0],
+                    )
                     return ProxyRecord(record.source, data)
         proxy_name = str(record.data.get("name", "<unnamed>"))[:120]
         warning = (
             f"dns resolution failed: source={source!r} proxy={proxy_name!r} "
             f"server={server!r} error={last_error}"
+        )
+        logger.warning(
+            "dns resolution failed: source={source} proxy={proxy} server={server} failure={failure}",
+            source=source,
+            proxy=proxy_name,
+            server=server,
+            failure=config.failure,
         )
         if config.failure == "keep":
             warnings.append(warning)

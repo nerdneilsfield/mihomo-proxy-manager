@@ -70,7 +70,7 @@ mpm refresh -c examples/config.toml airport_a
 
 ### Docker 运行
 
-使用预构建镜像：
+可以使用 GHCR 镜像：
 
 ```bash
 docker run --rm \
@@ -79,6 +79,17 @@ docker run --rm \
   -v "$PWD/data:/app/data" \
   -v "$PWD/logs:/app/logs" \
   ghcr.io/nerdneislfield/mihomo-proxy-manager:latest
+```
+
+也可以使用 Docker Hub 镜像：
+
+```bash
+docker run --rm \
+  -p 8080:8080 \
+  -v "$PWD/examples/config.toml:/app/config.toml:ro" \
+  -v "$PWD/data:/app/data" \
+  -v "$PWD/logs:/app/logs" \
+  docker.io/nerdneils/mihomo-proxy-manager:latest
 ```
 
 本地构建镜像：

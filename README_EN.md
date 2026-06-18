@@ -70,7 +70,7 @@ mpm refresh -c examples/config.toml airport_a
 
 ### Run With Docker
 
-Use the prebuilt image:
+Use the GHCR image:
 
 ```bash
 docker run --rm \
@@ -79,6 +79,17 @@ docker run --rm \
   -v "$PWD/data:/app/data" \
   -v "$PWD/logs:/app/logs" \
   ghcr.io/nerdneislfield/mihomo-proxy-manager:latest
+```
+
+Or use the Docker Hub image:
+
+```bash
+docker run --rm \
+  -p 8080:8080 \
+  -v "$PWD/examples/config.toml:/app/config.toml:ro" \
+  -v "$PWD/data:/app/data" \
+  -v "$PWD/logs:/app/logs" \
+  docker.io/nerdneils/mihomo-proxy-manager:latest
 ```
 
 Build locally:

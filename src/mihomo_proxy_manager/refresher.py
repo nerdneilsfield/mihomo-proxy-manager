@@ -13,6 +13,7 @@ from typing import Any
 from loguru import logger
 
 from .cache import CURRENT_SCHEMA_VERSION, SourceCacheStore
+from .dns import DnsResolver
 from .models import PluginConfig, SourceCache, SourceConfig
 from .parsers import ParseError, parse_subscription
 from .plugins.http_action import HttpActionPlugin, PluginContext
@@ -50,6 +51,7 @@ class SourceRefresher:
         fetcher: Any,
         http_plugin: HttpActionPlugin | None,
         refresh_lock_timeout: timedelta,
+        dns_resolver: DnsResolver | None = None,
     ) -> None:
         """初始化 SourceRefresher。
 
@@ -62,6 +64,7 @@ class SourceRefresher:
             fetcher: HTTP 抓取器实例 / HTTP fetcher instance.
             http_plugin: HTTP Action 插件实例，可为 None / HTTP Action plugin instance, may be None.
             refresh_lock_timeout: 刷新锁超时时间 / Refresh lock timeout.
+            dns_resolver: DNS 解析器实例，可为 None / DNS resolver instance, may be None.
         """
         self.sources = sources
         self.plugins = plugins
@@ -69,6 +72,7 @@ class SourceRefresher:
         self.fetcher = fetcher
         self.http_plugin = http_plugin
         self.refresh_lock_timeout = refresh_lock_timeout
+        self.dns_resolver = dns_resolver
         self._locks: dict[str, asyncio.Lock] = {}
         self._inflight: dict[str, asyncio.Task[RefreshResult]] = {}
 
@@ -207,11 +211,17 @@ class SourceRefresher:
                     ok=result.ok,
                 )
 
+            etag = old_cache.etag if old_cache and not source.dns.enabled else None
+            last_modified = (
+                old_cache.last_modified
+                if old_cache and not source.dns.enabled
+                else None
+            )
             fetched = await self.fetcher.fetch(
                 source.url,
                 source.fetch,
-                etag=old_cache.etag if old_cache else None,
-                last_modified=old_cache.last_modified if old_cache else None,
+                etag=etag,
+                last_modified=last_modified,
             )
             if fetched.not_modified and old_cache:
                 logger.info(
@@ -261,6 +271,16 @@ class SourceRefresher:
                 nodes=len(transformed),
                 filtered=len(parsed.records) - len(transformed),
             )
+            warnings = list(parsed.warnings)
+            if source.dns.enabled:
+                if self.dns_resolver is None:
+                    raise RuntimeError("dns resolver is not configured")
+                transformed, dns_warnings = await self.dns_resolver.resolve_records(
+                    transformed,
+                    source.dns,
+                    source=source_name,
+                )
+                warnings.extend(dns_warnings)
             if not transformed:
                 raise ParseError("no usable proxies after source transform")
             cache = SourceCache(
@@ -271,7 +291,7 @@ class SourceRefresher:
                 etag=fetched.etag,
                 last_modified=fetched.last_modified,
                 node_count=len(transformed),
-                warnings=tuple(parsed.warnings),
+                warnings=tuple(warnings),
                 last_error=None,
                 proxies=tuple(transformed),
             )
@@ -280,13 +300,13 @@ class SourceRefresher:
                 "refresh success: source={source} nodes={nodes} warnings={warnings}",
                 source=source_name,
                 nodes=len(transformed),
-                warnings=len(parsed.warnings),
+                warnings=len(warnings),
             )
             return RefreshResult(
                 True,
                 source_name,
                 len(transformed),
-                len(parsed.warnings),
+                len(warnings),
                 self.cache_store.cache_path(source_name),
             )
         except Exception as exc:

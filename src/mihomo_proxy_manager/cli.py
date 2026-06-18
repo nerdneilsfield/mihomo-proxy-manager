@@ -15,8 +15,10 @@ import uvicorn
 from .app import create_app
 from .cache import JsonSourceCacheStore
 from .config import load_config
+from .dns import DnsClient, DnsResolver
 from .fetcher import SafeHttpClient, SubscriptionFetcher, _NoOpCookies
 from .logging import configure_logging
+from .models import HttpConfig
 from .plugins.http_action import HttpActionPlugin
 from .refresher import SourceRefresher
 from .scheduler import RefreshScheduler
@@ -98,8 +100,21 @@ async def _build_runtime(config_path: str, *, debug: bool = False):
     configure_logging(config, debug=debug)
     cache_store = JsonSourceCacheStore(config.cache)
     client = httpx.AsyncClient(cookies=_NoOpCookies())
+    plugin_safe_http = SafeHttpClient(client, config.http)
+    dns_http_config = HttpConfig(
+        timeout=config.http.timeout,
+        user_agent=config.http.user_agent,
+        max_response_size=4096,
+        max_redirects=config.http.max_redirects,
+    )
+    dns_safe_http = SafeHttpClient(client, dns_http_config)
     fetcher = SubscriptionFetcher(client, config.http)
-    plugin = HttpActionPlugin(SafeHttpClient(client, config.http))
+    plugin = HttpActionPlugin(plugin_safe_http)
+    dns_client = DnsClient(safe_http=dns_safe_http)
+    dns_resolver = DnsResolver(
+        client=dns_client,
+        allow_private_network=config.security.allow_private_network_urls,
+    )
     refresher = SourceRefresher(
         sources=config.sources,
         plugins=config.plugins,
@@ -107,6 +122,7 @@ async def _build_runtime(config_path: str, *, debug: bool = False):
         fetcher=fetcher,
         http_plugin=plugin,
         refresh_lock_timeout=config.scheduler.refresh_lock_timeout,
+        dns_resolver=dns_resolver,
     )
     return config, cache_store, client, refresher
 

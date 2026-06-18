@@ -54,6 +54,19 @@ default_parse_error = "skip"
 yaml_sort_keys = false
 default_include_meta_comments = false
 
+# Global DNS defaults. Per-source [sources.<name>.dns] can override these.
+# DNS resolution is opt-in; sources are not resolved unless they set enabled = true.
+# Servers support udp://, tcp://, https:// (DoH), and tls:// (DoT) schemes.
+# Servers are tried in order; on failure the next is used.
+[dns]
+servers = [
+    "udp://1.1.1.1:53",
+    "tls://1.1.1.1:853?servername=cloudflare-dns.com",
+    "https://dns.google/dns-query",
+]
+timeout = "5s"
+failure = "keep"
+
 # Source A: authenticated upstream subscription.
 [sources.airport_a]
 url = "https://example.com/sub"
@@ -81,6 +94,13 @@ exclude_types = ["http"]
 
 [sources.airport_a.plugins.before_fetch.turn_on_airport]
 on_failure = "abort"
+
+# Optional: resolve node hostnames to IP at refresh time.
+# When enabled, the source skips ETag/Last-Modified conditional requests.
+# [sources.airport_a.dns]
+# enabled = true
+# servers = ["https://dns.google/dns-query"]
+# failure = "keep"  # keep | drop | fail
 
 # Source B: plain upstream subscription with a different region policy.
 [sources.airport_b]
@@ -126,6 +146,12 @@ prefix = "[phone] "
 
 [routes.phone.filter]
 exclude = "倍率|测试|Traffic"
+
+# Restrict this route to known proxy clients by User-Agent.
+# Patterns use shell-style glob (fnmatch), case-sensitive.
+# Empty list or omitted = open to all.
+[routes.phone.access]
+user_agent = ["mihomo/*", "clash-meta/*", "clash.meta/*"]
 
 # Route for a gateway: require every source and keep only selected regions.
 [routes.gateway]

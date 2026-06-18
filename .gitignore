@@ -218,5 +218,6 @@ __marimo__/
 .streamlit/secrets.toml
 .DS_Store
 .serena/
+!examples/config.toml
 config.toml
 test-output/

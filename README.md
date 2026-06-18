@@ -352,6 +352,35 @@ Content-Type = "application/json"
 
 插件会在刷新订阅前执行。`abort` 表示插件失败就保留旧缓存并停止本次刷新；`continue` 表示记录失败但继续抓取订阅。
 
+### DNS 解析节点域名
+
+默认不改写节点域名。需要时在 source 上显式启用：
+
+```toml
+[dns]
+servers = ["udp://1.1.1.1:53", "https://dns.google/dns-query"]
+timeout = "5s"
+failure = "keep"
+
+[sources.airport_a.dns]
+enabled = true
+servers = ["tls://1.1.1.1:853?servername=cloudflare-dns.com"]
+failure = "drop"
+```
+
+`failure` 可选 `keep`、`drop`、`fail`：解析失败时分别为保留原域名、丢弃节点、整次刷新失败。仅替换节点顶层 `server` 字段；已存在的 `servername`、`sni` 与 `ws-opts.headers.Host` 不会被 IP 覆盖。启用 DNS 的 source 会跳过 ETag/Last-Modified 条件请求。
+
+DNS 服务器支持 `udp://`、`tcp://`、`tls://`、`https://` 四种 scheme，运行时会先解析 DNS 服务器主机名并 pin 到公网 IP，避免 DNS rebinding。
+
+### 限制客户端 User-Agent
+
+```toml
+[routes.phone.access]
+user_agent = ["mihomo/*", "clash-meta/*", "clash.meta/*"]
+```
+
+匹配使用大小写敏感的 shell glob（`fnmatch`）。未配置或配置为空列表时保持开放。仅作用于 provider 路由，不影响 `/healthz` 等系统端点。
+
 ### 文件日志
 
 ```toml

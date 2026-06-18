@@ -352,6 +352,35 @@ Content-Type = "application/json"
 
 The plugin runs before the subscription is fetched. `abort` keeps the old cache and stops the refresh on plugin failure; `continue` logs the failure and still fetches the subscription.
 
+### DNS resolution for node hostnames
+
+By default, node hostnames are passed through unchanged. To resolve them to IP addresses, opt in per source:
+
+```toml
+[dns]
+servers = ["udp://1.1.1.1:53", "https://dns.google/dns-query"]
+timeout = "5s"
+failure = "keep"
+
+[sources.airport_a.dns]
+enabled = true
+servers = ["tls://1.1.1.1:853?servername=cloudflare-dns.com"]
+failure = "drop"
+```
+
+`failure` accepts `keep`, `drop`, or `fail` — keep the original hostname, drop the node, or fail the whole refresh respectively. Only the top-level `server` field is replaced; existing `servername`, `sni`, and `ws-opts.headers.Host` are preserved. Sources with DNS enabled skip ETag/Last-Modified conditional requests so each refresh re-resolves.
+
+DNS servers may use `udp://`, `tcp://`, `tls://`, or `https://`. The DNS server hostname is resolved once per query and pinned to a public IP at connect time, preventing DNS rebinding attacks.
+
+### Restrict provider client User-Agent
+
+```toml
+[routes.phone.access]
+user_agent = ["mihomo/*", "clash-meta/*", "clash.meta/*"]
+```
+
+Patterns are matched case-sensitively using shell-style glob (`fnmatch`). When unset or set to an empty list, the route stays open. Access control applies only to provider routes; system endpoints such as `/healthz` are unaffected.
+
 ### File logging
 
 ```toml

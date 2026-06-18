@@ -495,12 +495,24 @@ class DnsResolver:
             failure=config.failure,
         )
         warnings: list[str] = []
+        query_semaphore = asyncio.Semaphore(DNS_SERVER_CONCURRENCY)
         resolutions = await self._resolve_unique_servers(
-            unique_servers, endpoints, config, source
+            unique_servers, endpoints, config, source, query_semaphore
         )
+        if config.failure == "fail":
+            for server in unique_servers:
+                ip, err = resolutions[server]
+                if ip is None:
+                    raise RuntimeError(
+                        f"dns resolution failed: source={source!r} "
+                        f"server={server!r} error={err}"
+                    )
         kept: list[ProxyRecord] = []
+        warned_servers: set[str] = set()
         for record in records:
-            outcome = self._apply_resolution(record, resolutions, config, source, warnings)
+            outcome = self._apply_resolution(
+                record, resolutions, config, source, warnings, warned_servers
+            )
             if outcome is not None:
                 kept.append(outcome)
         if len(warnings) > DNS_WARNING_LIMIT:
@@ -538,22 +550,23 @@ class DnsResolver:
         endpoints: list[DnsEndpoint],
         config: SourceDnsConfig,
         source: str,
+        query_semaphore: asyncio.Semaphore,
     ) -> dict[str, tuple[str | None, str]]:
         """Resolve each unique server hostname concurrently.
 
         Returns mapping ``server -> (resolved_ip_or_None, error_message)``.
-        ``resolved_ip_or_None`` is None when all endpoints failed.
+        Concurrency budget is enforced at the query level via ``query_semaphore``,
+        so total in-flight DNS queries stay bounded regardless of how many
+        servers fan out simultaneously.
         """
-        semaphore = asyncio.Semaphore(DNS_SERVER_CONCURRENCY)
 
-        async def resolve_server(server: str) -> tuple[str, str | None, str]:
-            async with semaphore:
-                ip, err = await self._resolve_server(server, endpoints, config, source)
-                return server, ip, err
+        async def resolve_one(server: str) -> tuple[str, str | None, str]:
+            ip, err = await self._resolve_server(
+                server, endpoints, config, source, query_semaphore
+            )
+            return server, ip, err
 
-        results = await asyncio.gather(
-            *(resolve_server(server) for server in servers)
-        )
+        results = await asyncio.gather(*(resolve_one(server) for server in servers))
         return {server: (ip, err) for server, ip, err in results}
 
     async def _resolve_server(
@@ -562,65 +575,92 @@ class DnsResolver:
         endpoints: list[DnsEndpoint],
         config: SourceDnsConfig,
         source: str,
+        query_semaphore: asyncio.Semaphore,
     ) -> tuple[str | None, str]:
-        """Race all endpoints x qtypes concurrently; return first IP or last error."""
-        qtypes = ("A", "AAAA") if config.enable_ipv6 else ("A",)
+        """Resolve one hostname.
 
-        async def one_query(endpoint: DnsEndpoint, qtype: str) -> tuple[str | None, str]:
-            try:
-                addresses = await self.client.query(
-                    endpoint,
-                    server,
-                    qtype,
-                    timeout=config.timeout,
-                    allow_private_network=self.allow_private_network,
-                )
-            except Exception as exc:
-                exc_str = str(exc)
-                if not exc_str:
-                    exc_str = repr(exc)
-                err = redact_secret(exc_str)[:200]
-                logger.debug(
-                    "dns query failed: source={source} server={server} scheme={scheme} qtype={qtype} error={error}",
-                    source=source,
-                    server=server,
-                    scheme=endpoint.scheme,
-                    qtype=qtype,
-                    error=err,
-                )
-                return None, err
-            if addresses:
-                logger.debug(
-                    "dns query ok: source={source} server={server} scheme={scheme} qtype={qtype} ip={ip}",
-                    source=source,
-                    server=server,
-                    scheme=endpoint.scheme,
-                    qtype=qtype,
-                    ip=addresses[0],
-                )
-                return addresses[0], ""
-            return None, "empty answer"
-
-        tasks = [
-            asyncio.create_task(one_query(endpoint, qtype))
-            for endpoint in endpoints
-            for qtype in qtypes
-        ]
+        Walks endpoints in configured order (preserves user-declared priority)
+        and returns the first IP found. Within a single endpoint, A and AAAA
+        are queried concurrently when ``enable_ipv6`` is true; A wins if
+        available, AAAA is the fallback.
+        """
         last_error = "no DNS server returned an address"
+        ipv6 = config.enable_ipv6
+        for endpoint in endpoints:
+            ip, err = await self._query_endpoint(
+                endpoint, server, ipv6, config, source, query_semaphore
+            )
+            if ip is not None:
+                return ip, ""
+            if err:
+                last_error = err
+        return None, last_error
+
+    async def _query_endpoint(
+        self,
+        endpoint: DnsEndpoint,
+        server: str,
+        ipv6: bool,
+        config: SourceDnsConfig,
+        source: str,
+        query_semaphore: asyncio.Semaphore,
+    ) -> tuple[str | None, str]:
+        """Query A (and optionally AAAA) on a single endpoint with A preference."""
+
+        async def run_one(qtype: str) -> tuple[str | None, str]:
+            async with query_semaphore:
+                try:
+                    addresses = await self.client.query(
+                        endpoint,
+                        server,
+                        qtype,
+                        timeout=config.timeout,
+                        allow_private_network=self.allow_private_network,
+                    )
+                except Exception as exc:
+                    exc_str = str(exc)
+                    if not exc_str:
+                        exc_str = repr(exc)
+                    err = redact_secret(exc_str)[:200]
+                    logger.debug(
+                        "dns query failed: source={source} server={server} scheme={scheme} qtype={qtype} error={error}",
+                        source=source,
+                        server=server,
+                        scheme=endpoint.scheme,
+                        qtype=qtype,
+                        error=err,
+                    )
+                    return None, err
+                if addresses:
+                    logger.debug(
+                        "dns query ok: source={source} server={server} scheme={scheme} qtype={qtype} ip={ip}",
+                        source=source,
+                        server=server,
+                        scheme=endpoint.scheme,
+                        qtype=qtype,
+                        ip=addresses[0],
+                    )
+                    return addresses[0], ""
+                return None, "empty answer"
+
+        if not ipv6:
+            return await run_one("A")
+        a_task = asyncio.create_task(run_one("A"))
+        aaaa_task = asyncio.create_task(run_one("AAAA"))
         try:
-            for coro in asyncio.as_completed(tasks):
-                ip, err = await coro
-                if ip is not None:
-                    return ip, ""
-                if err:
-                    last_error = err
-            return None, last_error
+            a_ip, a_err = await a_task
+            if a_ip is not None:
+                aaaa_task.cancel()
+                return a_ip, ""
+            aaaa_ip, aaaa_err = await aaaa_task
+            if aaaa_ip is not None:
+                return aaaa_ip, ""
+            return None, a_err or aaaa_err or "no DNS server returned an address"
         finally:
-            for task in tasks:
+            for task in (a_task, aaaa_task):
                 if not task.done():
                     task.cancel()
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
+            await asyncio.gather(a_task, aaaa_task, return_exceptions=True)
 
     def _apply_resolution(
         self,
@@ -629,6 +669,7 @@ class DnsResolver:
         config: SourceDnsConfig,
         source: str,
         warnings: list[str],
+        warned_servers: set[str],
     ) -> ProxyRecord | None:
         server = record.data.get("server")
         if not isinstance(server, str) or not server or _is_ip_literal(server):
@@ -647,17 +688,17 @@ class DnsResolver:
             f"dns resolution failed: source={source!r} proxy={proxy_name!r} "
             f"server={server!r} error={last_error}"
         )
-        logger.warning(
-            "dns resolution failed: source={source} proxy={proxy} server={server} failure={failure}",
-            source=source,
-            proxy=proxy_name,
-            server=server,
-            failure=config.failure,
-        )
+        if server not in warned_servers:
+            logger.warning(
+                "dns resolution failed: source={source} server={server} failure={failure}",
+                source=source,
+                server=server,
+                failure=config.failure,
+            )
+            warned_servers.add(server)
         if config.failure == "keep":
             warnings.append(warning)
             return record
-        if config.failure == "drop":
-            warnings.append(warning)
-            return None
-        raise RuntimeError(warning)
+        # failure == "drop" or "fail" (fail already raised in resolve_records)
+        warnings.append(warning)
+        return None

@@ -394,3 +394,145 @@ async def test_resolver_deduplicates_servers_with_same_hostname() -> None:
     # Only 2 unique hostnames queried, each once for A
     a_calls = [c for c in client.calls if c[2] == "A"]
     assert len(a_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_resolver_prefers_a_over_aaaa_when_both_succeed() -> None:
+    """When enable_ipv6 and both A and AAAA succeed, A result is used."""
+    client = FakeDnsClient(
+        {
+            ("udp", "example.com", "A"): ["93.184.216.34"],
+            ("udp", "example.com", "AAAA"): ["2606:2800:220:1::1"],
+        }
+    )
+    resolver = DnsResolver(client=client, allow_private_network=False)
+    records = [ProxyRecord("airport_a", {"name": "HK", "server": "example.com"})]
+    config = SourceDnsConfig(
+        True,
+        ("udp://1.1.1.1:53",),
+        timedelta(seconds=5),
+        "keep",
+        enable_ipv6=True,
+    )
+
+    resolved, _ = await resolver.resolve_records(records, config, source="airport_a")
+
+    assert resolved[0].data["server"] == "93.184.216.34"
+
+
+@pytest.mark.asyncio
+async def test_resolver_uses_aaaa_when_a_fails() -> None:
+    """When enable_ipv6 and A fails but AAAA succeeds, AAAA result is used."""
+    client = FakeDnsClient(
+        {
+            ("udp", "example.com", "A"): DnsMessageError("no A record"),
+            ("udp", "example.com", "AAAA"): ["2606:2800:220:1::1"],
+        }
+    )
+    resolver = DnsResolver(client=client, allow_private_network=False)
+    records = [ProxyRecord("airport_a", {"name": "HK", "server": "example.com"})]
+    config = SourceDnsConfig(
+        True,
+        ("udp://1.1.1.1:53",),
+        timedelta(seconds=5),
+        "keep",
+        enable_ipv6=True,
+    )
+
+    resolved, _ = await resolver.resolve_records(records, config, source="airport_a")
+
+    assert resolved[0].data["server"] == "2606:2800:220:1::1"
+
+
+@pytest.mark.asyncio
+async def test_resolver_tries_endpoints_in_configured_order() -> None:
+    """First endpoint is tried before second; second only used if first fails."""
+    client = FakeDnsClient(
+        {
+            ("udp", "example.com", "A"): DnsMessageError("first failed"),
+            ("tcp", "example.com", "A"): ["93.184.216.34"],
+        }
+    )
+    resolver = DnsResolver(client=client, allow_private_network=False)
+    records = [ProxyRecord("airport_a", {"name": "HK", "server": "example.com"})]
+    config = SourceDnsConfig(
+        True,
+        ("udp://1.1.1.1:53", "tcp://8.8.8.8:53"),
+        timedelta(seconds=5),
+        "keep",
+    )
+
+    resolved, warnings = await resolver.resolve_records(
+        records, config, source="airport_a"
+    )
+
+    assert warnings == []
+    assert resolved[0].data["server"] == "93.184.216.34"
+    assert ("udp", "example.com", "A") in client.calls
+    assert ("tcp", "example.com", "A") in client.calls
+    assert client.calls.index(("udp", "example.com", "A")) < client.calls.index(
+        ("tcp", "example.com", "A")
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolver_does_not_query_second_endpoint_when_first_succeeds() -> None:
+    """When first endpoint succeeds, second endpoint is never queried."""
+    client = FakeDnsClient(
+        {
+            ("udp", "example.com", "A"): ["93.184.216.34"],
+            ("tcp", "example.com", "A"): ["1.2.3.4"],
+        }
+    )
+    resolver = DnsResolver(client=client, allow_private_network=False)
+    records = [ProxyRecord("airport_a", {"name": "HK", "server": "example.com"})]
+    config = SourceDnsConfig(
+        True,
+        ("udp://1.1.1.1:53", "tcp://8.8.8.8:53"),
+        timedelta(seconds=5),
+        "keep",
+    )
+
+    resolved, _ = await resolver.resolve_records(records, config, source="airport_a")
+
+    assert resolved[0].data["server"] == "93.184.216.34"
+    assert ("udp", "example.com", "A") in client.calls
+    assert ("tcp", "example.com", "A") not in client.calls
+
+
+@pytest.mark.asyncio
+async def test_resolver_failure_fail_raises_runtime_error() -> None:
+    """failure='fail' raises RuntimeError when DNS resolution fails for any server."""
+    client = FakeDnsClient({})
+    resolver = DnsResolver(client=client, allow_private_network=False)
+    records = [ProxyRecord("airport_a", {"name": "HK", "server": "example.com"})]
+    config = SourceDnsConfig(
+        True,
+        ("udp://1.1.1.1:53",),
+        timedelta(seconds=5),
+        "fail",
+    )
+
+    with pytest.raises(RuntimeError, match="dns resolution failed"):
+        await resolver.resolve_records(records, config, source="airport_a")
+
+
+@pytest.mark.asyncio
+async def test_resolver_warning_dedup_per_server() -> None:
+    """Multiple records sharing a failing server produce one warning log per server,
+    but each record still gets its own warning entry in the warnings list."""
+    client = FakeDnsClient({})
+    resolver = DnsResolver(client=client, allow_private_network=False)
+    records = [
+        ProxyRecord("airport_a", {"name": "HK 01", "server": "example.com"}),
+        ProxyRecord("airport_a", {"name": "HK 02", "server": "example.com"}),
+        ProxyRecord("airport_a", {"name": "JP 01", "server": "other.com"}),
+    ]
+    config = SourceDnsConfig(True, ("udp://1.1.1.1:53",), timedelta(seconds=5), "keep")
+
+    _resolved, warnings = await resolver.resolve_records(
+        records, config, source="airport_a"
+    )
+
+    assert len(warnings) == 3
+    assert all("example.com" in w or "other.com" in w for w in warnings)

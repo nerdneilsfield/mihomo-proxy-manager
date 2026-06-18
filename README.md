@@ -121,10 +121,10 @@ mpm serve -c /app/config.toml
 - `[routes.*]`：对客户端暴露的 provider 路径，以及这个 provider 使用哪些 source。
 - `[security]`：隐藏路径熵、私网 URL 访问等安全约束。
 
-**注意：`user_agent` 必须写成 `clash-meta/<version>` 或 `mihomo/<version>`，其它格式都不接受。示例使用 `mihomo/1.19.5`，这是 Mihomo 已发布过的真实版本。不要写项目名、占位字符串或 `clash.meta/...`；不少订阅源会根据 User-Agent 判断客户端类型。**
+**注意：`user_agent` 必须写成 `clash-meta/<version>`、`clash.meta/<version>` 或 `mihomo/<version>`，其它格式都不接受。示例使用 `mihomo/1.19.5`，这是 Mihomo 已发布过的真实版本。不要写项目名或占位字符串；不少订阅源会根据 User-Agent 判断客户端类型。**
 
 <details open>
-<summary>完整示例</summary>
+<summary>常用配置片段</summary>
 
 ```toml
 [server]
@@ -257,7 +257,116 @@ proxies:
     port: 443
 ```
 
-完整示例见 [examples/config.toml](examples/config.toml)。
+完整可运行模板见 [examples/config.toml](examples/config.toml)，里面包含两个订阅源、插件、两个 provider 路由、文件日志和 Docker 运行所需目录。
+
+<details>
+<summary>功能用法速查</summary>
+
+### 订阅源抓取
+
+```toml
+[sources.airport_a]
+url = "https://example.com/sub"
+format = "auto"        # auto | yaml | share-links
+parse_error = "skip"   # skip | fail
+
+[sources.airport_a.fetch]
+timeout = "30s"
+user_agent = "mihomo/1.19.5"
+
+[sources.airport_a.fetch.headers]
+Authorization = "Bearer replace-me"
+```
+
+### 定时刷新
+
+```toml
+[sources.airport_a.refresh]
+interval = "1h"
+cron = ["0 4 * * *"]
+```
+
+`interval` 和 `cron` 可以同时使用。`cron` 使用 `[server] timezone` 指定的时区。
+
+### source 级过滤和重命名
+
+```toml
+[sources.airport_a.rename]
+prefix = "[{source}] "
+suffix = ""
+
+[sources.airport_a.filter]
+include = "香港|日本|HK|JP"
+exclude = "官网|剩余|过期|套餐"
+include_types = ["ss", "vmess", "vless", "trojan", "hysteria2"]
+exclude_types = ["http"]
+```
+
+source 级规则会在缓存写入前执行，适合清理上游订阅里的无用节点。
+
+### route 级过滤和重命名
+
+```toml
+[routes.phone]
+path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml"
+sources = ["airport_a", "airport_b"]
+require_all_sources = false
+
+[routes.phone.rename]
+prefix = "[phone] "
+
+[routes.phone.filter]
+exclude = "倍率|测试|Traffic"
+```
+
+route 级规则会在多个 source 聚合后执行，适合按设备或场景切出不同 provider。
+
+### 输出元信息注释
+
+```toml
+[routes.gateway.output]
+format = "provider"
+include_meta_comments = true
+```
+
+开启后，输出 YAML 顶部会包含生成时间、路由名、source 数量和节点数量。不会写入上游 URL、header、token 或隐藏路径。
+
+### HTTP Action 插件
+
+```toml
+[sources.airport_a.plugins.before_fetch.turn_on_airport]
+on_failure = "abort" # abort | continue
+
+[plugins.turn_on_airport]
+type = "http_action"
+method = "POST"
+url = "https://example.com/api/switch"
+success_status = [200, 204]
+timeout = "10s"
+body = "{\"enabled\":true}"
+
+[plugins.turn_on_airport.headers]
+Authorization = "Bearer replace-me"
+Content-Type = "application/json"
+```
+
+插件会在刷新订阅前执行。`abort` 表示插件失败就保留旧缓存并停止本次刷新；`continue` 表示记录失败但继续抓取订阅。
+
+### 文件日志
+
+```toml
+[logging.file]
+enabled = true
+path = "logs/mihomo-proxy-manager.log"
+level = "DEBUG"
+rotation = "10 MB"
+retention = "14 days"
+compression = "gz"
+```
+
+Docker 运行时要挂载 `logs` 到 `/app/logs`，否则日志会留在容器文件系统里。
+
+</details>
 
 ## 设计
 

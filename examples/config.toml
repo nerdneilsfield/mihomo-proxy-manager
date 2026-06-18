@@ -1,3 +1,8 @@
+# Example configuration for mihomo-proxy-manager.
+#
+# Copy this file and replace all example URLs, tokens, and route paths before
+# using it in production.
+
 [server]
 host = "127.0.0.1"
 port = 8080
@@ -49,22 +54,92 @@ default_parse_error = "skip"
 yaml_sort_keys = false
 default_include_meta_comments = false
 
+# Source A: authenticated upstream subscription.
 [sources.airport_a]
 url = "https://example.com/sub"
 format = "auto"
 parse_error = "skip"
 
+[sources.airport_a.fetch]
+timeout = "30s"
+user_agent = "mihomo/1.19.5"
+
+[sources.airport_a.fetch.headers]
+Authorization = "Bearer replace-me"
+
 [sources.airport_a.refresh]
 interval = "1h"
+cron = ["0 4 * * *"]
 
 [sources.airport_a.rename]
 prefix = "[{source}] "
 
+[sources.airport_a.filter]
+include = "香港|日本|HK|JP"
+exclude = "官网|剩余|过期|套餐"
+exclude_types = ["http"]
+
+[sources.airport_a.plugins.before_fetch.turn_on_airport]
+on_failure = "abort"
+
+# Source B: plain upstream subscription with a different region policy.
+[sources.airport_b]
+url = "https://example.net/sub"
+format = "auto"
+parse_error = "skip"
+
+[sources.airport_b.refresh]
+interval = "2h"
+
+[sources.airport_b.rename]
+prefix = "[{source}] "
+
+[sources.airport_b.filter]
+include = "新加坡|美国|SG|US"
+include_types = ["ss", "vmess", "vless", "trojan", "hysteria2"]
+
+# HTTP Action plugin used before refreshing source A.
+[plugins.turn_on_airport]
+type = "http_action"
+method = "POST"
+url = "https://example.com/api/switch"
+success_status = [200, 204]
+timeout = "10s"
+body = "{\"enabled\":true}"
+
+[plugins.turn_on_airport.headers]
+Authorization = "Bearer replace-me"
+Content-Type = "application/json"
+
+# Route for a phone: use both sources, return what is available.
 [routes.phone]
 path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml"
-sources = ["airport_a"]
+sources = ["airport_a", "airport_b"]
 require_all_sources = false
 
 [routes.phone.output]
 format = "provider"
 include_meta_comments = false
+
+[routes.phone.rename]
+prefix = "[phone] "
+
+[routes.phone.filter]
+exclude = "倍率|测试|Traffic"
+
+# Route for a gateway: require every source and keep only selected regions.
+[routes.gateway]
+path = "/p/Pd6MZ8vQpWv42xZ9HTmKc7YbNf3aLsGj.yaml"
+sources = ["airport_a", "airport_b"]
+require_all_sources = true
+
+[routes.gateway.output]
+format = "provider"
+include_meta_comments = true
+
+[routes.gateway.rename]
+prefix = "[gateway] "
+
+[routes.gateway.filter]
+include = "香港|日本|新加坡|HK|JP|SG"
+exclude_types = ["http"]

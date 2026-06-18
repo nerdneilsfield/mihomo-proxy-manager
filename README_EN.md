@@ -121,10 +121,10 @@ Configuration is written in TOML. A useful config usually has four parts:
 - `[routes.*]`: provider routes exposed to clients and the sources each route uses.
 - `[security]`: hidden path entropy and private-network URL policy.
 
-**Important: `user_agent` must use `clash-meta/<version>` or `mihomo/<version>`. Other formats are rejected. The example uses `mihomo/1.19.5`, a real released Mihomo version. Do not use the project name, a placeholder string, or `clash.meta/...`; some subscription providers change behavior based on the User-Agent.**
+**Important: `user_agent` must use `clash-meta/<version>`, `clash.meta/<version>`, or `mihomo/<version>`. Other formats are rejected. The example uses `mihomo/1.19.5`, a real released Mihomo version. Do not use the project name or a placeholder string; some subscription providers change behavior based on the User-Agent.**
 
 <details open>
-<summary>Complete example</summary>
+<summary>Common configuration snippet</summary>
 
 ```toml
 [server]
@@ -257,7 +257,116 @@ proxies:
     port: 443
 ```
 
-See [examples/config.toml](examples/config.toml) for a complete config.
+See [examples/config.toml](examples/config.toml) for a complete runnable template with two sources, a plugin, two provider routes, file logging, and Docker-friendly runtime paths.
+
+<details>
+<summary>Feature usage quick reference</summary>
+
+### Fetch an upstream subscription
+
+```toml
+[sources.airport_a]
+url = "https://example.com/sub"
+format = "auto"        # auto | yaml | share-links
+parse_error = "skip"   # skip | fail
+
+[sources.airport_a.fetch]
+timeout = "30s"
+user_agent = "mihomo/1.19.5"
+
+[sources.airport_a.fetch.headers]
+Authorization = "Bearer replace-me"
+```
+
+### Schedule refreshes
+
+```toml
+[sources.airport_a.refresh]
+interval = "1h"
+cron = ["0 4 * * *"]
+```
+
+`interval` and `cron` can be used together. `cron` uses the timezone from `[server] timezone`.
+
+### Source-level filters and renaming
+
+```toml
+[sources.airport_a.rename]
+prefix = "[{source}] "
+suffix = ""
+
+[sources.airport_a.filter]
+include = "香港|日本|HK|JP"
+exclude = "官网|剩余|过期|套餐"
+include_types = ["ss", "vmess", "vless", "trojan", "hysteria2"]
+exclude_types = ["http"]
+```
+
+Source-level rules run before the source cache is written. Use them to clean noisy upstream subscriptions.
+
+### Route-level filters and renaming
+
+```toml
+[routes.phone]
+path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml"
+sources = ["airport_a", "airport_b"]
+require_all_sources = false
+
+[routes.phone.rename]
+prefix = "[phone] "
+
+[routes.phone.filter]
+exclude = "倍率|测试|Traffic"
+```
+
+Route-level rules run after source aggregation. Use them to expose different provider feeds for different devices or scenarios.
+
+### Metadata comments in provider output
+
+```toml
+[routes.gateway.output]
+format = "provider"
+include_meta_comments = true
+```
+
+When enabled, the YAML output includes generation time, route name, source count, and node count. It does not include upstream URLs, headers, tokens, or hidden paths.
+
+### HTTP Action plugin
+
+```toml
+[sources.airport_a.plugins.before_fetch.turn_on_airport]
+on_failure = "abort" # abort | continue
+
+[plugins.turn_on_airport]
+type = "http_action"
+method = "POST"
+url = "https://example.com/api/switch"
+success_status = [200, 204]
+timeout = "10s"
+body = "{\"enabled\":true}"
+
+[plugins.turn_on_airport.headers]
+Authorization = "Bearer replace-me"
+Content-Type = "application/json"
+```
+
+The plugin runs before the subscription is fetched. `abort` keeps the old cache and stops the refresh on plugin failure; `continue` logs the failure and still fetches the subscription.
+
+### File logging
+
+```toml
+[logging.file]
+enabled = true
+path = "logs/mihomo-proxy-manager.log"
+level = "DEBUG"
+rotation = "10 MB"
+retention = "14 days"
+compression = "gz"
+```
+
+When running with Docker, mount `logs` to `/app/logs`; otherwise logs stay inside the container filesystem.
+
+</details>
 
 ## Design
 

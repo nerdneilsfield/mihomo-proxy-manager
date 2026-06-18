@@ -43,7 +43,7 @@ from .models import (
 
 DEFAULT_USER_AGENT = "mihomo/1.19.5"
 USER_AGENT_PATTERN = re.compile(
-    r"^(?:clash-meta|mihomo)/\d+(?:\.\d+){1,3}(?:[-+][A-Za-z0-9._-]+)?$"
+    r"^(?:clash[.-]meta|mihomo)/\d+(?:\.\d+){1,3}(?:[-+][A-Za-z0-9._-]+)?$"
 )
 
 
@@ -222,8 +222,8 @@ def _validate_user_agent(value: str, *, label: str) -> str | None:
     if USER_AGENT_PATTERN.fullmatch(value.strip()):
         return None
     return (
-        f"{label} user_agent must use 'clash-meta/<version>' or "
-        f"'mihomo/<version>'; got {value!r}"
+        f"{label} user_agent must use 'clash-meta/<version>', "
+        f"'clash.meta/<version>', or 'mihomo/<version>'; got {value!r}"
     )
 
 

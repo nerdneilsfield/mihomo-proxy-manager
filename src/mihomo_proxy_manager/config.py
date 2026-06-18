@@ -41,6 +41,11 @@ from .models import (
     ValidationReport,
 )
 
+DEFAULT_USER_AGENT = "mihomo/1.19.5"
+USER_AGENT_PATTERN = re.compile(
+    r"^(?:clash-meta|mihomo)/\d+(?:\.\d+){1,3}(?:[-+][A-Za-z0-9._-]+)?$"
+)
+
 
 def parse_duration(value: str) -> timedelta:
     """解析持续时间字符串，返回 timedelta。
@@ -209,6 +214,30 @@ def _fetch(
     )
 
 
+def _validate_user_agent(value: str, *, label: str) -> str | None:
+    """验证 User-Agent 是否是允许的 Mihomo/Clash Meta 客户端格式。
+
+    Validate that a User-Agent uses the allowed Mihomo/Clash Meta client format.
+    """
+    if USER_AGENT_PATTERN.fullmatch(value.strip()):
+        return None
+    return (
+        f"{label} user_agent must use 'clash-meta/<version>' or "
+        f"'mihomo/<version>'; got {value!r}"
+    )
+
+
+def _header_user_agent(headers: dict[str, str]) -> str | None:
+    """从 header 字典中查找 User-Agent，大小写不敏感。
+
+    Find a User-Agent header case-insensitively.
+    """
+    for key, value in headers.items():
+        if key.lower() == "user-agent":
+            return value
+    return None
+
+
 def _refresh(data: dict[str, Any]) -> RefreshConfig:
     """从原始字典构建 RefreshConfig。
 
@@ -288,6 +317,12 @@ class LoadedConfig(AppConfig):
         errors: list[str] = []
         warnings: list[str] = []
 
+        http_user_agent_error = _validate_user_agent(
+            self.http.user_agent, label="http"
+        )
+        if http_user_agent_error:
+            errors.append(http_user_agent_error)
+
         paths: dict[str, str] = {self.server.health_path: "health_path"}
         if self.server.status_path:
             if self.server.status_path in paths:
@@ -335,6 +370,19 @@ class LoadedConfig(AppConfig):
                 )
 
         for source in self.sources.values():
+            fetch_user_agent_error = _validate_user_agent(
+                source.fetch.user_agent, label=f"source {source.name!r} fetch"
+            )
+            if fetch_user_agent_error:
+                errors.append(fetch_user_agent_error)
+            fetch_header_user_agent = _header_user_agent(source.fetch.headers)
+            if fetch_header_user_agent:
+                fetch_header_error = _validate_user_agent(
+                    fetch_header_user_agent,
+                    label=f"source {source.name!r} fetch header User-Agent",
+                )
+                if fetch_header_error:
+                    errors.append(fetch_header_error)
             if source.format not in {"auto", "yaml", "share-links"}:
                 errors.append(
                     f"source {source.name!r} format is unsupported: {source.format!r}"
@@ -382,6 +430,14 @@ class LoadedConfig(AppConfig):
                     errors.append(f"source {source.name!r} URL is unsafe: {exc}")
 
         for plugin in self.plugins.values():
+            plugin_header_user_agent = _header_user_agent(plugin.headers)
+            if plugin_header_user_agent:
+                plugin_header_error = _validate_user_agent(
+                    plugin_header_user_agent,
+                    label=f"plugin {plugin.name!r} header User-Agent",
+                )
+                if plugin_header_error:
+                    errors.append(plugin_header_error)
             if plugin.type != "http_action":
                 errors.append(
                     f"plugin {plugin.name!r} type is unsupported: {plugin.type!r}"
@@ -515,7 +571,7 @@ def load_config(path: Path, *, validate: bool = True) -> LoadedConfig:
     )
     http = HttpConfig(
         timeout=parse_duration(http_raw.get("timeout", "30s")),
-        user_agent=http_raw.get("user_agent", "mihomo-proxy-manager/0.1"),
+        user_agent=http_raw.get("user_agent", DEFAULT_USER_AGENT),
         max_response_size=parse_size(http_raw.get("max_response_size", "10 MB")),
         max_redirects=int(http_raw.get("max_redirects", 3)),
     )

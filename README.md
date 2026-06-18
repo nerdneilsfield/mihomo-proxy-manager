@@ -70,6 +70,8 @@ mpm refresh -c examples/config.toml airport_a
 
 ### Docker 运行
 
+下面的运行示例会挂载三类路径：配置文件、缓存目录和日志目录。
+
 可以使用 GHCR 镜像：
 
 ```bash
@@ -119,6 +121,8 @@ mpm serve -c /app/config.toml
 - `[routes.*]`：对客户端暴露的 provider 路径，以及这个 provider 使用哪些 source。
 - `[security]`：隐藏路径熵、私网 URL 访问等安全约束。
 
+**注意：`user_agent` 必须写成 `clash-meta/<version>` 或 `mihomo/<version>`，其它格式都不接受。示例使用 `mihomo/1.19.5`，这是 Mihomo 已发布过的真实版本。不要写项目名、占位字符串或 `clash.meta/...`；不少订阅源会根据 User-Agent 判断客户端类型。**
+
 <details open>
 <summary>完整示例</summary>
 
@@ -143,7 +147,7 @@ level = "INFO"
 colorize = true
 
 [logging.file]
-enabled = false
+enabled = true
 path = "logs/mihomo-proxy-manager.log"
 level = "DEBUG"
 rotation = "10 MB"
@@ -152,7 +156,7 @@ compression = "gz"
 
 [http]
 timeout = "30s"
-user_agent = "mihomo-proxy-manager/0.1"
+user_agent = "mihomo/1.19.5"
 max_response_size = "10 MB"
 max_redirects = 3
 
@@ -181,7 +185,7 @@ parse_error = "skip"
 
 [sources.airport_a.fetch]
 timeout = "30s"
-user_agent = "custom-UA"
+user_agent = "mihomo/1.19.5"
 
 [sources.airport_a.fetch.headers]
 Authorization = "Bearer replace-me"

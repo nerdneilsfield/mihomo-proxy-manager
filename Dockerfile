@@ -19,6 +19,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     python -m pip install -r requirements.txt
 
 COPY src ./src
+COPY examples/config.toml ./config.toml
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     python -m pip install . --no-deps && \

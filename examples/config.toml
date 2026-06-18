@@ -18,7 +18,7 @@ level = "INFO"
 colorize = true
 
 [logging.file]
-enabled = false
+enabled = true
 path = "logs/mihomo-proxy-manager.log"
 level = "DEBUG"
 rotation = "10 MB"
@@ -27,7 +27,7 @@ compression = "gz"
 
 [http]
 timeout = "30s"
-user_agent = "mihomo-proxy-manager/0.1"
+user_agent = "mihomo/1.19.5"
 max_response_size = "10 MB"
 max_redirects = 3
 

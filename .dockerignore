@@ -14,7 +14,8 @@ dist
 data
 logs
 docs
-examples
+examples/*
+!examples/config.toml
 tests
 .env
 .env.*

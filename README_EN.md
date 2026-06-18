@@ -70,6 +70,8 @@ mpm refresh -c examples/config.toml airport_a
 
 ### Run With Docker
 
+The examples below mount three paths: the config file, the cache directory, and the log directory.
+
 Use the GHCR image:
 
 ```bash
@@ -119,6 +121,8 @@ Configuration is written in TOML. A useful config usually has four parts:
 - `[routes.*]`: provider routes exposed to clients and the sources each route uses.
 - `[security]`: hidden path entropy and private-network URL policy.
 
+**Important: `user_agent` must use `clash-meta/<version>` or `mihomo/<version>`. Other formats are rejected. The example uses `mihomo/1.19.5`, a real released Mihomo version. Do not use the project name, a placeholder string, or `clash.meta/...`; some subscription providers change behavior based on the User-Agent.**
+
 <details open>
 <summary>Complete example</summary>
 
@@ -143,7 +147,7 @@ level = "INFO"
 colorize = true
 
 [logging.file]
-enabled = false
+enabled = true
 path = "logs/mihomo-proxy-manager.log"
 level = "DEBUG"
 rotation = "10 MB"
@@ -152,7 +156,7 @@ compression = "gz"
 
 [http]
 timeout = "30s"
-user_agent = "mihomo-proxy-manager/0.1"
+user_agent = "mihomo/1.19.5"
 max_response_size = "10 MB"
 max_redirects = 3
 
@@ -181,7 +185,7 @@ parse_error = "skip"
 
 [sources.airport_a.fetch]
 timeout = "30s"
-user_agent = "custom-UA"
+user_agent = "mihomo/1.19.5"
 
 [sources.airport_a.fetch.headers]
 Authorization = "Bearer replace-me"

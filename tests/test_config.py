@@ -79,6 +79,7 @@ def test_load_config_applies_defaults(temp_config_path: Path) -> None:
 
     assert config.server.host == "0.0.0.0"
     assert config.cache.file_mode == 0o600
+    assert config.http.user_agent == "mihomo/1.19.5"
     assert config.sources["airport_a"].format == "auto"
     assert config.routes["phone"].sources == ("airport_a",)
 
@@ -155,6 +156,71 @@ include = "["
     assert "plugin 'turn_on' type is unsupported" in joined
     assert "route 'phone' output format is unsupported" in joined
     assert "route 'phone' include regex is invalid" in joined
+
+
+def test_validation_rejects_invalid_user_agents(temp_config_path: Path) -> None:
+    """测试验证拒绝非 Mihomo/Clash Meta 格式的 User-Agent。
+
+    Test that validation rejects non-Mihomo/Clash Meta User-Agent values.
+
+    Args:
+        temp_config_path: 临时配置文件路径 / Temporary config file path.
+    """
+    body = """
+[http]
+user_agent = "mihomo-proxy-manager/0.1"
+
+[sources.airport_a]
+url = "https://example.com/sub"
+
+[sources.airport_a.fetch]
+user_agent = "clash.meta/1.19.5"
+
+[sources.airport_a.fetch.headers]
+User-Agent = "custom-UA"
+
+[routes.phone]
+path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml"
+sources = ["airport_a"]
+"""
+    config = load_config(write_config(temp_config_path, body), validate=False)
+    report = config.validate(config_path=temp_config_path)
+    joined = "\n".join(report.errors)
+
+    assert not report.ok
+    assert "http user_agent must use" in joined
+    assert "source 'airport_a' fetch user_agent must use" in joined
+    assert "source 'airport_a' fetch header User-Agent user_agent must use" in joined
+
+
+def test_validation_accepts_mihomo_and_clash_meta_user_agents(
+    temp_config_path: Path,
+) -> None:
+    """测试验证接受 Mihomo 和 Clash Meta 格式的 User-Agent。
+
+    Test that validation accepts Mihomo and Clash Meta User-Agent values.
+
+    Args:
+        temp_config_path: 临时配置文件路径 / Temporary config file path.
+    """
+    body = """
+[http]
+user_agent = "mihomo/1.19.5"
+
+[sources.airport_a]
+url = "https://example.com/sub"
+
+[sources.airport_a.fetch]
+user_agent = "clash-meta/1.19.5"
+
+[routes.phone]
+path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml"
+sources = ["airport_a"]
+"""
+    config = load_config(write_config(temp_config_path, body), validate=False)
+    report = config.validate(config_path=temp_config_path)
+
+    assert report.ok
 
 
 def test_file_mode_accepts_toml_integer(temp_config_path: Path) -> None:

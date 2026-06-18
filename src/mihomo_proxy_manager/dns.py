@@ -26,7 +26,7 @@ RTYPE = {1: "A", 28: "AAAA", 5: "CNAME"}
 DNS_UDP_MAX_SIZE = 512
 DNS_MESSAGE_MAX_SIZE = 4096
 DNS_WARNING_LIMIT = 100
-DNS_NODE_CONCURRENCY = 16
+DNS_SERVER_CONCURRENCY = 16
 
 
 class DnsMessageError(ValueError):
@@ -485,24 +485,24 @@ class DnsResolver:
         if not config.enabled:
             return records, []
         endpoints = [parse_dns_endpoint(value) for value in config.servers]
+        unique_servers = self._collect_unique_servers(records)
         logger.debug(
-            "dns resolve start: source={source} nodes={nodes} endpoints={endpoints} failure={failure}",
+            "dns resolve start: source={source} nodes={nodes} unique_servers={unique} endpoints={endpoints} failure={failure}",
             source=source,
             nodes=len(records),
+            unique=len(unique_servers),
             endpoints=len(endpoints),
             failure=config.failure,
         )
-        semaphore = asyncio.Semaphore(DNS_NODE_CONCURRENCY)
         warnings: list[str] = []
-
-        async def resolve_one(record: ProxyRecord) -> ProxyRecord | None:
-            async with semaphore:
-                return await self._resolve_one(
-                    record, config, endpoints, source, warnings
-                )
-
-        resolved = await asyncio.gather(*(resolve_one(record) for record in records))
-        kept = [record for record in resolved if record is not None]
+        resolutions = await self._resolve_unique_servers(
+            unique_servers, endpoints, config, source
+        )
+        kept: list[ProxyRecord] = []
+        for record in records:
+            outcome = self._apply_resolution(record, resolutions, config, source, warnings)
+            if outcome is not None:
+                kept.append(outcome)
         if len(warnings) > DNS_WARNING_LIMIT:
             omitted = len(warnings) - DNS_WARNING_LIMIT
             warnings = warnings[:DNS_WARNING_LIMIT] + [
@@ -518,56 +518,130 @@ class DnsResolver:
         )
         return kept, warnings
 
-    async def _resolve_one(
+    @staticmethod
+    def _collect_unique_servers(records: list[ProxyRecord]) -> list[str]:
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for record in records:
+            server = record.data.get("server")
+            if not isinstance(server, str) or not server or _is_ip_literal(server):
+                continue
+            if server in seen:
+                continue
+            seen.add(server)
+            ordered.append(server)
+        return ordered
+
+    async def _resolve_unique_servers(
+        self,
+        servers: list[str],
+        endpoints: list[DnsEndpoint],
+        config: SourceDnsConfig,
+        source: str,
+    ) -> dict[str, tuple[str | None, str]]:
+        """Resolve each unique server hostname concurrently.
+
+        Returns mapping ``server -> (resolved_ip_or_None, error_message)``.
+        ``resolved_ip_or_None`` is None when all endpoints failed.
+        """
+        semaphore = asyncio.Semaphore(DNS_SERVER_CONCURRENCY)
+
+        async def resolve_server(server: str) -> tuple[str, str | None, str]:
+            async with semaphore:
+                ip, err = await self._resolve_server(server, endpoints, config, source)
+                return server, ip, err
+
+        results = await asyncio.gather(
+            *(resolve_server(server) for server in servers)
+        )
+        return {server: (ip, err) for server, ip, err in results}
+
+    async def _resolve_server(
+        self,
+        server: str,
+        endpoints: list[DnsEndpoint],
+        config: SourceDnsConfig,
+        source: str,
+    ) -> tuple[str | None, str]:
+        """Race all endpoints x qtypes concurrently; return first IP or last error."""
+        qtypes = ("A", "AAAA") if config.enable_ipv6 else ("A",)
+
+        async def one_query(endpoint: DnsEndpoint, qtype: str) -> tuple[str | None, str]:
+            try:
+                addresses = await self.client.query(
+                    endpoint,
+                    server,
+                    qtype,
+                    timeout=config.timeout,
+                    allow_private_network=self.allow_private_network,
+                )
+            except Exception as exc:
+                exc_str = str(exc)
+                if not exc_str:
+                    exc_str = repr(exc)
+                err = redact_secret(exc_str)[:200]
+                logger.debug(
+                    "dns query failed: source={source} server={server} scheme={scheme} qtype={qtype} error={error}",
+                    source=source,
+                    server=server,
+                    scheme=endpoint.scheme,
+                    qtype=qtype,
+                    error=err,
+                )
+                return None, err
+            if addresses:
+                logger.debug(
+                    "dns query ok: source={source} server={server} scheme={scheme} qtype={qtype} ip={ip}",
+                    source=source,
+                    server=server,
+                    scheme=endpoint.scheme,
+                    qtype=qtype,
+                    ip=addresses[0],
+                )
+                return addresses[0], ""
+            return None, "empty answer"
+
+        tasks = [
+            asyncio.create_task(one_query(endpoint, qtype))
+            for endpoint in endpoints
+            for qtype in qtypes
+        ]
+        last_error = "no DNS server returned an address"
+        try:
+            for coro in asyncio.as_completed(tasks):
+                ip, err = await coro
+                if ip is not None:
+                    return ip, ""
+                if err:
+                    last_error = err
+            return None, last_error
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _apply_resolution(
         self,
         record: ProxyRecord,
+        resolutions: dict[str, tuple[str | None, str]],
         config: SourceDnsConfig,
-        endpoints: list[DnsEndpoint],
         source: str,
         warnings: list[str],
     ) -> ProxyRecord | None:
         server = record.data.get("server")
         if not isinstance(server, str) or not server or _is_ip_literal(server):
             return record
-        last_error = "no DNS server returned an address"
-        qtypes = ("A", "AAAA") if config.enable_ipv6 else ("A",)
-        for endpoint in endpoints:
-            for qtype in qtypes:
-                try:
-                    addresses = await self.client.query(
-                        endpoint,
-                        server,
-                        qtype,
-                        timeout=config.timeout,
-                        allow_private_network=self.allow_private_network,
-                    )
-                except Exception as exc:
-                    exc_str = str(exc)
-                    if not exc_str:
-                        exc_str = repr(exc)
-                    last_error = redact_secret(exc_str)[:200]
-                    logger.debug(
-                        "dns query failed: source={source} server={server} scheme={scheme} qtype={qtype} error={error}",
-                        source=source,
-                        server=server,
-                        scheme=endpoint.scheme,
-                        qtype=qtype,
-                        error=last_error,
-                    )
-                    continue
-                if addresses:
-                    data = deepcopy(record.data)
-                    _preserve_host_metadata(data, server)
-                    data["server"] = addresses[0]
-                    logger.debug(
-                        "dns query ok: source={source} server={server} scheme={scheme} qtype={qtype} ip={ip}",
-                        source=source,
-                        server=server,
-                        scheme=endpoint.scheme,
-                        qtype=qtype,
-                        ip=addresses[0],
-                    )
-                    return ProxyRecord(record.source, data)
+        resolved = resolutions.get(server)
+        if resolved is None:
+            return record
+        ip, last_error = resolved
+        if ip is not None:
+            data = deepcopy(record.data)
+            _preserve_host_metadata(data, server)
+            data["server"] = ip
+            return ProxyRecord(record.source, data)
         proxy_name = str(record.data.get("name", "<unnamed>"))[:120]
         warning = (
             f"dns resolution failed: source={source!r} proxy={proxy_name!r} "

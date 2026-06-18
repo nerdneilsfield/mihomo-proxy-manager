@@ -251,10 +251,9 @@ async def test_resolver_failover_uses_second_server() -> None:
 
     assert warnings == []
     assert resolved[0].data["server"] == "93.184.216.34"
-    assert client.calls == [
-        ("udp", "example.com", "A"),
-        ("tcp", "example.com", "A"),
-    ]
+    assert ("udp", "example.com", "A") in client.calls
+    assert ("tcp", "example.com", "A") in client.calls
+    assert ("udp", "example.com", "AAAA") not in client.calls
 
 
 @pytest.mark.asyncio
@@ -282,11 +281,9 @@ async def test_resolver_queries_aaaa_when_enable_ipv6_is_true() -> None:
 
     assert warnings == []
     assert resolved[0].data["server"] == "93.184.216.34"
-    assert client.calls == [
-        ("udp", "example.com", "A"),
-        ("udp", "example.com", "AAAA"),
-        ("tcp", "example.com", "A"),
-    ]
+    assert ("udp", "example.com", "A") in client.calls
+    assert ("udp", "example.com", "AAAA") in client.calls
+    assert ("tcp", "example.com", "A") in client.calls
 
 
 @pytest.mark.asyncio
@@ -366,3 +363,34 @@ async def test_resolver_warning_includes_error_type_for_empty_str_exc() -> None:
 
     assert len(warnings) == 1
     assert "_EmptyStrError" in warnings[0]
+
+
+@pytest.mark.asyncio
+async def test_resolver_deduplicates_servers_with_same_hostname() -> None:
+    """Multiple nodes sharing the same server hostname resolve it only once."""
+    client = FakeDnsClient(
+        {
+            ("udp", "example.com", "A"): ["93.184.216.34"],
+            ("udp", "other.com", "A"): ["1.2.3.4"],
+        }
+    )
+    resolver = DnsResolver(client=client, allow_private_network=False)
+    records = [
+        ProxyRecord("airport_a", {"name": "HK 01", "server": "example.com"}),
+        ProxyRecord("airport_a", {"name": "HK 02", "server": "example.com"}),
+        ProxyRecord("airport_a", {"name": "JP 01", "server": "other.com"}),
+    ]
+    config = SourceDnsConfig(True, ("udp://1.1.1.1:53",), timedelta(seconds=5), "keep")
+
+    resolved, warnings = await resolver.resolve_records(
+        records, config, source="airport_a"
+    )
+
+    assert warnings == []
+    assert len(resolved) == 3
+    assert resolved[0].data["server"] == "93.184.216.34"
+    assert resolved[1].data["server"] == "93.184.216.34"
+    assert resolved[2].data["server"] == "1.2.3.4"
+    # Only 2 unique hostnames queried, each once for A
+    a_calls = [c for c in client.calls if c[2] == "A"]
+    assert len(a_calls) == 2

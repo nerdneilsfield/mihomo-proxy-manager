@@ -549,3 +549,109 @@ async def test_status_endpoint_redacts_route_path_in_last_error(tmp_path) -> Non
     data = response.json()
     assert route_path not in data["sources"][0]["last_error"]
     assert "***" in data["sources"][0]["last_error"]
+
+
+class ExplodingCacheStore:
+    async def get(self, source_name: str):
+        raise AssertionError("cache must not be read")
+
+    def set_refreshing(self, source_name: str, refreshing: bool) -> None:
+        raise AssertionError("refresh state must not change")
+
+    def cache_path(self, source_name: str) -> str | None:
+        return None
+
+
+def access_config_file(tmp_path):
+    path = config_file(tmp_path)
+    path.write_text(
+        path.read_text(encoding="utf-8")
+        + """
+[routes.phone.access]
+user_agent = ["mihomo/*", "clash-meta/*"]
+""",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_provider_forbids_missing_user_agent_before_cache_read(tmp_path) -> None:
+    config = load_config(access_config_file(tmp_path))
+    app = create_app(
+        config,
+        cache_store=ExplodingCacheStore(),
+        refresher=FakeRefresher(),
+        scheduler=None,
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml",
+            headers={"User-Agent": ""},
+        )
+
+    assert response.status_code == 403
+
+
+def test_provider_forbids_non_matching_user_agent_before_cache_read(tmp_path) -> None:
+    config = load_config(access_config_file(tmp_path))
+    app = create_app(
+        config,
+        cache_store=ExplodingCacheStore(),
+        refresher=FakeRefresher(),
+        scheduler=None,
+    )
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml",
+            headers={"User-Agent": "Mihomo/1.19.5"},
+        )
+
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_provider_allows_matching_user_agent(tmp_path) -> None:
+    config = load_config(access_config_file(tmp_path))
+    store = JsonSourceCacheStore(config.cache)
+    await store.set(
+        "airport_a",
+        SourceCache(
+            "airport_a",
+            1,
+            datetime.now(UTC),
+            datetime.now(UTC),
+            None,
+            None,
+            1,
+            (),
+            None,
+            (ProxyRecord("airport_a", {"name": "HK", "type": "vmess"}),),
+        ),
+    )
+    app = create_app(config, cache_store=store, refresher=None, scheduler=None)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml",
+            headers={"User-Agent": "mihomo/1.19.5"},
+        )
+
+    assert response.status_code == 200
+    assert "proxies:" in response.text
+
+
+def test_health_ignores_route_user_agent_access(tmp_path) -> None:
+    config = load_config(access_config_file(tmp_path))
+    app = create_app(
+        config,
+        cache_store=JsonSourceCacheStore(config.cache),
+        refresher=None,
+        scheduler=None,
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/healthz", headers={"User-Agent": ""})
+
+    assert response.status_code == 200

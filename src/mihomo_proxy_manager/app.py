@@ -17,6 +17,7 @@ from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route
 
+from .access import sanitize_user_agent, user_agent_allowed
 from .cache import SourceCacheStore
 from .logging import _collect_secret_values
 from .models import AppConfig, ProxyRecord, SourceCache, SourceConfig
@@ -237,6 +238,15 @@ def create_app(
         if route is None:
             logger.debug("provider 404: path={path}", path=request.url.path)
             return PlainTextResponse("not found", status_code=404)
+
+        request_user_agent = request.headers.get("user-agent")
+        if not user_agent_allowed(route.access, request_user_agent):
+            logger.info(
+                "provider forbidden: route={route} user_agent={user_agent}",
+                route=route.name,
+                user_agent=sanitize_user_agent(request_user_agent),
+            )
+            return PlainTextResponse("forbidden", status_code=403)
 
         records: list[ProxyRecord] = []
         missing: list[str] = []

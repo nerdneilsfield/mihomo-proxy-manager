@@ -71,6 +71,59 @@ async def test_fetch_rejects_oversized_response() -> None:
 
 
 @pytest.mark.asyncio
+async def test_fetch_requests_identity_encoding_by_default() -> None:
+    """测试抓取默认请求 identity 编码，避免上游返回错误压缩格式。
+
+    Test that fetch requests identity encoding by default to avoid broken
+    upstream compression metadata.
+    """
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Accept-Encoding"] == "identity"
+        return httpx.Response(200, content=b"proxies: []")
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    fetcher = SubscriptionFetcher(
+        client, HttpConfig(__import__("datetime").timedelta(seconds=30), "ua", 1024, 3)
+    )
+
+    result = await fetcher.fetch(
+        "https://93.184.216.34/sub",
+        FetchConfig(__import__("datetime").timedelta(seconds=30), "ua", {}, False),
+    )
+
+    assert result.body == b"proxies: []"
+
+
+@pytest.mark.asyncio
+async def test_fetch_tolerates_broken_content_encoding_header() -> None:
+    """测试错误 Content-Encoding 不会导致订阅抓取失败。
+
+    Test that an incorrect Content-Encoding header does not fail subscription
+    fetches before parsing can inspect the raw body.
+    """
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"Content-Encoding": "gzip"},
+            stream=httpx.ByteStream(b"proxies:\n  - name: HK\n    type: ss\n"),
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    fetcher = SubscriptionFetcher(
+        client, HttpConfig(__import__("datetime").timedelta(seconds=30), "ua", 1024, 3)
+    )
+
+    result = await fetcher.fetch(
+        "https://93.184.216.34/sub",
+        FetchConfig(__import__("datetime").timedelta(seconds=30), "ua", {}, False),
+    )
+
+    assert result.body == b"proxies:\n  - name: HK\n    type: ss\n"
+
+
+@pytest.mark.asyncio
 async def test_fetch_revalidates_redirect_target() -> None:
     """测试抓取拒绝重定向到私有网络地址 / Test that fetch rejects redirects to private network addresses.
 

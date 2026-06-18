@@ -6,6 +6,8 @@ HTTP subscription fetcher with safe redirect handling, cookie isolation, and siz
 from __future__ import annotations
 
 import http.cookiejar
+import gzip
+import zlib
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlparse
 
@@ -42,6 +44,34 @@ def _origin(url: str) -> tuple[str, str | None, int | None]:
     elif port is None and parsed.scheme == "https":
         port = 443
     return (parsed.scheme, parsed.hostname, port)
+
+
+def _decode_response_body(
+    body: bytes, headers: httpx.Headers
+) -> tuple[bytes, dict[str, str]]:
+    """Decode supported content encodings and return headers safe for a buffered response."""
+    sanitized_headers = dict(headers)
+    encoding = headers.get("Content-Encoding", "").strip().lower()
+    if not encoding:
+        return body, sanitized_headers
+
+    sanitized_headers.pop("Content-Encoding", None)
+    sanitized_headers.pop("content-encoding", None)
+    sanitized_headers.pop("Content-Length", None)
+    sanitized_headers.pop("content-length", None)
+
+    try:
+        if encoding == "gzip":
+            return gzip.decompress(body), sanitized_headers
+        if encoding == "deflate":
+            return zlib.decompress(body), sanitized_headers
+    except (OSError, zlib.error) as exc:
+        logger.debug(
+            "content decoding failed, using raw body: encoding={encoding} error={error}",
+            encoding=encoding,
+            error=redact_secret(str(exc)),
+        )
+    return body, sanitized_headers
 
 
 @dataclass(frozen=True)
@@ -147,6 +177,7 @@ class SafeHttpClient:
         current_method = method
         current_body = body
         current_headers = dict(headers)
+        current_headers.setdefault("Accept-Encoding", "identity")
         redacted_initial = redact_url(url)
         logger.debug(
             "http request start: method={method} url={url} timeout={timeout}s allow_private={allow_private}",
@@ -207,21 +238,31 @@ class SafeHttpClient:
                     current = next_url
                     continue
                 content = bytearray()
-                async for chunk in response.aiter_bytes():
-                    content.extend(chunk)
+                if response.is_stream_consumed:
+                    content.extend(response.content)
                     if len(content) > self.http_config.max_response_size:
                         raise ValueError("upstream response exceeds max_response_size")
+                else:
+                    async for chunk in response.aiter_raw():
+                        content.extend(chunk)
+                        if len(content) > self.http_config.max_response_size:
+                            raise ValueError(
+                                "upstream response exceeds max_response_size"
+                            )
+                body, response_headers = _decode_response_body(
+                    bytes(content), response.headers
+                )
                 logger.debug(
                     "http response: status={status} bytes={bytes} url={url} hops={hops}",
                     status=response.status_code,
-                    bytes=len(content),
+                    bytes=len(body),
                     url=redact_url(current),
                     hops=attempt,
                 )
                 return httpx.Response(
                     response.status_code,
-                    headers=response.headers,
-                    content=bytes(content),
+                    headers=response_headers,
+                    content=body,
                     request=response.request,
                 )
         raise ValueError("too many redirects")

@@ -296,3 +296,25 @@ async def test_validate_runtime_rejects_private_ipv6_for_udp(
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
     with pytest.raises(ValueError, match="non-public"):
         await validate_dns_endpoint_runtime(endpoint, allow_private_network=False)
+
+
+@pytest.mark.asyncio
+async def test_resolver_warning_includes_error_type_for_empty_str_exc() -> None:
+    """When str(exc) is empty (e.g. httpx.ConnectTimeout), warning must still carry repr."""
+
+    class _EmptyStrError(Exception):
+        def __str__(self) -> str:
+            return ""
+
+    class _EmptyStrClient:
+        async def query(self, endpoint, name, qtype, *, timeout, allow_private_network, transaction_id=None):
+            raise _EmptyStrError()
+
+    resolver = DnsResolver(client=_EmptyStrClient(), allow_private_network=False)
+    records = [ProxyRecord("airport_a", {"name": "HK", "server": "example.com"})]
+    config = SourceDnsConfig(True, ("udp://1.1.1.1:53",), timedelta(seconds=5), "keep")
+
+    _resolved, warnings = await resolver.resolve_records(records, config, source="airport_a")
+
+    assert len(warnings) == 1
+    assert "_EmptyStrError" in warnings[0]

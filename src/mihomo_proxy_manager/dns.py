@@ -523,7 +523,10 @@ class DnsResolver:
                         allow_private_network=self.allow_private_network,
                     )
                 except Exception as exc:
-                    last_error = redact_secret(str(exc))[:200]
+                    exc_str = str(exc)
+                    if not exc_str:
+                        exc_str = repr(exc)
+                    last_error = redact_secret(exc_str)[:200]
                     logger.debug(
                         "dns query failed: source={source} server={server} scheme={scheme} qtype={qtype} error={error}",
                         source=source,

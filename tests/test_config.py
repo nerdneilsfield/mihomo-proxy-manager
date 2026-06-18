@@ -415,7 +415,48 @@ user_agent = ["mihomo/*", "clash-meta/*"]
     )
     assert config.sources["airport_a"].dns.timeout.total_seconds() == 3
     assert config.sources["airport_a"].dns.failure == "drop"
+    assert config.dns.enable_ipv6 is False
+    assert config.sources["airport_a"].dns.enable_ipv6 is False
     assert config.routes["phone"].access.user_agent == ("mihomo/*", "clash-meta/*")
+
+
+def test_dns_enable_ipv6_global_and_source_override(temp_config_path: Path) -> None:
+    body = (
+        minimal_config()
+        + """
+[dns]
+servers = ["udp://1.1.1.1:53"]
+enable_ipv6 = true
+
+[sources.airport_a.dns]
+enabled = true
+"""
+    )
+
+    config = load_config(write_config(temp_config_path, body))
+
+    assert config.dns.enable_ipv6 is True
+    assert config.sources["airport_a"].dns.enable_ipv6 is True
+
+
+def test_source_dns_can_override_global_enable_ipv6(temp_config_path: Path) -> None:
+    body = (
+        minimal_config()
+        + """
+[dns]
+servers = ["udp://1.1.1.1:53"]
+enable_ipv6 = true
+
+[sources.airport_a.dns]
+enabled = true
+enable_ipv6 = false
+"""
+    )
+
+    config = load_config(write_config(temp_config_path, body))
+
+    assert config.dns.enable_ipv6 is True
+    assert config.sources["airport_a"].dns.enable_ipv6 is False
 
 
 def test_source_dns_defaults_to_disabled_with_global_defaults(

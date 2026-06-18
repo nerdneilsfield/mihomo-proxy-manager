@@ -249,6 +249,35 @@ async def test_resolver_failover_uses_second_server() -> None:
     assert resolved[0].data["server"] == "93.184.216.34"
     assert client.calls == [
         ("udp", "example.com", "A"),
+        ("tcp", "example.com", "A"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_resolver_queries_aaaa_when_enable_ipv6_is_true() -> None:
+    client = FakeDnsClient(
+        {
+            ("udp", "example.com", "A"): DnsMessageError("first failed"),
+            ("udp", "example.com", "AAAA"): DnsMessageError("first failed"),
+            ("tcp", "example.com", "A"): ["93.184.216.34"],
+        }
+    )
+    resolver = DnsResolver(client=client, allow_private_network=False)
+    records = [ProxyRecord("airport_a", {"name": "HK", "server": "example.com"})]
+    config = SourceDnsConfig(
+        True,
+        ("udp://1.1.1.1:53", "tcp://8.8.8.8:53"),
+        timedelta(seconds=5),
+        "keep",
+        enable_ipv6=True,
+    )
+
+    resolved, warnings = await resolver.resolve_records(records, config, source="airport_a")
+
+    assert warnings == []
+    assert resolved[0].data["server"] == "93.184.216.34"
+    assert client.calls == [
+        ("udp", "example.com", "A"),
         ("udp", "example.com", "AAAA"),
         ("tcp", "example.com", "A"),
     ]

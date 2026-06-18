@@ -370,6 +370,8 @@ failure = "drop"
 
 `failure` accepts `keep`, `drop`, or `fail` — keep the original hostname, drop the node, or fail the whole refresh respectively. Only the top-level `server` field is replaced; existing `servername`, `sni`, and `ws-opts.headers.Host` are preserved. Sources with DNS enabled skip ETag/Last-Modified conditional requests so each refresh re-resolves.
 
+By default only A records (IPv4) are queried. To enable IPv6, set `enable_ipv6 = true` in `[dns]` or `[sources.<name>.dns]`; the resolver will additionally query AAAA records.
+
 DNS servers may use `udp://`, `tcp://`, `tls://`, or `https://`. The DNS server hostname is resolved once per query and pinned to a public IP at connect time, preventing DNS rebinding attacks.
 
 ### Restrict provider client User-Agent

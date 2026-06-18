@@ -317,6 +317,7 @@ def _dns(data: dict[str, Any]) -> DnsConfig:
         servers=_as_tuple(data.get("servers"), default=("udp://1.1.1.1:53",)),
         timeout=parse_duration(data.get("timeout", "5s")),
         failure=data.get("failure", "keep"),
+        enable_ipv6=bool(data.get("enable_ipv6", False)),
     )
 
 
@@ -333,6 +334,7 @@ def _source_dns(data: dict[str, Any], dns: DnsConfig) -> SourceDnsConfig:
             data.get("timeout", f"{int(dns.timeout.total_seconds())}s")
         ),
         failure=data.get("failure", dns.failure),
+        enable_ipv6=bool(data.get("enable_ipv6", dns.enable_ipv6)),
     )
 
 

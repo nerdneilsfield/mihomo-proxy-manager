@@ -370,6 +370,8 @@ failure = "drop"
 
 `failure` 可选 `keep`、`drop`、`fail`：解析失败时分别为保留原域名、丢弃节点、整次刷新失败。仅替换节点顶层 `server` 字段；已存在的 `servername`、`sni` 与 `ws-opts.headers.Host` 不会被 IP 覆盖。启用 DNS 的 source 会跳过 ETag/Last-Modified 条件请求。
 
+默认只解析 A 记录（IPv4）。如需 IPv6，在 `[dns]` 或 `[sources.<name>.dns]` 中设置 `enable_ipv6 = true`，解析器会额外查询 AAAA 记录。
+
 DNS 服务器支持 `udp://`、`tcp://`、`tls://`、`https://` 四种 scheme，运行时会先解析 DNS 服务器主机名并 pin 到公网 IP，避免 DNS rebinding。
 
 ### 限制客户端 User-Agent

@@ -58,6 +58,7 @@ default_include_meta_comments = false
 # DNS resolution is opt-in; sources are not resolved unless they set enabled = true.
 # Servers support udp://, tcp://, https:// (DoH), and tls:// (DoT) schemes.
 # Servers are tried in order; on failure the next is used.
+# enable_ipv6 defaults to false (A records only). Set to true to also query AAAA.
 [dns]
 servers = [
     "udp://1.1.1.1:53",
@@ -66,6 +67,7 @@ servers = [
 ]
 timeout = "5s"
 failure = "keep"
+enable_ipv6 = false
 
 # Source A: authenticated upstream subscription.
 [sources.airport_a]

@@ -512,8 +512,9 @@ class DnsResolver:
         if not isinstance(server, str) or not server or _is_ip_literal(server):
             return record
         last_error = "no DNS server returned an address"
+        qtypes = ("A", "AAAA") if config.enable_ipv6 else ("A",)
         for endpoint in endpoints:
-            for qtype in ("A", "AAAA"):
+            for qtype in qtypes:
                 try:
                     addresses = await self.client.query(
                         endpoint,

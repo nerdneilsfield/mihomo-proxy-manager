@@ -106,6 +106,7 @@ class DnsConfig:
     servers: tuple[str, ...] = ("udp://1.1.1.1:53",)
     timeout: timedelta = field(default_factory=lambda: timedelta(seconds=5))
     failure: Literal["keep", "drop", "fail"] = "keep"
+    enable_ipv6: bool = False
 
 
 @dataclass(frozen=True)
@@ -116,6 +117,7 @@ class SourceDnsConfig:
     servers: tuple[str, ...] = ("udp://1.1.1.1:53",)
     timeout: timedelta = field(default_factory=lambda: timedelta(seconds=5))
     failure: Literal["keep", "drop", "fail"] = "keep"
+    enable_ipv6: bool = False
 
 
 @dataclass(frozen=True)

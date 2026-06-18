@@ -382,3 +382,101 @@ url = "https://example.com/action"
     joined = "\n".join(report.errors)
     assert "on_failure" in joined
     assert "'panic'" in joined
+
+
+def test_dns_config_defaults_and_source_overrides(temp_config_path: Path) -> None:
+    body = (
+        minimal_config()
+        + """
+[dns]
+servers = ["udp://1.1.1.1:53", "https://dns.google/dns-query"]
+timeout = "5s"
+failure = "keep"
+
+[sources.airport_a.dns]
+enabled = true
+servers = ["tls://1.1.1.1:853?servername=cloudflare-dns.com"]
+timeout = "3s"
+failure = "drop"
+
+[routes.phone.access]
+user_agent = ["mihomo/*", "clash-meta/*"]
+"""
+    )
+
+    config = load_config(write_config(temp_config_path, body))
+
+    assert config.dns.servers == ("udp://1.1.1.1:53", "https://dns.google/dns-query")
+    assert config.dns.timeout.total_seconds() == 5
+    assert config.dns.failure == "keep"
+    assert config.sources["airport_a"].dns.enabled is True
+    assert config.sources["airport_a"].dns.servers == (
+        "tls://1.1.1.1:853?servername=cloudflare-dns.com",
+    )
+    assert config.sources["airport_a"].dns.timeout.total_seconds() == 3
+    assert config.sources["airport_a"].dns.failure == "drop"
+    assert config.routes["phone"].access.user_agent == ("mihomo/*", "clash-meta/*")
+
+
+def test_source_dns_defaults_to_disabled_with_global_defaults(
+    temp_config_path: Path,
+) -> None:
+    body = (
+        minimal_config()
+        + """
+[dns]
+servers = ["tcp://8.8.8.8:53"]
+timeout = "4s"
+failure = "fail"
+"""
+    )
+
+    config = load_config(write_config(temp_config_path, body))
+
+    assert config.sources["airport_a"].dns.enabled is False
+    assert config.sources["airport_a"].dns.servers == ("tcp://8.8.8.8:53",)
+    assert config.sources["airport_a"].dns.timeout.total_seconds() == 4
+    assert config.sources["airport_a"].dns.failure == "fail"
+
+
+def test_validation_rejects_invalid_dns_config(temp_config_path: Path) -> None:
+    body = (
+        minimal_config()
+        + """
+[dns]
+servers = ["udp://127.0.0.1:53", "ftp://example.com/dns"]
+failure = "explode"
+
+[sources.airport_a.dns]
+enabled = true
+servers = []
+failure = "panic"
+"""
+    )
+    config = load_config(write_config(temp_config_path, body), validate=False)
+    report = config.validate(config_path=temp_config_path)
+    joined = "\n".join(report.errors)
+
+    assert not report.ok
+    assert "dns server resolves to non-public address" in joined
+    assert "unsupported DNS server scheme" in joined
+    assert "dns failure must be" in joined
+    assert "source 'airport_a' dns servers must not be empty" in joined
+    assert "source 'airport_a' dns failure must be" in joined
+
+
+def test_route_access_empty_user_agent_list_keeps_route_open(
+    temp_config_path: Path,
+) -> None:
+    body = (
+        minimal_config()
+        + """
+[routes.phone.access]
+user_agent = []
+"""
+    )
+
+    config = load_config(write_config(temp_config_path, body))
+
+    assert config.routes["phone"].access.user_agent == ()
+

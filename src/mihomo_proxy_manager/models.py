@@ -100,6 +100,25 @@ class SourcePluginConfig:
 
 
 @dataclass(frozen=True)
+class DnsConfig:
+    """Global DNS resolution defaults."""
+
+    servers: tuple[str, ...] = ("udp://1.1.1.1:53",)
+    timeout: timedelta = field(default_factory=lambda: timedelta(seconds=5))
+    failure: Literal["keep", "drop", "fail"] = "keep"
+
+
+@dataclass(frozen=True)
+class SourceDnsConfig:
+    """Per-source DNS resolution behavior."""
+
+    enabled: bool = False
+    servers: tuple[str, ...] = ("udp://1.1.1.1:53",)
+    timeout: timedelta = field(default_factory=lambda: timedelta(seconds=5))
+    failure: Literal["keep", "drop", "fail"] = "keep"
+
+
+@dataclass(frozen=True)
 class SourceConfig:
     """订阅源配置，包含 URL、格式、抓取、刷新、重命名和过滤设置。
 
@@ -115,6 +134,7 @@ class SourceConfig:
     rename: RenameConfig
     filter: FilterConfig
     plugins: SourcePluginConfig
+    dns: SourceDnsConfig = field(default_factory=SourceDnsConfig)
 
 
 @dataclass(frozen=True)
@@ -126,6 +146,13 @@ class RouteOutputConfig:
 
     format: Literal["provider"] = "provider"
     include_meta_comments: bool = False
+
+
+@dataclass(frozen=True)
+class RouteAccessConfig:
+    """Route access control configuration."""
+
+    user_agent: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -142,6 +169,7 @@ class RouteConfig:
     output: RouteOutputConfig
     rename: RenameConfig
     filter: FilterConfig
+    access: RouteAccessConfig = field(default_factory=RouteAccessConfig)
 
 
 @dataclass(frozen=True)
@@ -284,6 +312,7 @@ class AppConfig:
     sources: dict[str, SourceConfig]
     routes: dict[str, RouteConfig]
     plugins: dict[str, PluginConfig]
+    dns: DnsConfig = field(default_factory=DnsConfig)
 
 
 @dataclass(frozen=True)

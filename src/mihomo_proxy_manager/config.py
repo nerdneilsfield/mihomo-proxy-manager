@@ -12,6 +12,7 @@ import tomllib
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from croniter import croniter
@@ -21,6 +22,7 @@ from .security import SecurityError, assert_safe_url, has_path_entropy
 from .models import (
     AppConfig,
     CacheConfig,
+    DnsConfig,
     FetchConfig,
     FilterConfig,
     HttpConfig,
@@ -31,12 +33,14 @@ from .models import (
     PluginRefConfig,
     RefreshConfig,
     RenameConfig,
+    RouteAccessConfig,
     RouteConfig,
     RouteOutputConfig,
     SchedulerConfig,
     SecurityConfig,
     ServerConfig,
     SourceConfig,
+    SourceDnsConfig,
     SourcePluginConfig,
     ValidationReport,
 )
@@ -45,6 +49,9 @@ DEFAULT_USER_AGENT = "mihomo/1.19.5"
 USER_AGENT_PATTERN = re.compile(
     r"^(?:clash[.-]meta|mihomo)/\d+(?:\.\d+){1,3}(?:[-+][A-Za-z0-9._-]+)?$"
 )
+
+DNS_FAILURES = {"keep", "drop", "fail"}
+DNS_SCHEMES = {"udp", "tcp", "tls", "https"}
 
 
 def parse_duration(value: str) -> timedelta:
@@ -282,6 +289,109 @@ def _source_plugins(data: dict[str, Any]) -> SourcePluginConfig:
     return SourcePluginConfig(before_fetch=before_fetch)
 
 
+def _as_tuple(value: Any, *, default: tuple[str, ...] = ()) -> tuple[str, ...]:
+    """Coerce a raw TOML value into a tuple of strings.
+
+    Args:
+        value: 原始值（None、字符串或可迭代对象）。
+               Raw value (None, string, or iterable).
+        default: 当 value 为 None 时使用的默认元组。
+                 Default tuple used when value is None.
+
+    Returns:
+        字符串元组 / Tuple of strings.
+    """
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return (value,)
+    return tuple(str(item) for item in value)
+
+
+def _dns(data: dict[str, Any]) -> DnsConfig:
+    """从原始字典构建全局 DnsConfig。
+
+    Build a global DnsConfig from a raw dictionary.
+    """
+    return DnsConfig(
+        servers=_as_tuple(data.get("servers"), default=("udp://1.1.1.1:53",)),
+        timeout=parse_duration(data.get("timeout", "5s")),
+        failure=data.get("failure", "keep"),
+    )
+
+
+def _source_dns(data: dict[str, Any], dns: DnsConfig) -> SourceDnsConfig:
+    """从原始字典构建 SourceDnsConfig，缺省值继承全局 DNS 配置。
+
+    Build a SourceDnsConfig from a raw dictionary, inheriting defaults from
+    the global DNS config.
+    """
+    return SourceDnsConfig(
+        enabled=bool(data.get("enabled", False)),
+        servers=_as_tuple(data.get("servers"), default=dns.servers),
+        timeout=parse_duration(
+            data.get("timeout", f"{int(dns.timeout.total_seconds())}s")
+        ),
+        failure=data.get("failure", dns.failure),
+    )
+
+
+def _route_access(data: dict[str, Any]) -> RouteAccessConfig:
+    """从原始字典构建 RouteAccessConfig。
+
+    Build a RouteAccessConfig from a raw dictionary.
+    """
+    return RouteAccessConfig(user_agent=_as_tuple(data.get("user_agent")))
+
+
+def _validate_dns_servers(
+    servers: tuple[str, ...],
+    *,
+    label: str,
+    allow_private_network: bool,
+) -> list[str]:
+    """验证 DNS 服务器列表的 scheme、host 和地址安全性。
+
+    Validate DNS server list: scheme, host presence, and address safety.
+    """
+    errors: list[str] = []
+    if not servers:
+        return [f"{label} dns servers must not be empty"]
+    for server in servers:
+        parsed = urlparse(server)
+        if parsed.scheme not in DNS_SCHEMES:
+            errors.append(f"{label} unsupported DNS server scheme: {parsed.scheme!r}")
+            continue
+        if not parsed.hostname:
+            errors.append(f"{label} DNS server host is required: {server!r}")
+            continue
+        if parsed.scheme in {"udp", "tcp", "tls"} and parsed.port is None:
+            errors.append(f"{label} DNS server port is required: {server!r}")
+        if parsed.scheme == "https":
+            try:
+                assert_safe_url(
+                    server,
+                    allow_private_network=allow_private_network,
+                    resolve_dns=False,
+                )
+            except SecurityError as exc:
+                errors.append(f"{label} DNS server is unsafe: {exc}")
+        else:
+            # Reuse static URL host checks by temporarily validating as https.
+            static_url = f"https://{parsed.hostname}/"
+            try:
+                assert_safe_url(
+                    static_url,
+                    allow_private_network=allow_private_network,
+                    resolve_dns=False,
+                )
+            except SecurityError as exc:
+                errors.append(
+                    f"{label} dns server resolves to non-public address: {exc}"
+                )
+    return errors
+
+
 class LoadedConfig(AppConfig):
     """已加载并解析的完整应用配置。
 
@@ -322,6 +432,16 @@ class LoadedConfig(AppConfig):
         )
         if http_user_agent_error:
             errors.append(http_user_agent_error)
+
+        if self.dns.failure not in DNS_FAILURES:
+            errors.append("dns failure must be 'keep', 'drop', or 'fail'")
+        errors.extend(
+            _validate_dns_servers(
+                self.dns.servers,
+                label="global",
+                allow_private_network=self.security.allow_private_network_urls,
+            )
+        )
 
         paths: dict[str, str] = {self.server.health_path: "health_path"}
         if self.server.status_path:
@@ -428,6 +548,19 @@ class LoadedConfig(AppConfig):
                     )
                 except SecurityError as exc:
                     errors.append(f"source {source.name!r} URL is unsafe: {exc}")
+
+            if source.dns.enabled:
+                if source.dns.failure not in DNS_FAILURES:
+                    errors.append(
+                        f"source {source.name!r} dns failure must be 'keep', 'drop', or 'fail'"
+                    )
+                errors.extend(
+                    _validate_dns_servers(
+                        source.dns.servers,
+                        label=f"source {source.name!r}",
+                        allow_private_network=self.security.allow_private_network_urls,
+                    )
+                )
 
         for plugin in self.plugins.values():
             plugin_header_user_agent = _header_user_agent(plugin.headers)
@@ -537,6 +670,7 @@ def load_config(path: Path, *, validate: bool = True) -> LoadedConfig:
         "sources",
         "routes",
         "plugins",
+        "dns",
     }
     unknown_top_level = sorted(set(raw) - allowed_top_level)
     if unknown_top_level:
@@ -554,6 +688,8 @@ def load_config(path: Path, *, validate: bool = True) -> LoadedConfig:
     parser_raw = _table(raw, "parser")
     output_raw = _table(raw, "output")
     logging_raw = _table(raw, "logging")
+    dns_raw = _table(raw, "dns")
+    dns = _dns(dns_raw)
 
     server = ServerConfig(
         host=server_raw.get("host", "0.0.0.0"),
@@ -651,6 +787,7 @@ def load_config(path: Path, *, validate: bool = True) -> LoadedConfig:
             rename=_rename(_table(values, "rename")),
             filter=_filter(_table(values, "filter")),
             plugins=_source_plugins(_table(values, "plugins")),
+            dns=_source_dns(_table(values, "dns"), dns),
         )
 
     routes = {}
@@ -671,6 +808,7 @@ def load_config(path: Path, *, validate: bool = True) -> LoadedConfig:
             ),
             rename=_rename(_table(values, "rename")),
             filter=_filter(_table(values, "filter")),
+            access=_route_access(_table(values, "access")),
         )
 
     config = LoadedConfig(
@@ -686,6 +824,7 @@ def load_config(path: Path, *, validate: bool = True) -> LoadedConfig:
         sources=sources,
         routes=routes,
         plugins=plugins,
+        dns=dns,
     )
     if validate:
         report = config.validate(config_path=path)

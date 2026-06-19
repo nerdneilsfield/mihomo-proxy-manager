@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Mapping, Protocol, Sequence, cast
@@ -222,6 +223,12 @@ def _qx_value(value: object) -> str:
     return _string(value).replace("\r", " ").replace("\n", " ")
 
 
+def _qx_clean_label(value: object) -> str:
+    """Sanitize comma/control-sensitive Quantumult X label text."""
+    cleaned = re.sub(r"[\x00-\x1f\x7f,]+", " ", _string(value))
+    return " ".join(cleaned.split())
+
+
 def _qx_hostport(data: dict[str, object]) -> str | None:
     """Build Quantumult X host:port endpoint."""
     host = _string(data.get("server"))
@@ -236,43 +243,53 @@ def _qx_tag(data: dict[str, object]) -> str:
     return f"tag={_qx_value(data.get('name'))}"
 
 
-def _qx_tls_segments(
-    data: dict[str, object],
-    *,
-    default_host: str = "",
-    include_over_tls: bool = True,
-) -> list[str]:
-    """Build common Quantumult X TLS segments."""
-    segments: list[str] = []
-    if include_over_tls and _boolish(data.get("tls")):
-        segments.append("over-tls=true")
-    tls_host = _string(data.get("servername") or data.get("sni") or default_host)
-    if tls_host:
-        segments.append(f"tls-host={_qx_value(tls_host)}")
-    if "skip-cert-verify" in data:
-        verification = "false" if _boolish(data.get("skip-cert-verify")) else "true"
-        segments.append(f"tls-verification={verification}")
+def _qx_ws_segments(data: dict[str, object], obfs: str) -> list[str]:
+    """Build Quantumult X websocket obfs segments."""
+    segments = [f"obfs={obfs}"]
+    ws_opts = data.get("ws-opts")
+    if isinstance(ws_opts, dict):
+        path = _string(ws_opts.get("path"))
+        if path:
+            segments.append(f"obfs-uri={_qx_value(path)}")
+        headers = ws_opts.get("headers")
+        if isinstance(headers, dict):
+            host = _string(headers.get("Host") or headers.get("host"))
+            if host:
+                segments.append(f"obfs-host={_qx_value(host)}")
     return segments
 
 
-def _qx_transport_segments(data: dict[str, object]) -> list[str] | None:
-    """Build simple Quantumult X transport segments, or None if unsupported."""
+def _qx_ss_obfs_segments(data: dict[str, object]) -> list[str] | None:
+    """Build Quantumult X Shadowsocks obfs segments."""
     network = _string(data.get("network"))
+    tls_enabled = _boolish(data.get("tls"))
     if not network or network == "tcp":
-        return []
-    if network == "ws":
-        segments = ["obfs=ws"]
-        ws_opts = data.get("ws-opts")
-        if isinstance(ws_opts, dict):
-            path = _string(ws_opts.get("path"))
-            if path:
-                segments.append(f"obfs-uri={_qx_value(path)}")
-            headers = ws_opts.get("headers")
-            if isinstance(headers, dict):
-                host = _string(headers.get("Host") or headers.get("host"))
-                if host:
-                    segments.append(f"obfs-host={_qx_value(host)}")
+        if not tls_enabled:
+            return []
+        segments = ["obfs=tls"]
+        tls_host = _string(data.get("servername") or data.get("sni"))
+        if tls_host:
+            segments.append(f"obfs-host={_qx_value(tls_host)}")
         return segments
+    if network == "ws":
+        return _qx_ws_segments(data, "wss" if tls_enabled else "ws")
+    return None
+
+
+def _qx_vmess_vless_obfs_segments(data: dict[str, object]) -> list[str] | None:
+    """Build Quantumult X VMess/VLESS obfs segments."""
+    network = _string(data.get("network"))
+    tls_enabled = _boolish(data.get("tls"))
+    if not network or network == "tcp":
+        if not tls_enabled:
+            return []
+        segments = ["obfs=over-tls"]
+        tls_host = _string(data.get("servername") or data.get("sni"))
+        if tls_host:
+            segments.append(f"obfs-host={_qx_value(tls_host)}")
+        return segments
+    if network == "ws":
+        return _qx_ws_segments(data, "wss" if tls_enabled else "ws")
     if network == "grpc":
         segments = ["obfs=grpc"]
         grpc_opts = data.get("grpc-opts")
@@ -284,6 +301,44 @@ def _qx_transport_segments(data: dict[str, object]) -> list[str] | None:
     return None
 
 
+def _qx_trojan_transport_segments(data: dict[str, object]) -> list[str] | None:
+    """Build simple Quantumult X Trojan transport segments."""
+    network = _string(data.get("network"))
+    if not network or network == "tcp":
+        return []
+    if network == "ws":
+        return _qx_ws_segments(data, "ws")
+    if network == "grpc":
+        segments = ["obfs=grpc"]
+        grpc_opts = data.get("grpc-opts")
+        if isinstance(grpc_opts, dict):
+            service_name = _string(grpc_opts.get("grpc-service-name"))
+            if service_name:
+                segments.append(f"obfs-uri={_qx_value(service_name)}")
+        return segments
+    return None
+
+
+def _qx_trojan_tls_segments(data: dict[str, object], *, default_host: str) -> list[str]:
+    """Build Quantumult X Trojan TLS segments."""
+    segments: list[str] = []
+    tls_host = _string(data.get("servername") or data.get("sni") or default_host)
+    if tls_host:
+        segments.append(f"tls-host={_qx_value(tls_host)}")
+    if "skip-cert-verify" in data:
+        verification = "false" if _boolish(data.get("skip-cert-verify")) else "true"
+        segments.append(f"tls-verification={verification}")
+    return segments
+
+
+def _has_unsupported_qx_ss_plugin(data: dict[str, object]) -> str | None:
+    """Return first Shadowsocks plugin/obfs field Quantumult X renderer skips."""
+    for field_name in ("plugin", "plugin-opts", "obfs", "obfs-opts"):
+        if field_name in data and data[field_name] not in (None, "", False):
+            return field_name
+    return None
+
+
 def _render_qx_ss(data: dict[str, object]) -> str | None:
     """Render Shadowsocks proxy as Quantumult X server_remote line."""
     hostport = _qx_hostport(data)
@@ -291,15 +346,15 @@ def _render_qx_ss(data: dict[str, object]) -> str | None:
     password = _string(data.get("password"))
     if not hostport or not method or not password:
         return None
-    transport = _qx_transport_segments(data)
-    if transport is None:
+    obfs_segments = _qx_ss_obfs_segments(data)
+    if obfs_segments is None:
         return None
     segments = [
         f"shadowsocks={hostport}",
         f"method={_qx_value(method)}",
         f"password={_qx_value(password)}",
     ]
-    segments.extend(transport)
+    segments.extend(obfs_segments)
     segments.append(_qx_tag(data))
     return ", ".join(segments)
 
@@ -316,10 +371,8 @@ def _render_qx_trojan(data: dict[str, object]) -> str | None:
         f"password={_qx_value(password)}",
         "over-tls=true",
     ]
-    segments.extend(
-        _qx_tls_segments(data, default_host=host, include_over_tls=False)
-    )
-    transport = _qx_transport_segments(data)
+    segments.extend(_qx_trojan_tls_segments(data, default_host=host))
+    transport = _qx_trojan_transport_segments(data)
     if transport is None:
         return None
     segments.extend(transport)
@@ -331,10 +384,9 @@ def _render_qx_vless(data: dict[str, object]) -> str | None:
     """Render VLESS proxy as Quantumult X server_remote line."""
     hostport = _qx_hostport(data)
     uuid = _string(data.get("uuid"))
-    host = _string(data.get("server"))
     if not hostport or not uuid:
         return None
-    transport = _qx_transport_segments(data)
+    transport = _qx_vmess_vless_obfs_segments(data)
     if transport is None:
         return None
     segments = [
@@ -342,7 +394,6 @@ def _render_qx_vless(data: dict[str, object]) -> str | None:
         "method=none",
         f"password={_qx_value(uuid)}",
     ]
-    segments.extend(_qx_tls_segments(data, default_host=host))
     segments.extend(transport)
     segments.append(_qx_tag(data))
     return ", ".join(segments)
@@ -352,10 +403,9 @@ def _render_qx_vmess(data: dict[str, object]) -> str | None:
     """Render VMess proxy as Quantumult X server_remote line."""
     hostport = _qx_hostport(data)
     uuid = _string(data.get("uuid"))
-    host = _string(data.get("server"))
     if not hostport or not uuid:
         return None
-    transport = _qx_transport_segments(data)
+    transport = _qx_vmess_vless_obfs_segments(data)
     if transport is None:
         return None
     segments = [
@@ -363,7 +413,6 @@ def _render_qx_vmess(data: dict[str, object]) -> str | None:
         "method=none",
         f"password={_qx_value(uuid)}",
     ]
-    segments.extend(_qx_tls_segments(data, default_host=host))
     segments.extend(transport)
     segments.append(_qx_tag(data))
     return ", ".join(segments)
@@ -488,6 +537,16 @@ class XrayUriRenderer:
                 )
                 continue
             proxy_type = _string(proxy.get("type")).lower()
+            if proxy_type == "ss":
+                unsupported_ss_field = _has_unsupported_qx_ss_plugin(proxy)
+                if unsupported_ss_field is not None:
+                    warnings.append(
+                        _skip_warning(
+                            proxy,
+                            f"unsupported Shadowsocks field {unsupported_ss_field}",
+                        )
+                    )
+                    continue
             renderer = renderers.get(proxy_type)
             if renderer is None:
                 warnings.append(
@@ -589,7 +648,11 @@ class QuantumultXRenderer:
 
     def _render_import(self, request: RenderRequest) -> RenderResponse:
         """Render Quantumult X remote resource import response."""
-        resource_tag = request.route.output.resource_tag or request.route.name
+        resource_tag = (
+            _qx_clean_label(request.route.output.resource_tag)
+            or _qx_clean_label(request.route.name)
+            or "MPM"
+        )
         payload = {
             "server_remote": [
                 f"{request.main_public_url}, tag={resource_tag}, "

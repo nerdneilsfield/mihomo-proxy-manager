@@ -496,6 +496,97 @@ def test_quantumult_x_renderer_outputs_server_lines() -> None:
     assert response.status_code == 200
 
 
+def test_quantumult_x_vless_tcp_tls_uses_obfs_over_tls() -> None:
+    """Test VLESS TCP TLS maps to Quantumult X obfs=over-tls."""
+    response = build_renderer_registry()["quantumult-x"].render(
+        RenderRequest(
+            quantumult_x_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "VLESS TLS",
+                        "type": "vless",
+                        "server": "example.com",
+                        "port": 443,
+                        "uuid": "00000000-0000-0000-0000-000000000000",
+                        "tls": True,
+                        "servername": "example.com",
+                    },
+                )
+            ],
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert "obfs=over-tls" in text
+    assert "obfs-host=example.com" in text
+    assert "over-tls=true" not in text
+
+
+def test_quantumult_x_vmess_ws_tls_uses_wss_obfs() -> None:
+    """Test VMess WS TLS maps to Quantumult X obfs=wss."""
+    response = build_renderer_registry()["quantumult-x"].render(
+        RenderRequest(
+            quantumult_x_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "VMess WSS",
+                        "type": "vmess",
+                        "server": "example.com",
+                        "port": 443,
+                        "uuid": "00000000-0000-0000-0000-000000000000",
+                        "cipher": "auto",
+                        "tls": True,
+                        "servername": "example.com",
+                        "network": "ws",
+                        "ws-opts": {
+                            "path": "/ws",
+                            "headers": {"Host": "example.com"},
+                        },
+                    },
+                )
+            ],
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert "obfs=wss" in text
+    assert "obfs-host=example.com" in text
+    assert "obfs-uri=/ws" in text
+    assert "over-tls=true" not in text
+
+
+def test_quantumult_x_ss_tls_uses_tls_obfs() -> None:
+    """Test Shadowsocks TLS maps to Quantumult X obfs=tls."""
+    response = build_renderer_registry()["quantumult-x"].render(
+        RenderRequest(
+            quantumult_x_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "SS TLS",
+                        "type": "ss",
+                        "server": "example.com",
+                        "port": 443,
+                        "cipher": "chacha20-ietf-poly1305",
+                        "password": "password",
+                        "tls": True,
+                        "servername": "example.com",
+                    },
+                )
+            ],
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert "obfs=tls" in text
+    assert "obfs-host=example.com" in text
+
+
 def test_quantumult_x_import_redirect_response() -> None:
     """Test quantumult-x app-scheme import redirect response."""
     response = build_renderer_registry()["quantumult-x"].render(
@@ -520,6 +611,25 @@ def test_quantumult_x_import_redirect_response() -> None:
             "enabled=true"
         ]
     }
+
+
+def test_quantumult_x_import_sanitizes_comma_and_control_chars() -> None:
+    """Test import resource tag avoids comma/control characters."""
+    response = build_renderer_registry()["quantumult-x"].render(
+        RenderRequest(
+            quantumult_x_route(resource_tag="MPM, Phones\n"),
+            [],
+            main_public_url="https://mpm.example.com/qx",
+            companion="import",
+        )
+    )
+
+    encoded = response.headers["Location"].split("remote-resource=", 1)[1]
+    payload = json.loads(unquote(encoded))
+    server_remote = payload["server_remote"][0]
+    assert "tag=MPM Phones" in server_remote
+    assert "MPM, Phones" not in server_remote
+    assert "\n" not in server_remote
 
 
 def test_quantumult_x_import_plain_universal_link_response() -> None:

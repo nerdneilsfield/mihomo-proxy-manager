@@ -229,6 +229,108 @@ def _qx_clean_label(value: object) -> str:
     return " ".join(cleaned.split())
 
 
+def _sb_value(value: object) -> str:
+    """Convert a Surfboard field value to a safe comma-delimited scalar."""
+    cleaned = re.sub(r"[\x00-\x1f\x7f,]+", " ", _string(value))
+    return " ".join(cleaned.split())
+
+
+def _sb_label(value: object) -> str:
+    """Sanitize Surfboard node and group labels."""
+    return _sb_value(value)
+
+
+def _sb_bool(value: object) -> str:
+    """Render Surfboard boolean token value."""
+    return "true" if _boolish(value) else "false"
+
+
+def _sb_ws_headers(data: dict[str, object]) -> str:
+    """Render the first Surfboard WebSocket header token."""
+    ws_opts = data.get("ws-opts")
+    if not isinstance(ws_opts, dict):
+        return ""
+    headers = ws_opts.get("headers")
+    if not isinstance(headers, dict):
+        return ""
+    for key, value in headers.items():
+        header_name = _sb_value(key)
+        header_value = _sb_value(value)
+        if header_name and header_value:
+            return f"{header_name}:{header_value}"
+    return ""
+
+
+def _sb_ws_path(data: dict[str, object]) -> str:
+    """Return Surfboard WebSocket path."""
+    ws_opts = data.get("ws-opts")
+    if isinstance(ws_opts, dict):
+        return _sb_value(ws_opts.get("path"))
+    return _sb_value(data.get("ws-path"))
+
+
+def _sb_base_segments(data: dict[str, object], proxy_type: str) -> list[str] | None:
+    """Build shared Surfboard proxy line prefix."""
+    name = _sb_label(data.get("name"))
+    host = _sb_value(data.get("server"))
+    port = _sb_value(data.get("port"))
+    if not name or not host or not port:
+        return None
+    return [f"{name} = {proxy_type}", host, port]
+
+
+def _render_sb_ss(data: dict[str, object]) -> str | None:
+    """Render Shadowsocks proxy as a Surfboard proxy line."""
+    segments = _sb_base_segments(data, "ss")
+    method = _sb_value(data.get("cipher") or data.get("method"))
+    password = _sb_value(data.get("password"))
+    if segments is None or not method or not password:
+        return None
+    segments.extend([f"encrypt-method={method}", f"password={password}"])
+    return ", ".join(segments)
+
+
+def _render_sb_vmess(data: dict[str, object]) -> str | None:
+    """Render VMess proxy as a Surfboard proxy line."""
+    segments = _sb_base_segments(data, "vmess")
+    uuid = _sb_value(data.get("uuid"))
+    if segments is None or not uuid:
+        return None
+    segments.append(f"username={uuid}")
+    if _boolish(data.get("tls")):
+        segments.append("tls=true")
+        tls_host = _sb_value(data.get("servername") or data.get("sni"))
+        if tls_host:
+            segments.append(f"tls-host={tls_host}")
+    network = _sb_value(data.get("network")).lower()
+    if network == "ws":
+        segments.append("ws=true")
+        ws_path = _sb_ws_path(data)
+        if ws_path:
+            segments.append(f"ws-path={ws_path}")
+        ws_headers = _sb_ws_headers(data)
+        if ws_headers:
+            segments.append(f"ws-headers={ws_headers}")
+    elif network and network != "tcp":
+        return None
+    return ", ".join(segments)
+
+
+def _render_sb_trojan(data: dict[str, object]) -> str | None:
+    """Render Trojan proxy as a Surfboard proxy line."""
+    segments = _sb_base_segments(data, "trojan")
+    password = _sb_value(data.get("password"))
+    if segments is None or not password:
+        return None
+    segments.append(f"password={password}")
+    sni = _sb_value(data.get("sni") or data.get("servername"))
+    if sni:
+        segments.append(f"sni={sni}")
+    if "skip-cert-verify" in data:
+        segments.append(f"skip-cert-verify={_sb_bool(data.get('skip-cert-verify'))}")
+    return ", ".join(segments)
+
+
 def _qx_hostport(data: dict[str, object]) -> str | None:
     """Build Quantumult X host:port endpoint."""
     host = _string(data.get("server"))
@@ -576,6 +678,115 @@ class XrayUriRenderer:
     render_sync = render
 
 
+class SurfboardRenderer:
+    """Render route records as Surfboard full profile output."""
+
+    def companion_paths(self, route: RouteConfig) -> tuple[str, ...]:
+        """Return Surfboard nodes companion path."""
+        return (f"{route.path}-nodes",)
+
+    def render(self, request: RenderRequest) -> RenderResponse:
+        """Render Surfboard profile or nodes companion response."""
+        proxies = prepare_render_records(request.route, request.records)
+        warnings: list[str] = []
+        lines: list[str] = []
+        names: list[str] = []
+        renderers = {
+            "ss": _render_sb_ss,
+            "trojan": _render_sb_trojan,
+            "vmess": _render_sb_vmess,
+        }
+
+        for proxy in proxies:
+            critical_field = _has_security_critical_field(proxy)
+            if critical_field is not None:
+                warnings.append(
+                    _skip_warning(
+                        proxy,
+                        f"unsupported security-critical field {critical_field}",
+                    )
+                )
+                continue
+            proxy_type = _string(proxy.get("type")).lower()
+            renderer = renderers.get(proxy_type)
+            if renderer is None:
+                warnings.append(
+                    _skip_warning(proxy, f"unsupported proxy type {proxy_type}")
+                )
+                continue
+            line = renderer(proxy)
+            if line is None:
+                network = _string(proxy.get("network"))
+                reason = (
+                    f"unsupported transport {network}"
+                    if network and network not in {"tcp", "ws"}
+                    else "missing required Surfboard fields"
+                )
+                warnings.append(_skip_warning(proxy, reason))
+                continue
+            lines.append(line)
+            names.append(_sb_label(proxy.get("name")))
+
+        if not lines:
+            if not warnings:
+                warnings.append("no supported nodes for surfboard output")
+            return RenderResponse(
+                body=b"no supported nodes for surfboard output",
+                media_type="text/plain; charset=utf-8",
+                status_code=422,
+                warnings=tuple(warnings),
+            )
+
+        body = (
+            "\n".join(lines) + "\n"
+            if request.companion == "nodes"
+            else self._render_profile(request, lines, names)
+        )
+        return RenderResponse(
+            body=body.encode("utf-8"),
+            media_type="text/plain; charset=utf-8",
+            warnings=tuple(warnings),
+        )
+
+    def _render_profile(
+        self, request: RenderRequest, proxy_lines: list[str], names: list[str]
+    ) -> str:
+        """Render full Surfboard profile sections."""
+        output = request.route.output
+        nodes_url = _sb_value(request.companion_public_urls.get("nodes", ""))
+        name_segments = ", ".join(names)
+        proxy_prefix = f"{name_segments}, " if name_segments else ""
+        auto_group = (
+            f"Auto = url-test, {proxy_prefix}"
+            f"policy-path={nodes_url}, policy-regex-filter=.*, "
+            f"url={_sb_value(output.test_url)}, "
+            f"interval={output.test_interval}, "
+            f"tolerance={output.test_tolerance}, "
+            f"timeout={output.test_timeout}"
+        )
+        proxy_group = (
+            f"Proxy = select, {proxy_prefix}"
+            f"policy-path={nodes_url}, policy-regex-filter=.*"
+        )
+        sections = [
+            "[General]",
+            "",
+            "[Proxy]",
+            *proxy_lines,
+            "",
+            "[Proxy Group]",
+            "Main = select, Auto, Proxy, DIRECT",
+            auto_group,
+            proxy_group,
+            "",
+            "[Rule]",
+            "FINAL,Main",
+        ]
+        return "\n".join(sections) + "\n"
+
+    render_sync = render
+
+
 class QuantumultXRenderer:
     """Render route records as Quantumult X server_remote output."""
 
@@ -780,4 +991,5 @@ def build_renderer_registry(*, yaml_sort_keys: bool = False) -> dict[str, RouteR
         ),
         "xray-uri": XrayUriRenderer(),
         "quantumult-x": QuantumultXRenderer(),
+        "surfboard": SurfboardRenderer(),
     }

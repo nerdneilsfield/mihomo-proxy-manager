@@ -310,6 +310,81 @@ async def test_qx_import_endpoint_not_registered_when_disabled(tmp_path) -> None
     assert response.status_code == 404
 
 
+@pytest.mark.asyncio
+async def test_surfboard_profile_embeds_public_nodes_url(tmp_path) -> None:
+    """Test Surfboard full profile embeds the public nodes companion URL."""
+    config = app_config_with_route_output(
+        tmp_path,
+        RouteOutputConfig(format="surfboard"),
+        public_base_url="https://mpm.example.com",
+    )
+    store = JsonSourceCacheStore(config.cache)
+    await store.set(
+        "airport_a",
+        source_cache_with_nodes(
+            ProxyRecord(
+                "airport_a",
+                {
+                    "name": "SS 01",
+                    "type": "ss",
+                    "server": "example.com",
+                    "port": 443,
+                    "cipher": "chacha20-ietf-poly1305",
+                    "password": "password",
+                },
+            )
+        ),
+    )
+    app = create_app(config, cache_store=store, refresher=None, scheduler=None)
+
+    with TestClient(app) as client:
+        response = client.get(config.routes["phone"].path)
+
+    assert response.status_code == 200
+    assert "policy-path=https://mpm.example.com" in response.text
+    assert "FINAL,Main" in response.text
+
+
+@pytest.mark.asyncio
+async def test_surfboard_nodes_companion_uses_same_access_policy(tmp_path) -> None:
+    """Test Surfboard nodes companion uses the parent route access policy."""
+    config = app_config_with_route_output(
+        tmp_path,
+        RouteOutputConfig(format="surfboard"),
+        allowed_user_agents=("mihomo/1.19.5",),
+    )
+    store = JsonSourceCacheStore(config.cache)
+    await store.set(
+        "airport_a",
+        source_cache_with_nodes(
+            ProxyRecord(
+                "airport_a",
+                {
+                    "name": "SS 01",
+                    "type": "ss",
+                    "server": "example.com",
+                    "port": 443,
+                    "cipher": "chacha20-ietf-poly1305",
+                    "password": "password",
+                },
+            )
+        ),
+    )
+    app = create_app(config, cache_store=store, refresher=None, scheduler=None)
+    nodes_path = f"{config.routes['phone'].path}-nodes"
+
+    with TestClient(app) as client:
+        missing_ua = client.get(nodes_path, headers={"User-Agent": ""})
+        matching_ua = client.get(
+            nodes_path, headers={"User-Agent": "mihomo/1.19.5"}
+        )
+
+    assert missing_ua.status_code == 403
+    assert matching_ua.status_code == 200
+    assert "[Proxy]" not in matching_ua.text
+    assert matching_ua.text.startswith("SS 01 = ss,")
+
+
 def test_health_and_unknown_path(tmp_path) -> None:
     """测试健康检查和未知路径返回正确的状态码。
 

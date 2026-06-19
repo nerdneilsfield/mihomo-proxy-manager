@@ -90,6 +90,60 @@ def quantumult_x_route(
     )
 
 
+def surfboard_route() -> RouteConfig:
+    """Create a route for surfboard renderer tests."""
+    return RouteConfig(
+        name="surfboard",
+        path="/surfboard",
+        sources=("airport_a",),
+        require_all_sources=False,
+        output=RouteOutputConfig(format="surfboard"),
+        rename=RenameConfig(),
+        filter=FilterConfig(),
+    )
+
+
+def surfboard_request(companion: str | None = None) -> RenderRequest:
+    """Create a Surfboard render request with SS and VMess nodes."""
+    return RenderRequest(
+        surfboard_route(),
+        [
+            ProxyRecord(
+                "airport_a",
+                {
+                    "name": "SS 01",
+                    "type": "ss",
+                    "server": "example.com",
+                    "port": 443,
+                    "cipher": "chacha20-ietf-poly1305",
+                    "password": "password",
+                },
+            ),
+            ProxyRecord(
+                "airport_a",
+                {
+                    "name": "VMess 01",
+                    "type": "vmess",
+                    "server": "example.com",
+                    "port": 443,
+                    "uuid": "00000000-0000-0000-0000-000000000000",
+                    "cipher": "auto",
+                    "tls": True,
+                    "network": "ws",
+                    "ws-opts": {
+                        "path": "/ws",
+                        "headers": {"Host": "example.com"},
+                    },
+                },
+            ),
+        ],
+        companion_public_urls={
+            "nodes": "https://mpm.example.com/surfboard-nodes"
+        },
+        companion=companion,
+    )
+
+
 def test_provider_renderer_preserves_fields_and_strips_internal_metadata() -> None:
     """测试渲染器保留字段并移除内部元数据 / Test that the renderer preserves fields and strips internal metadata."""
     renderer = ProviderRenderer(yaml_sort_keys=False)
@@ -739,6 +793,112 @@ def test_quantumult_x_renderer_skips_unsupported_reality_node() -> None:
     assert response.status_code == 422
     assert response.body == b"no supported nodes for quantumult-x output"
     assert response.warnings
+
+
+def test_surfboard_full_profile_contains_main_auto_proxy_groups() -> None:
+    """Test Surfboard full profile contains required sections and groups."""
+    response = build_renderer_registry()["surfboard"].render(surfboard_request())
+
+    text = response.body.decode("utf-8")
+    assert response.media_type == "text/plain; charset=utf-8"
+    assert "[General]" in text
+    assert "[Proxy]" in text
+    assert "[Proxy Group]" in text
+    assert "Main = select, Auto, Proxy, DIRECT" in text
+    assert (
+        "Auto = url-test, SS 01, VMess 01, "
+        "policy-path=https://mpm.example.com/surfboard-nodes, "
+        "policy-regex-filter=.*, "
+        "url=http://www.gstatic.com/generate_204, interval=600, "
+        "tolerance=100, timeout=5"
+    ) in text
+    assert (
+        "Proxy = select, SS 01, VMess 01, "
+        "policy-path=https://mpm.example.com/surfboard-nodes, "
+        "policy-regex-filter=.*"
+    ) in text
+    assert "[Rule]" in text
+    assert "FINAL,Main" in text
+
+
+def test_surfboard_nodes_companion_omits_section_header() -> None:
+    """Test Surfboard nodes companion emits only proxy lines."""
+    response = build_renderer_registry()["surfboard"].render(
+        surfboard_request(companion="nodes")
+    )
+
+    text = response.body.decode("utf-8")
+    assert "[Proxy]" not in text
+    assert text.startswith(
+        "SS 01 = ss, example.com, 443, "
+        "encrypt-method=chacha20-ietf-poly1305, password=password"
+    )
+    assert (
+        "VMess 01 = vmess, example.com, 443, "
+        "username=00000000-0000-0000-0000-000000000000"
+    ) in text
+
+
+def test_surfboard_renderer_skips_unsupported_nodes() -> None:
+    """Test Surfboard rejects unsupported node types."""
+    response = build_renderer_registry()["surfboard"].render(
+        RenderRequest(
+            surfboard_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "VLESS 01",
+                        "type": "vless",
+                        "server": "example.com",
+                        "port": 443,
+                        "uuid": "00000000-0000-0000-0000-000000000000",
+                    },
+                )
+            ],
+            companion_public_urls={
+                "nodes": "https://mpm.example.com/surfboard-nodes"
+            },
+        )
+    )
+
+    assert response.status_code == 422
+    assert response.media_type == "text/plain; charset=utf-8"
+    assert b"no supported nodes for surfboard output" in response.body
+    assert response.warnings
+
+
+def test_surfboard_renderer_sanitizes_node_names() -> None:
+    """Test Surfboard labels avoid comma/control characters."""
+    response = build_renderer_registry()["surfboard"].render(
+        RenderRequest(
+            surfboard_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "HK, 01\n",
+                        "type": "ss",
+                        "server": "example.com",
+                        "port": 443,
+                        "cipher": "chacha20-ietf-poly1305",
+                        "password": "password",
+                    },
+                )
+            ],
+            companion_public_urls={
+                "nodes": "https://mpm.example.com/surfboard-nodes"
+            },
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    proxy_line = next(line for line in text.splitlines() if line.startswith("HK "))
+    auto_line = next(line for line in text.splitlines() if line.startswith("Auto ="))
+    assert proxy_line.startswith("HK 01 = ss,")
+    assert "HK, 01" not in proxy_line
+    assert "HK, 01" not in auto_line
+    assert "\n" not in proxy_line
 
 
 def test_prepare_render_records_preserves_filtering_and_renaming() -> None:

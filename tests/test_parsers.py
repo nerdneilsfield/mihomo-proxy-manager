@@ -368,6 +368,159 @@ proxies:
     assert "base64" not in str(exc_info.value).lower()
 
 
+@pytest.mark.parametrize("short_id", ["123", "xyz", "0b7caf92d4ffffff00"])
+def test_yaml_drops_invalid_reality_short_id(short_id: str) -> None:
+    """测试非法 Reality short-id 节点被跳过 / Test invalid Reality short-id nodes are skipped."""
+    body = f"""
+proxies:
+  - name: bad reality
+    type: vless
+    server: example.com
+    port: 443
+    uuid: 00000000-0000-0000-0000-000000000000
+    reality-opts:
+      public-key: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+      short-id: "{short_id}"
+  - name: good
+    type: vmess
+    server: example.com
+    port: 443
+    uuid: 00000000-0000-0000-0000-000000000000
+    cipher: auto
+""".encode()
+    result = parse_subscription(
+        body, source="airport_a", fmt="yaml", parse_error="skip"
+    )
+
+    assert [record.data["name"] for record in result.records] == ["good"]
+    assert any("short-id" in warning and "hex" in warning for warning in result.warnings)
+
+
+def test_yaml_drops_unsupported_proxy_type() -> None:
+    """测试不支持的代理类型被跳过 / Test unsupported proxy types are skipped."""
+    body = b"""
+proxies:
+  - name: bad
+    type: mystery
+    server: example.com
+    port: 443
+  - name: good
+    type: ss
+    server: example.com
+    port: 443
+    cipher: chacha20-ietf-poly1305
+    password: secret
+"""
+    result = parse_subscription(
+        body, source="airport_a", fmt="yaml", parse_error="skip"
+    )
+
+    assert [record.data["name"] for record in result.records] == ["good"]
+    assert any("unsupported proxy type" in warning for warning in result.warnings)
+
+
+def test_yaml_repairs_coercible_scalar_and_nested_types() -> None:
+    """测试可修复字段会转为 Mihomo schema 类型 / Test coercible fields normalize to Mihomo schema types."""
+    body = b"""
+proxies:
+  - name: repaired
+    type: vmess
+    server: example.com
+    port: "443"
+    uuid: 00000000-0000-0000-0000-000000000000
+    cipher: auto
+    tls: "true"
+    alpn: h2,http/1.1
+    ws-opts:
+      path: 123
+      headers:
+        Host: 456
+      max-early-data: "2048"
+    grpc-opts:
+      grpc-service-name: 789
+      ping-interval: "30"
+"""
+    result = parse_subscription(
+        body, source="airport_a", fmt="yaml", parse_error="skip"
+    )
+
+    assert result.warnings == []
+    proxy = result.records[0].data
+    assert proxy["port"] == 443
+    assert proxy["tls"] is True
+    assert proxy["alpn"] == ["h2", "http/1.1"]
+    assert proxy["ws-opts"] == {
+        "path": "123",
+        "headers": {"Host": "456"},
+        "max-early-data": 2048,
+    }
+    assert proxy["grpc-opts"] == {
+        "grpc-service-name": "789",
+        "ping-interval": 30,
+    }
+
+
+def test_yaml_drops_unrepairable_nested_type() -> None:
+    """测试不可修复嵌套字段会丢弃节点 / Test unrepairable nested fields drop the node."""
+    body = b"""
+proxies:
+  - name: bad
+    type: vmess
+    server: example.com
+    port: 443
+    uuid: 00000000-0000-0000-0000-000000000000
+    cipher: auto
+    ws-opts:
+      headers: not-a-map
+  - name: good
+    type: direct
+"""
+    result = parse_subscription(
+        body, source="airport_a", fmt="yaml", parse_error="skip"
+    )
+
+    assert [record.data["name"] for record in result.records] == ["good"]
+    assert any("ws-opts.headers" in warning and "map" in warning for warning in result.warnings)
+
+
+def test_yaml_drops_unsupported_schema_field() -> None:
+    """测试 schema 不支持字段会丢弃节点 / Test unsupported schema fields drop the node."""
+    body = b"""
+proxies:
+  - name: bad
+    type: vless
+    server: example.com
+    port: 443
+    uuid: 00000000-0000-0000-0000-000000000000
+    not-a-mihomo-field: value
+  - name: good
+    type: direct
+"""
+    result = parse_subscription(
+        body, source="airport_a", fmt="yaml", parse_error="skip"
+    )
+
+    assert [record.data["name"] for record in result.records] == ["good"]
+    assert any("unsupported field" in warning for warning in result.warnings)
+
+
+def test_yaml_schema_validation_fail_raises_when_parse_error_fail() -> None:
+    """测试 parse_error=fail 时 schema 验证错误会抛出 / Test schema validation raises in fail mode."""
+    body = b"""
+proxies:
+  - name: bad
+    type: vless
+    server: example.com
+    port: 443
+    uuid: 00000000-0000-0000-0000-000000000000
+    reality-opts:
+      public-key: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+      short-id: xyz
+"""
+    with pytest.raises(ParseError, match="short-id"):
+        parse_subscription(body, source="airport_a", fmt="yaml", parse_error="fail")
+
+
 def test_legacy_ss_link_with_ipv6_endpoint() -> None:
     """测试解析带有 IPv6 端点的旧版 SS 链接。
 

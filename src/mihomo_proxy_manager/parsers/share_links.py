@@ -9,8 +9,8 @@ import base64
 import json
 from urllib.parse import parse_qs, unquote, urlparse
 
+from mihomo_proxy_manager.mihomo_schema import normalize_proxy
 from mihomo_proxy_manager.models import ProxyRecord
-from mihomo_proxy_manager.parsers.yaml import validate_required_fields
 from mihomo_proxy_manager.security import redact_secret
 
 
@@ -101,12 +101,13 @@ def _apply_transport_options(proxy: dict[str, object], query: dict[str, str]) ->
     if network:
         proxy["network"] = network
     if "sni" in query:
-        proxy["sni"] = query["sni"]
-        proxy["servername"] = query["sni"]
+        if proxy.get("type") in {"vmess", "vless"}:
+            proxy["servername"] = query["sni"]
+        else:
+            proxy["sni"] = query["sni"]
     if "alpn" in query:
         proxy["alpn"] = query["alpn"].split(",")
     if "security" in query:
-        proxy["security"] = query["security"]
         if query["security"] in {"tls", "reality"}:
             proxy["tls"] = True
     if "flow" in query:
@@ -301,11 +302,12 @@ def parse_share_links_text(
                 proxy = _parse_url_link(line)
             else:
                 raise ValueError("unsupported share link")
-            item_warnings = validate_required_fields(proxy)
+            normalized, item_warnings = normalize_proxy(proxy)
             if item_warnings:
                 warnings.extend(item_warnings)
                 continue
-            records.append(ProxyRecord(source=source, data=proxy))
+            if normalized is not None:
+                records.append(ProxyRecord(source=source, data=normalized))
         except Exception as exc:
             # Do not embed the raw link or exception text that may contain tokens/secrets.
             detail = redact_secret(str(exc))[:200]

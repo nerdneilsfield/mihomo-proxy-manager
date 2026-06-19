@@ -4,6 +4,7 @@ JSON cache store read/write, permission, and concurrency tests.
 """
 
 import asyncio
+import json
 import os
 import time
 from datetime import UTC, datetime
@@ -50,6 +51,69 @@ async def test_cache_roundtrip_and_permissions(tmp_path) -> None:
 
     assert loaded == cache
     assert (tmp_path / "airport_a.json").stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.asyncio
+async def test_cache_json_includes_type_schema_metadata(tmp_path) -> None:
+    """测试缓存 JSON 写入类型和 schema 标识 / Test cache JSON writes type and schema metadata."""
+    store = JsonSourceCacheStore(
+        CacheConfig(
+            tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7)
+        )
+    )
+    cache = SourceCache(
+        "airport_a",
+        1,
+        datetime(2026, 6, 17, tzinfo=UTC),
+        datetime(2026, 6, 17, tzinfo=UTC),
+        None,
+        None,
+        1,
+        (),
+        None,
+        (ProxyRecord("airport_a", {"name": "HK", "type": "vmess"}),),
+    )
+
+    await store.set("airport_a", cache)
+    data = json.loads((tmp_path / "airport_a.json").read_text(encoding="utf-8"))
+
+    assert data["cache_type"] == "source-cache"
+    assert data["schema"] == "mihomo-proxy-manager.source-cache.v1"
+
+
+@pytest.mark.asyncio
+async def test_cache_json_reads_legacy_v1_without_type_schema_metadata(tmp_path) -> None:
+    """测试旧版 v1 缓存缺少 metadata 仍可读取 / Test legacy v1 cache without metadata still loads."""
+    path = tmp_path / "airport_a.json"
+    path.write_text(
+        json.dumps(
+            {
+                "source": "airport_a",
+                "schema_version": 1,
+                "last_attempt_at": "2026-06-17T00:00:00+00:00",
+                "last_success_at": "2026-06-17T00:00:00+00:00",
+                "etag": None,
+                "last_modified": None,
+                "node_count": 1,
+                "warnings": [],
+                "last_error": None,
+                "proxies": [
+                    {"source": "airport_a", "data": {"name": "HK", "type": "vmess"}}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    store = JsonSourceCacheStore(
+        CacheConfig(
+            tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7)
+        )
+    )
+
+    loaded = await store.get("airport_a")
+
+    assert loaded is not None
+    assert loaded.proxies[0].data["name"] == "HK"
 
 
 @pytest.mark.asyncio

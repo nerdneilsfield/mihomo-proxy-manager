@@ -919,7 +919,7 @@ async def test_app_real_refresher_serves_stale_cache_when_background_refresh_fai
             node_count=1,
             warnings=(),
             last_error=None,
-            proxies=(ProxyRecord("src", {"name": "STALE", "type": "vmess"}),),
+            proxies=(ProxyRecord("src", {"name": "STALE", "type": "direct"}),),
         ),
     )
 
@@ -972,7 +972,7 @@ async def test_app_real_refresher_rewrites_cache_on_304_and_serves_stale(
             node_count=1,
             warnings=(),
             last_error=None,
-            proxies=(ProxyRecord("src", {"name": "CACHED", "type": "vmess"}),),
+            proxies=(ProxyRecord("src", {"name": "CACHED", "type": "direct"}),),
         ),
     )
 

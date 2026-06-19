@@ -19,6 +19,8 @@ from loguru import logger
 
 from .models import CacheConfig, ProxyRecord, SourceCache, SourceStatus
 
+CURRENT_CACHE_TYPE = "source-cache"
+CURRENT_SCHEMA_ID = "mihomo-proxy-manager.source-cache.v1"
 CURRENT_SCHEMA_VERSION = 1
 
 
@@ -341,6 +343,10 @@ class JsonSourceCacheStore:
             raise ValueError(
                 f"unsupported cache schema version: {data.get('schema_version')}"
             )
+        if data.get("cache_type", CURRENT_CACHE_TYPE) != CURRENT_CACHE_TYPE:
+            raise ValueError(f"unsupported cache type: {data.get('cache_type')}")
+        if data.get("schema", CURRENT_SCHEMA_ID) != CURRENT_SCHEMA_ID:
+            raise ValueError(f"unsupported cache schema: {data.get('schema')}")
         try:
             proxies = tuple(
                 ProxyRecord(item["source"], item["data"])
@@ -371,6 +377,8 @@ class JsonSourceCacheStore:
             可用于 json.dumps 的字典 / Dictionary suitable for json.dumps.
         """
         return {
+            "cache_type": CURRENT_CACHE_TYPE,
+            "schema": CURRENT_SCHEMA_ID,
             "source": cache.source,
             "schema_version": cache.schema_version,
             "last_attempt_at": _dt_s(cache.last_attempt_at),

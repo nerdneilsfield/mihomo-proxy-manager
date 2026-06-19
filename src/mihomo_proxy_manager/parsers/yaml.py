@@ -9,18 +9,8 @@ from typing import Any
 
 import yaml
 
+from mihomo_proxy_manager.mihomo_schema import normalize_proxy
 from mihomo_proxy_manager.models import ProxyRecord
-
-REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
-    "ss": ("server", "port", "cipher", "password"),
-    "vmess": ("server", "port", "uuid", "cipher"),
-    "vless": ("server", "port", "uuid"),
-    "trojan": ("server", "port", "password"),
-    "hysteria2": ("server", "port", "password"),
-    "hy2": ("server", "port", "password"),
-    "http": ("server", "port"),
-    "socks5": ("server", "port"),
-}
 
 
 def validate_required_fields(proxy: dict[str, Any]) -> list[str]:
@@ -34,15 +24,7 @@ def validate_required_fields(proxy: dict[str, Any]) -> list[str]:
     Returns:
         缺失字段的警告列表 / List of warnings for missing fields.
     """
-    proxy_type = str(proxy.get("type", "")).lower()
-    warnings: list[str] = []
-    for field in REQUIRED_FIELDS.get(proxy_type, ("name", "type")):
-        if field not in proxy or proxy[field] in (None, ""):
-            warnings.append(
-                f"proxy {proxy.get('name', '<unnamed>')!r} missing required field {field!r}"
-            )
-    if "name" not in proxy or "type" not in proxy:
-        warnings.append("proxy missing required field 'name' or 'type'")
+    _, warnings = normalize_proxy(proxy)
     return warnings
 
 
@@ -76,9 +58,8 @@ def parse_yaml_subscription(
         if not isinstance(item, dict):
             warnings.append("proxy entry is not a mapping")
             continue
-        proxy = dict(item)
-        item_warnings = validate_required_fields(proxy)
+        normalized, item_warnings = normalize_proxy(dict(item))
         warnings.extend(item_warnings)
-        if not item_warnings:
-            records.append(ProxyRecord(source=source, data=proxy))
+        if normalized is not None:
+            records.append(ProxyRecord(source=source, data=normalized))
     return records, warnings

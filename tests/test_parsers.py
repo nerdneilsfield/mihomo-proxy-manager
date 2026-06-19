@@ -4,13 +4,22 @@ Subscription parser tests including YAML, share-links, and base64 formats.
 """
 
 import base64
+from collections.abc import Callable
+from copy import deepcopy
 import json
+import random
+from typing import Any, cast
 
 import pytest
 
 from mihomo_proxy_manager.parsers import ParseError, parse_subscription
 from mihomo_proxy_manager.parsers.share_links import _parse_ss
 from mihomo_proxy_manager.parsers.yaml import validate_required_fields
+from mihomo_proxy_manager.mihomo_schema import (
+    COMMON_PROXY_FIELDS,
+    PROXY_SCHEMAS,
+    SchemaValue,
+)
 
 
 def test_parse_yaml_provider_payload() -> None:
@@ -483,25 +492,336 @@ proxies:
     assert any("ws-opts.headers" in warning and "map" in warning for warning in result.warnings)
 
 
-def test_yaml_drops_unsupported_schema_field() -> None:
-    """测试 schema 不支持字段会丢弃节点 / Test unsupported schema fields drop the node."""
+def test_yaml_preserves_unknown_fields_without_warning() -> None:
+    """测试 Mihomo 未声明字段原样保留 / Test unknown fields are preserved."""
     body = b"""
 proxies:
-  - name: bad
+  - name: kept
     type: vless
     server: example.com
     port: 443
     uuid: 00000000-0000-0000-0000-000000000000
     not-a-mihomo-field: value
-  - name: good
-    type: direct
+    ws-opts:
+      path: /ws
+      not-a-nested-field: nested-value
 """
     result = parse_subscription(
-        body, source="airport_a", fmt="yaml", parse_error="skip"
+        body, source="airport_a", fmt="yaml", parse_error="fail"
     )
 
-    assert [record.data["name"] for record in result.records] == ["good"]
-    assert any("unsupported field" in warning for warning in result.warnings)
+    assert result.warnings == []
+    proxy = result.records[0].data
+    assert proxy["not-a-mihomo-field"] == "value"
+    assert proxy["ws-opts"]["not-a-nested-field"] == "nested-value"
+
+
+def _schema_value(kind: SchemaValue) -> Any:
+    if isinstance(kind, dict):
+        if "*" in kind:
+            return [_schema_value(kind["*"])]
+        return {field: _schema_value(child) for field, child in kind.items()}
+    if kind == "string":
+        return "text"
+    if kind == "number":
+        return "123"
+    if kind == "bool":
+        return 1
+    if kind == "string-list":
+        return "h2,http/1.1"
+    if kind == "number-list":
+        return ["1", 2]
+    if kind == "string-map":
+        return {"Host": 123}
+    if kind == "string-list-map":
+        return {"Host": "a,b"}
+    if kind == "any-map":
+        return {"raw": {"kept": True}}
+    raise AssertionError(f"unhandled schema kind {kind!r}")
+
+
+def _max_proxy(proxy_type: str) -> dict[str, Any]:
+    schema = {**COMMON_PROXY_FIELDS, **PROXY_SCHEMAS[proxy_type]}
+    proxy = {field: _schema_value(kind) for field, kind in schema.items()}
+    proxy["type"] = proxy_type
+    proxy["name"] = f"max-{proxy_type}"
+    if "server" in schema:
+        proxy["server"] = "example.com"
+    if "port" in schema:
+        proxy["port"] = "443"
+    if "uuid" in schema:
+        proxy["uuid"] = "00000000-0000-0000-0000-000000000000"
+    if proxy_type == "wireguard":
+        proxy["ip"] = "172.16.0.2/32"
+    if "private-key" in schema:
+        proxy["private-key"] = "private-key"
+    if "public-key" in schema:
+        proxy["public-key"] = "public-key"
+    if "reality-opts" in schema:
+        proxy["reality-opts"] = {
+            "public-key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "short-id": "0a",
+            "support-x25519mlkem768": 1,
+            "unknown-reality": "kept",
+        }
+    if proxy_type == "ss":
+        proxy["cipher"] = "chacha20-ietf-poly1305"
+    if proxy_type == "ssr":
+        proxy["cipher"] = "aes-256-cfb"
+        proxy["obfs"] = "plain"
+        proxy["protocol"] = "origin"
+    if proxy_type == "vmess":
+        proxy["cipher"] = "auto"
+    if proxy_type == "hysteria":
+        proxy["up"] = "10 Mbps"
+        proxy["down"] = "20 Mbps"
+    if proxy_type == "mieru":
+        proxy["transport"] = "TCP"
+    if proxy_type == "openvpn":
+        proxy["ca"] = "-----BEGIN CERTIFICATE-----"
+    proxy["unknown-top-level"] = "kept"
+    return proxy
+
+
+@pytest.mark.parametrize("proxy_type", sorted(PROXY_SCHEMAS))
+def test_yaml_accepts_max_supported_config_for_every_mihomo_proxy(
+    proxy_type: str,
+) -> None:
+    """测试每种 Mihomo 协议最大字段配置都支持 / Test max config for every Mihomo proxy."""
+    payload = {"proxies": [_max_proxy(proxy_type)]}
+    body = yaml_dump(payload)
+
+    result = parse_subscription(
+        body, source="airport_a", fmt="yaml", parse_error="fail"
+    )
+
+    proxy = result.records[0].data
+    assert result.warnings == []
+    assert proxy["type"] == proxy_type
+    assert proxy["unknown-top-level"] == "kept"
+    if "port" in PROXY_SCHEMAS[proxy_type]:
+        assert proxy["port"] == 443
+
+
+def yaml_dump(payload: dict[str, Any]) -> bytes:
+    import yaml
+
+    return yaml.safe_dump(payload, allow_unicode=True).encode()
+
+
+def _mutate_first_kind(value: Any, kind: SchemaValue, target: str, new: Any) -> bool:
+    if kind == target:
+        return True
+    if not isinstance(kind, dict):
+        return False
+    if "*" in kind:
+        if isinstance(value, list) and value:
+            child = kind["*"]
+            if child == target:
+                cast(list[Any], value)[0] = new
+                return True
+            return _mutate_first_kind(value[0], child, target, new)
+        return False
+    if not isinstance(value, dict):
+        return False
+    value_map = cast(dict[str, Any], value)
+    for field, child in kind.items():
+        if field not in value_map:
+            continue
+        if child == target:
+            value_map[field] = new
+            return True
+        if _mutate_first_kind(value_map[field], child, target, new):
+            return True
+    return False
+
+
+def _set_first_schema_kind(proxy: dict[str, Any], target: str, new: Any) -> bool:
+    schema = {**COMMON_PROXY_FIELDS, **PROXY_SCHEMAS[str(proxy["type"])]}
+    for field, kind in schema.items():
+        if field not in proxy:
+            continue
+        if kind == target:
+            proxy[field] = new
+            return True
+        if _mutate_first_kind(proxy[field], kind, target, new):
+            return True
+    return False
+
+
+ProxyVariant = tuple[str, Callable[[dict[str, Any]], object]]
+
+
+def _add_unknown_nested(proxy: dict[str, Any]) -> None:
+    ws_opts = proxy.get("ws-opts")
+    if isinstance(ws_opts, dict):
+        cast(dict[str, Any], ws_opts)["unknown-ws"] = "kept"
+        return
+    smux = proxy.setdefault("smux", {})
+    assert isinstance(smux, dict)
+    cast(dict[str, Any], smux)["unknown-smux"] = "kept"
+
+
+def _set_csv_list(proxy: dict[str, Any]) -> None:
+    if not _set_first_schema_kind(proxy, "string-list", "h2,http/1.1"):
+        proxy["unknown-list"] = ["a", "b"]
+
+
+def _set_string_map_numbers(proxy: dict[str, Any]) -> None:
+    if not _set_first_schema_kind(proxy, "string-map", {"Host": 123}):
+        proxy["unknown-map"] = {"Host": 123}
+
+
+def _set_string_list_map_csv(proxy: dict[str, Any]) -> None:
+    if not _set_first_schema_kind(proxy, "string-list-map", {"Host": "a,b"}):
+        proxy["unknown-list-map"] = {"Host": "a,b"}
+
+
+def _set_any_map_nested(proxy: dict[str, Any]) -> None:
+    if not _set_first_schema_kind(proxy, "any-map", {"raw": {"kept": True}}):
+        proxy["unknown-any"] = {"raw": {"kept": True}}
+
+
+PROXY_VARIANTS: tuple[ProxyVariant, ...] = (
+    ("max", lambda proxy: None),
+    ("routing_mark_decimal_string", lambda proxy: proxy.update({"routing-mark": "42"})),
+    ("routing_mark_hex_string", lambda proxy: proxy.update({"routing-mark": "0x10"})),
+    ("common_bool_ints", lambda proxy: proxy.update({"tfo": 1, "mptcp": 0})),
+    ("common_bool_texts", lambda proxy: proxy.update({"tfo": "yes", "mptcp": "off"})),
+    ("common_string_numbers", lambda proxy: proxy.update({"interface-name": 123, "dialer-proxy": 456})),
+    ("unknown_top_scalar", lambda proxy: proxy.update({"unknown-top-level": "kept"})),
+    ("unknown_top_map", lambda proxy: proxy.update({"unknown-top-map": {"a": "b"}})),
+    ("unknown_top_list", lambda proxy: proxy.update({"unknown-top-list": ["a", "b"]})),
+    ("unknown_nested", _add_unknown_nested),
+    ("smux_number_strings", lambda proxy: proxy.update({"smux": {"enabled": 1, "max-connections": "8", "min-streams": "1", "max-streams": "16"}})),
+    ("smux_brutal", lambda proxy: proxy.update({"smux": {"enabled": 1, "brutal-opts": {"enabled": 1, "up": 100, "down": 200}}})),
+    ("first_string_numeric", lambda proxy: _set_first_schema_kind(proxy, "string", 123)),
+    ("first_number_string", lambda proxy: _set_first_schema_kind(proxy, "number", "321")),
+    ("first_number_float", lambda proxy: _set_first_schema_kind(proxy, "number", 321.0)),
+    ("first_bool_int", lambda proxy: _set_first_schema_kind(proxy, "bool", 1)),
+    ("first_bool_text", lambda proxy: _set_first_schema_kind(proxy, "bool", "true")),
+    ("first_string_list_csv", _set_csv_list),
+    ("first_number_list_strings", lambda proxy: _set_first_schema_kind(proxy, "number-list", ["1", "2"])),
+    ("first_string_map_numbers", _set_string_map_numbers),
+    ("first_string_list_map_csv", _set_string_list_map_csv),
+    ("first_any_map_nested", _set_any_map_nested),
+    ("name_numeric_string", lambda proxy: proxy.update({"name": 1001})),
+    ("server_numeric_string", lambda proxy: proxy.update({"server": 12345}) if "server" in proxy else None),
+    ("port_string", lambda proxy: proxy.update({"port": "443"}) if "port" in proxy else None),
+)
+
+
+MATRIX_CASES = [
+    pytest.param(proxy_type, variant_name, id=f"{proxy_type}-{variant_name}")
+    for proxy_type in sorted(PROXY_SCHEMAS)
+    for variant_name, _ in PROXY_VARIANTS
+]
+
+FUZZ_CASES = [
+    pytest.param(proxy_type, seed, id=f"{proxy_type}-seed-{seed}")
+    for proxy_type in sorted(PROXY_SCHEMAS)
+    for seed in range(5)
+]
+
+
+@pytest.mark.parametrize(("proxy_type", "variant_name"), MATRIX_CASES)
+def test_yaml_accepts_max_config_variants_for_every_mihomo_proxy(
+    proxy_type: str, variant_name: str
+) -> None:
+    """测试所有 Mihomo 协议的大配置变体 / Test max-config variants for all Mihomo proxies."""
+    variant = dict(PROXY_VARIANTS)[variant_name]
+    proxy = deepcopy(_max_proxy(proxy_type))
+    variant(proxy)
+    body = yaml_dump({"proxies": [proxy]})
+
+    result = parse_subscription(
+        body, source="airport_a", fmt="yaml", parse_error="fail"
+    )
+
+    normalized = result.records[0].data
+    assert result.warnings == []
+    assert normalized["type"] == proxy_type
+    if "unknown-top-level" in proxy:
+        assert normalized["unknown-top-level"] == proxy["unknown-top-level"]
+
+
+def _fuzz_known_value(kind: SchemaValue, rng: random.Random) -> Any:
+    if isinstance(kind, dict):
+        value = _schema_value(kind)
+        if isinstance(value, dict):
+            cast(dict[str, Any], value)[f"unknown-{rng.randrange(1000)}"] = rng.choice(
+                ["yes", "00123", {"nested": "kept"}, ["a", "b"]]
+            )
+        return value
+    if kind == "string":
+        return rng.choice(["00123", 123, True, "null", "off"])
+    if kind == "number":
+        return rng.choice(["123", "0x10", 123, 123.0])
+    if kind == "bool":
+        return rng.choice([True, False, 0, 1, "true", "false", "yes", "off"])
+    if kind == "string-list":
+        return rng.choice([["h2", 123], "h2,http/1.1"])
+    if kind == "number-list":
+        return rng.choice([[1, "2", "0x3"], [1.0, 2]])
+    if kind == "string-map":
+        return {"Host": rng.choice([123, "example.com", False])}
+    if kind == "string-list-map":
+        return {"Host": rng.choice(["a,b", ["a", 123]])}
+    if kind == "any-map":
+        return {"raw": rng.choice([{"kept": True}, ["a", "b"], "text"])}
+    raise AssertionError(f"unhandled schema kind {kind!r}")
+
+
+def _fuzz_proxy(proxy_type: str, seed: int) -> dict[str, Any]:
+    rng = random.Random(f"{proxy_type}:{seed}")
+    proxy = deepcopy(_max_proxy(proxy_type))
+    schema = {**COMMON_PROXY_FIELDS, **PROXY_SCHEMAS[proxy_type]}
+    fields = list(schema)
+    rng.shuffle(fields)
+    for field in fields[: max(1, min(8, len(fields)))]:
+        proxy[field] = _fuzz_known_value(schema[field], rng)
+    proxy["type"] = proxy_type
+    proxy["name"] = f"fuzz-{proxy_type}-{seed}"
+    if "server" in schema:
+        proxy["server"] = rng.choice(["example.com", 12345])
+    if "port" in schema:
+        proxy["port"] = rng.choice(["443", "0x1bb", 443])
+    if "uuid" in schema:
+        proxy["uuid"] = "00000000-0000-0000-0000-000000000000"
+    if proxy_type == "wireguard":
+        proxy["ip"] = "172.16.0.2/32"
+    if "private-key" in schema:
+        proxy["private-key"] = "private-key"
+    if "public-key" in schema:
+        proxy["public-key"] = "public-key"
+    if "reality-opts" in schema:
+        proxy["reality-opts"] = {
+            "public-key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "short-id": rng.choice(["", "0a", "0b7caf92d4"]),
+            "unknown-reality": {"kept": True},
+        }
+    proxy[f"unknown-fuzz-{seed}"] = rng.choice(
+        ["00123", False, {"nested": ["kept", 1]}, ["x", "y"]]
+    )
+    return proxy
+
+
+@pytest.mark.parametrize(("proxy_type", "seed"), FUZZ_CASES)
+def test_yaml_fuzzes_repairable_configs_for_every_mihomo_proxy(
+    proxy_type: str, seed: int
+) -> None:
+    """测试所有协议可修复随机变体 / Test repairable fuzz variants for every proxy."""
+    proxy = _fuzz_proxy(proxy_type, seed)
+    body = yaml_dump({"proxies": [proxy]})
+
+    result = parse_subscription(
+        body, source="airport_a", fmt="yaml", parse_error="fail"
+    )
+
+    normalized = result.records[0].data
+    assert result.warnings == []
+    assert normalized["type"] == proxy_type
+    assert normalized[f"unknown-fuzz-{seed}"] == proxy[f"unknown-fuzz-{seed}"]
 
 
 def test_yaml_schema_validation_fail_raises_when_parse_error_fail() -> None:

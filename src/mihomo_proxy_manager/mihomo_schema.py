@@ -670,9 +670,7 @@ def normalize_proxy(proxy: dict[str, Any]) -> tuple[dict[str, Any] | None, list[
     for field, value in proxy.items():
         kind = merged_schema.get(str(field))
         if kind is None:
-            warnings.append(
-                f"proxy {proxy.get('name', '<unnamed>')!r} unsupported field {field!r}"
-            )
+            normalized[str(field)] = value
             continue
         normalized_value, error = _normalize_value(str(field), value, kind)
         if error:
@@ -713,7 +711,8 @@ def _normalize_value(
         for key, item in value.items():
             child_kind = kind.get(str(key))
             if child_kind is None:
-                return None, f"field {field}.{key!s} is unsupported"
+                normalized[str(key)] = item
+                continue
             normalized_item, error = _normalize_value(f"{field}.{key!s}", item, child_kind)
             if error:
                 return None, error
@@ -786,10 +785,8 @@ def _to_int(value: Any) -> int | None:
         return int(value)
     if isinstance(value, str):
         text = value.strip()
-        if not re.fullmatch(r"[+-]?\d+", text):
-            return None
         try:
-            return int(text, 10)
+            return int(text, 0)
         except ValueError:
             return None
     return None

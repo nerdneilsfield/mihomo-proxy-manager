@@ -928,18 +928,23 @@ def load_config(path: Path, *, validate: bool = True) -> LoadedConfig:
                     for key in unknown_output_keys
                 )
             )
+        output_format = output_values.get("format", "provider")
+        include_meta_comments = bool(
+            output_values.get(
+                "include_meta_comments",
+                output.default_include_meta_comments
+                if output_format == "provider"
+                else False,
+            )
+        )
         routes[name] = RouteConfig(
             name=name,
             path=values.get("path", ""),
             sources=tuple(values.get("sources", ())),
             require_all_sources=bool(values.get("require_all_sources", False)),
             output=RouteOutputConfig(
-                format=output_values.get("format", "provider"),
-                include_meta_comments=bool(
-                    output_values.get(
-                        "include_meta_comments", output.default_include_meta_comments
-                    )
-                ),
+                format=output_format,
+                include_meta_comments=include_meta_comments,
                 mode=output_values.get("mode", "default"),
                 encoding=output_values.get("encoding", "base64"),
                 import_link=bool(output_values.get("import_link", True)),

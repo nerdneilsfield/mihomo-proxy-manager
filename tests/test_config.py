@@ -290,6 +290,72 @@ sources = ["airport_a"]
         load_config(write_config(temp_config_path, body))
 
 
+def test_non_provider_route_does_not_inherit_global_meta_comments_default(
+    temp_config_path: Path,
+) -> None:
+    body = """
+[output]
+default_include_meta_comments = true
+
+[sources.airport_a]
+url = "https://example.com/sub"
+
+[routes.phone]
+path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml"
+sources = ["airport_a"]
+
+[routes.phone.output]
+format = "xray-uri"
+"""
+
+    config = load_config(write_config(temp_config_path, body))
+
+    assert config.routes["phone"].output.include_meta_comments is False
+
+
+def test_provider_route_inherits_global_meta_comments_default(
+    temp_config_path: Path,
+) -> None:
+    body = """
+[output]
+default_include_meta_comments = true
+
+[sources.airport_a]
+url = "https://example.com/sub"
+
+[routes.phone]
+path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml"
+sources = ["airport_a"]
+"""
+
+    config = load_config(write_config(temp_config_path, body))
+
+    assert config.routes["phone"].output.include_meta_comments is True
+
+
+def test_non_provider_route_explicit_meta_comments_true_is_rejected(
+    temp_config_path: Path,
+) -> None:
+    body = """
+[output]
+default_include_meta_comments = true
+
+[sources.airport_a]
+url = "https://example.com/sub"
+
+[routes.phone]
+path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml"
+sources = ["airport_a"]
+
+[routes.phone.output]
+format = "xray-uri"
+include_meta_comments = true
+"""
+
+    with pytest.raises(ValueError, match="include_meta_comments is only supported"):
+        load_config(write_config(temp_config_path, body))
+
+
 def test_status_api_path_collision_is_rejected(temp_config_path: Path) -> None:
     body = """
 [server]

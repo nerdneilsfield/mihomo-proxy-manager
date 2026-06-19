@@ -52,6 +52,33 @@ sources = ["airport_a"]
 """
 
 
+def _write_base_config(
+    path: Path,
+    output: str,
+    *,
+    server: str = 'public_base_url = "https://mpm.example.com/base"',
+    route_path: str = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml",
+) -> Path:
+    return write_config(
+        path,
+        f"""
+[server]
+status_path = "/s/X6HfeBRQz6xqk9S4dTV7gQwL2nP8aYcM"
+{server}
+
+[sources.airport_a]
+url = "https://example.com/sub"
+
+[routes.phone]
+path = "{route_path}"
+sources = ["airport_a"]
+
+[routes.phone.output]
+{output}
+""",
+    )
+
+
 def test_parse_duration() -> None:
     """测试持续时间解析函数 / Test the duration parsing function."""
     assert parse_duration("30s").total_seconds() == 30
@@ -161,6 +188,123 @@ unexpected = "value"
 
     with pytest.raises(ValueError, match="output key is unsupported"):
         load_config(write_config(temp_config_path, body), validate=False)
+
+
+@pytest.mark.parametrize(
+    ("output", "message"),
+    (
+        ('format = "full-config"', "output format is unsupported"),
+        (
+            'format = "xray-uri"\nencoding = "hex"',
+            "encoding is unsupported",
+        ),
+        (
+            'format = "quantumult-x"\nimport_response = "json"',
+            "import_response is unsupported",
+        ),
+        (
+            'format = "quantumult-x"\nimport_target = "browser"',
+            "import_target is unsupported",
+        ),
+        (
+            'format = "surfboard"\ntest_url = "https://www.gstatic.com/generate_204"',
+            "test_url must use http://",
+        ),
+        (
+            'format = "surfboard"\ntest_interval = 0',
+            "test_interval must be between",
+        ),
+        (
+            'format = "xray-uri"\ninclude_meta_comments = true',
+            "include_meta_comments is only supported",
+        ),
+    ),
+)
+def test_route_output_validation_rejects_invalid_values(
+    temp_config_path: Path, output: str, message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        load_config(_write_base_config(temp_config_path, output))
+
+
+@pytest.mark.parametrize(
+    "public_base_url",
+    (
+        "mpm.example.com/base",
+        "ftp://mpm.example.com/base",
+        "https:///base",
+        "https://mpm.example.com/base/",
+        "https://mpm.example.com/base?token=1",
+        "https://mpm.example.com/base#fragment",
+    ),
+)
+def test_server_public_base_url_must_be_http_url_without_suffix_parts(
+    temp_config_path: Path, public_base_url: str
+) -> None:
+    server = f'public_base_url = "{public_base_url}"'
+
+    with pytest.raises(ValueError, match="public_base_url"):
+        load_config(
+            _write_base_config(temp_config_path, 'format = "provider"', server=server)
+        )
+
+
+@pytest.mark.parametrize(
+    "output",
+    (
+        'format = "surfboard"',
+        'format = "quantumult-x"\nimport_link = true',
+    ),
+)
+def test_route_output_formats_requiring_import_links_need_public_base_url(
+    temp_config_path: Path, output: str
+) -> None:
+    with pytest.raises(ValueError, match="public_base_url is required"):
+        load_config(_write_base_config(temp_config_path, output, server=""))
+
+
+def test_route_output_companion_path_collision_is_rejected(
+    temp_config_path: Path,
+) -> None:
+    body = """
+[server]
+public_base_url = "https://mpm.example.com/base"
+status_path = "/s/X6HfeBRQz6xqk9S4dTV7gQwL2nP8aYcM"
+
+[sources.airport_a]
+url = "https://example.com/sub"
+
+[routes.surf]
+path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL"
+sources = ["airport_a"]
+
+[routes.surf.output]
+format = "surfboard"
+
+[routes.nodes]
+path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL-nodes"
+sources = ["airport_a"]
+"""
+
+    with pytest.raises(ValueError, match="path collision"):
+        load_config(write_config(temp_config_path, body))
+
+
+def test_status_api_path_collision_is_rejected(temp_config_path: Path) -> None:
+    body = """
+[server]
+status_path = "/s/X6HfeBRQz6xqk9S4dTV7gQwL2nP8aYcM"
+
+[sources.airport_a]
+url = "https://example.com/sub"
+
+[routes.phone]
+path = "/s/X6HfeBRQz6xqk9S4dTV7gQwL2nP8aYcM/api"
+sources = ["airport_a"]
+"""
+
+    with pytest.raises(ValueError, match="path collision"):
+        load_config(write_config(temp_config_path, body))
 
 
 def test_validation_collects_multiple_errors(temp_config_path: Path) -> None:

@@ -12,7 +12,7 @@ import tomllib
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from croniter import croniter
@@ -394,6 +394,31 @@ def _validate_dns_servers(
     return errors
 
 
+def _validate_public_base_url(value: str | None) -> str | None:
+    if value is None:
+        return None
+    parsed = urlsplit(value)
+    if parsed.scheme not in {"http", "https"}:
+        return "server public_base_url must use http:// or https://"
+    if not parsed.hostname:
+        return "server public_base_url host is required"
+    if parsed.query or "?" in value:
+        return "server public_base_url must not include query"
+    if parsed.fragment or "#" in value:
+        return "server public_base_url must not include fragment"
+    if value.endswith("/"):
+        return "server public_base_url must not end with '/'"
+    return None
+
+
+def _companion_paths(route: RouteConfig) -> tuple[str, ...]:
+    if route.output.format == "surfboard":
+        return (f"{route.path}-nodes",)
+    if route.output.format == "quantumult-x" and route.output.import_link:
+        return (f"{route.path}-import",)
+    return ()
+
+
 class LoadedConfig(AppConfig):
     """已加载并解析的完整应用配置。
 
@@ -443,11 +468,21 @@ class LoadedConfig(AppConfig):
             )
         )
 
+        public_base_url_error = _validate_public_base_url(self.server.public_base_url)
+        if public_base_url_error:
+            errors.append(public_base_url_error)
+
         paths: dict[str, str] = {self.server.health_path: "health_path"}
         if self.server.status_path:
             if self.server.status_path in paths:
                 errors.append("health_path and status_path collide")
             paths[self.server.status_path] = "status_path"
+            status_api_path = f"{self.server.status_path.rstrip('/')}/api"
+            if status_api_path in paths:
+                errors.append(
+                    f"path collision for status_api_path with {paths[status_api_path]}"
+                )
+            paths[status_api_path] = "status_api_path"
         if self.server.status_path and not has_path_entropy(
             self.server.status_path,
             min_bits=self.security.hidden_path_min_entropy_bits,
@@ -468,6 +503,13 @@ class LoadedConfig(AppConfig):
             if route.path in paths:
                 errors.append(f"path collision for {key} with {paths[route.path]}")
             paths[route.path] = key
+            for companion_path in _companion_paths(route):
+                companion_key = f"{key} companion path {companion_path!r}"
+                if companion_path in paths:
+                    errors.append(
+                        f"path collision for {companion_key} with {paths[companion_path]}"
+                    )
+                paths[companion_path] = companion_key
             for source in route.sources:
                 if source not in self.sources:
                     errors.append(
@@ -484,10 +526,80 @@ class LoadedConfig(AppConfig):
                         errors.append(
                             f"route {route.name!r} {pattern_name} regex is invalid: {exc}"
                         )
-            if route.output.format != "provider":
+            if route.output.format not in {
+                "provider",
+                "surfboard",
+                "quantumult-x",
+                "xray-uri",
+            }:
                 errors.append(
                     f"route {route.name!r} output format is unsupported: {route.output.format!r}"
                 )
+                continue
+            if route.output.format == "provider":
+                if route.output.mode != "default":
+                    errors.append(
+                        f"route {route.name!r} provider output mode must be default"
+                    )
+            else:
+                if route.output.include_meta_comments:
+                    errors.append(
+                        f"route {route.name!r} include_meta_comments is only supported for provider output"
+                    )
+                if route.output.format == "surfboard":
+                    if route.output.mode not in {"default", "full-profile"}:
+                        errors.append(
+                            f"route {route.name!r} surfboard mode is unsupported: {route.output.mode!r}"
+                        )
+                    if not route.output.test_url.startswith("http://"):
+                        errors.append(
+                            f"route {route.name!r} surfboard test_url must use http://"
+                        )
+                    if not 1 <= route.output.test_interval <= 2_678_400:
+                        errors.append(
+                            f"route {route.name!r} surfboard test_interval must be between 1 and 2678400"
+                        )
+                    if not 1 <= route.output.test_timeout <= 300:
+                        errors.append(
+                            f"route {route.name!r} surfboard test_timeout must be between 1 and 300"
+                        )
+                    if not 0 <= route.output.test_tolerance <= 60_000:
+                        errors.append(
+                            f"route {route.name!r} surfboard test_tolerance must be between 0 and 60000"
+                        )
+                    if not self.server.public_base_url:
+                        errors.append(
+                            f"route {route.name!r} public_base_url is required for surfboard output"
+                        )
+                elif route.output.format == "quantumult-x":
+                    if route.output.mode not in {"default", "server-remote"}:
+                        errors.append(
+                            f"route {route.name!r} quantumult-x mode is unsupported: {route.output.mode!r}"
+                        )
+                    if route.output.import_response not in {"redirect", "plain"}:
+                        errors.append(
+                            f"route {route.name!r} quantumult-x import_response is unsupported: {route.output.import_response!r}"
+                        )
+                    if route.output.import_target not in {
+                        "app-scheme",
+                        "universal-link",
+                    }:
+                        errors.append(
+                            f"route {route.name!r} quantumult-x import_target is unsupported: {route.output.import_target!r}"
+                        )
+                    if route.output.import_link and not self.server.public_base_url:
+                        errors.append(
+                            f"route {route.name!r} public_base_url is required for quantumult-x import_link"
+                        )
+                elif route.output.format == "xray-uri":
+                    if route.output.mode != "default":
+                        errors.append(
+                            f"route {route.name!r} xray-uri output mode must be default"
+                        )
+                    if route.output.encoding not in {"base64", "plain"}:
+                        errors.append(
+                            f"route {route.name!r} xray-uri encoding is unsupported: {route.output.encoding!r}"
+                        )
 
         for source in self.sources.values():
             fetch_user_agent_error = _validate_user_agent(

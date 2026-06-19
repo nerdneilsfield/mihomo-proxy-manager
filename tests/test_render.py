@@ -868,6 +868,219 @@ def test_surfboard_renderer_skips_unsupported_nodes() -> None:
     assert response.warnings
 
 
+def test_surfboard_renderer_warns_when_unknown_node_is_dropped() -> None:
+    """Test Surfboard warns when normalization drops an unknown node."""
+    response = build_renderer_registry()["surfboard"].render(
+        RenderRequest(
+            surfboard_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "SS 01",
+                        "type": "ss",
+                        "server": "example.com",
+                        "port": 443,
+                        "cipher": "chacha20-ietf-poly1305",
+                        "password": "password",
+                    },
+                ),
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "Unknown 01",
+                        "type": "unknown",
+                        "server": "example.com",
+                        "port": 443,
+                    },
+                ),
+            ],
+            companion_public_urls={
+                "nodes": "https://mpm.example.com/surfboard-nodes"
+            },
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert response.status_code == 200
+    assert "SS 01 = ss, example.com, 443" in text
+    assert response.warnings
+    assert any(
+        "unsupported proxy type unknown" in warning
+        for warning in response.warnings
+    )
+
+
+def test_surfboard_vmess_tls_uses_sni_and_skip_cert_verify() -> None:
+    """Test Surfboard VMess TLS maps SNI and cert verification fields."""
+    response = build_renderer_registry()["surfboard"].render(
+        RenderRequest(
+            surfboard_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "VMess TLS",
+                        "type": "vmess",
+                        "server": "example.com",
+                        "port": 443,
+                        "uuid": "00000000-0000-0000-0000-000000000000",
+                        "cipher": "auto",
+                        "tls": True,
+                        "servername": "example.com",
+                        "skip-cert-verify": True,
+                    },
+                )
+            ],
+            companion="nodes",
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert "sni=example.com" in text
+    assert "skip-cert-verify=true" in text
+    assert "tls-host" not in text
+
+
+def test_surfboard_trojan_ws_maps_path_and_multi_headers() -> None:
+    """Test Surfboard Trojan WS maps path and all headers."""
+    response = build_renderer_registry()["surfboard"].render(
+        RenderRequest(
+            surfboard_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "Trojan WS",
+                        "type": "trojan",
+                        "server": "example.com",
+                        "port": 443,
+                        "password": "secret",
+                        "network": "ws",
+                        "ws-opts": {
+                            "path": "/ws",
+                            "headers": {
+                                "Host": "example.com",
+                                "X-Test": "1",
+                            },
+                        },
+                    },
+                )
+            ],
+            companion="nodes",
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert "ws=true" in text
+    assert "ws-path=/ws" in text
+    assert "ws-headers=Host:example.com|X-Test:1" in text
+
+
+def test_surfboard_ss_obfs_maps_supported_fields() -> None:
+    """Test Surfboard Shadowsocks obfs fields are preserved."""
+    response = build_renderer_registry()["surfboard"].render(
+        RenderRequest(
+            surfboard_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "SS Obfs",
+                        "type": "ss",
+                        "server": "example.com",
+                        "port": 443,
+                        "cipher": "chacha20-ietf-poly1305",
+                        "password": "password",
+                        "obfs": "http",
+                        "obfs-host": "example.com",
+                        "obfs-uri": "/obfs",
+                    },
+                )
+            ],
+            companion="nodes",
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert "obfs=http" in text
+    assert "obfs-host=example.com" in text
+    assert "obfs-uri=/obfs" in text
+
+
+def test_surfboard_ss_plugin_unsupported_fails_when_only_node() -> None:
+    """Test Surfboard skips unsupported Shadowsocks plugin fields."""
+    response = build_renderer_registry()["surfboard"].render(
+        RenderRequest(
+            surfboard_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "SS Plugin",
+                        "type": "ss",
+                        "server": "example.com",
+                        "port": 443,
+                        "cipher": "chacha20-ietf-poly1305",
+                        "password": "password",
+                        "plugin": "v2ray-plugin",
+                    },
+                )
+            ],
+        )
+    )
+
+    assert response.status_code == 422
+    assert response.warnings
+    assert any(
+        "unsupported Shadowsocks field plugin" in warning
+        for warning in response.warnings
+    )
+
+
+def test_surfboard_ss_plugin_unsupported_warns_when_mixed() -> None:
+    """Test Surfboard warns but keeps supported nodes when SS plugin is mixed."""
+    response = build_renderer_registry()["surfboard"].render(
+        RenderRequest(
+            surfboard_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "SS 01",
+                        "type": "ss",
+                        "server": "example.com",
+                        "port": 443,
+                        "cipher": "chacha20-ietf-poly1305",
+                        "password": "password",
+                    },
+                ),
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "SS Plugin",
+                        "type": "ss",
+                        "server": "example.com",
+                        "port": 443,
+                        "cipher": "chacha20-ietf-poly1305",
+                        "password": "password",
+                        "plugin-opts": {"mode": "websocket"},
+                    },
+                ),
+            ],
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert response.status_code == 200
+    assert "SS 01 = ss, example.com, 443" in text
+    assert response.warnings
+    assert any(
+        "unsupported Shadowsocks field plugin-opts" in warning
+        for warning in response.warnings
+    )
+
+
 def test_surfboard_renderer_sanitizes_node_names() -> None:
     """Test Surfboard labels avoid comma/control characters."""
     response = build_renderer_registry()["surfboard"].render(

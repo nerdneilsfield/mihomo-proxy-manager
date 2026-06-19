@@ -246,19 +246,20 @@ def _sb_bool(value: object) -> str:
 
 
 def _sb_ws_headers(data: dict[str, object]) -> str:
-    """Render the first Surfboard WebSocket header token."""
+    """Render Surfboard WebSocket header token."""
     ws_opts = data.get("ws-opts")
     if not isinstance(ws_opts, dict):
         return ""
     headers = ws_opts.get("headers")
     if not isinstance(headers, dict):
         return ""
+    segments: list[str] = []
     for key, value in headers.items():
         header_name = _sb_value(key)
         header_value = _sb_value(value)
         if header_name and header_value:
-            return f"{header_name}:{header_value}"
-    return ""
+            segments.append(f"{header_name}:{header_value}")
+    return "|".join(segments)
 
 
 def _sb_ws_path(data: dict[str, object]) -> str:
@@ -279,6 +280,80 @@ def _sb_base_segments(data: dict[str, object], proxy_type: str) -> list[str] | N
     return [f"{name} = {proxy_type}", host, port]
 
 
+def _sb_ws_segments(data: dict[str, object]) -> list[str]:
+    """Build Surfboard WebSocket option segments."""
+    segments = ["ws=true"]
+    ws_path = _sb_ws_path(data)
+    if ws_path:
+        segments.append(f"ws-path={ws_path}")
+    ws_headers = _sb_ws_headers(data)
+    if ws_headers:
+        segments.append(f"ws-headers={ws_headers}")
+    return segments
+
+
+def _has_unsupported_sb_ss_plugin(data: dict[str, object]) -> str | None:
+    """Return unsupported Shadowsocks plugin field for Surfboard."""
+    for field_name in ("plugin", "plugin-opts"):
+        if field_name in data and data[field_name] not in (None, "", False):
+            return field_name
+    return None
+
+
+def _prepare_surfboard_records(
+    route: RouteConfig, records: Sequence[SourceRecord]
+) -> tuple[list[dict[str, object]], tuple[str, ...]]:
+    """Prepare Surfboard records while preserving skip warnings."""
+    transformed = apply_transform(
+        list(records), filter_config=route.filter, rename_config=route.rename
+    )
+    normalized_records: list[ProxyRecord] = []
+    warnings: list[str] = []
+    supported_types = {"ss", "trojan", "vmess"}
+    for record in transformed:
+        data = dict(record.data)
+        critical_field = _has_security_critical_field(data)
+        if critical_field is not None:
+            warnings.append(
+                _skip_warning(
+                    data,
+                    f"unsupported security-critical field {critical_field}",
+                )
+            )
+            continue
+        proxy_type = _string(data.get("type")).lower()
+        if proxy_type not in supported_types:
+            warnings.append(
+                _skip_warning(data, f"unsupported proxy type {proxy_type}")
+            )
+            continue
+        if proxy_type == "ss":
+            unsupported_ss_field = _has_unsupported_sb_ss_plugin(data)
+            if unsupported_ss_field is not None:
+                warnings.append(
+                    _skip_warning(
+                        data,
+                        f"unsupported Shadowsocks field {unsupported_ss_field}",
+                    )
+                )
+                continue
+        normalized, normalize_warnings = normalize_proxy(data)
+        if normalized is None:
+            for warning in normalize_warnings:
+                logger.warning(
+                    "dropping invalid proxy before render: {warning}",
+                    warning=warning,
+                )
+            continue
+        normalized_records.append(ProxyRecord(source=record.source, data=normalized))
+    repaired = repair_duplicate_names(normalized_records)
+    proxies = [
+        cast(dict[str, object], _quote_proxy_strings(dict(record.data)))
+        for record in repaired
+    ]
+    return proxies, tuple(warnings)
+
+
 def _render_sb_ss(data: dict[str, object]) -> str | None:
     """Render Shadowsocks proxy as a Surfboard proxy line."""
     segments = _sb_base_segments(data, "ss")
@@ -287,6 +362,15 @@ def _render_sb_ss(data: dict[str, object]) -> str | None:
     if segments is None or not method or not password:
         return None
     segments.extend([f"encrypt-method={method}", f"password={password}"])
+    obfs = _sb_value(data.get("obfs"))
+    if obfs:
+        segments.append(f"obfs={obfs}")
+    obfs_host = _sb_value(data.get("obfs-host"))
+    if obfs_host:
+        segments.append(f"obfs-host={obfs_host}")
+    obfs_uri = _sb_value(data.get("obfs-uri"))
+    if obfs_uri:
+        segments.append(f"obfs-uri={obfs_uri}")
     return ", ".join(segments)
 
 
@@ -301,16 +385,14 @@ def _render_sb_vmess(data: dict[str, object]) -> str | None:
         segments.append("tls=true")
         tls_host = _sb_value(data.get("servername") or data.get("sni"))
         if tls_host:
-            segments.append(f"tls-host={tls_host}")
+            segments.append(f"sni={tls_host}")
+        if "skip-cert-verify" in data:
+            segments.append(
+                f"skip-cert-verify={_sb_bool(data.get('skip-cert-verify'))}"
+            )
     network = _sb_value(data.get("network")).lower()
     if network == "ws":
-        segments.append("ws=true")
-        ws_path = _sb_ws_path(data)
-        if ws_path:
-            segments.append(f"ws-path={ws_path}")
-        ws_headers = _sb_ws_headers(data)
-        if ws_headers:
-            segments.append(f"ws-headers={ws_headers}")
+        segments.extend(_sb_ws_segments(data))
     elif network and network != "tcp":
         return None
     return ", ".join(segments)
@@ -327,7 +409,14 @@ def _render_sb_trojan(data: dict[str, object]) -> str | None:
     if sni:
         segments.append(f"sni={sni}")
     if "skip-cert-verify" in data:
-        segments.append(f"skip-cert-verify={_sb_bool(data.get('skip-cert-verify'))}")
+        segments.append(
+            f"skip-cert-verify={_sb_bool(data.get('skip-cert-verify'))}"
+        )
+    network = _sb_value(data.get("network")).lower()
+    if network == "ws":
+        segments.extend(_sb_ws_segments(data))
+    elif network and network != "tcp":
+        return None
     return ", ".join(segments)
 
 
@@ -687,8 +776,10 @@ class SurfboardRenderer:
 
     def render(self, request: RenderRequest) -> RenderResponse:
         """Render Surfboard profile or nodes companion response."""
-        proxies = prepare_render_records(request.route, request.records)
-        warnings: list[str] = []
+        proxies, prepare_warnings = _prepare_surfboard_records(
+            request.route, request.records
+        )
+        warnings: list[str] = list(prepare_warnings)
         lines: list[str] = []
         names: list[str] = []
         renderers = {
@@ -698,15 +789,6 @@ class SurfboardRenderer:
         }
 
         for proxy in proxies:
-            critical_field = _has_security_critical_field(proxy)
-            if critical_field is not None:
-                warnings.append(
-                    _skip_warning(
-                        proxy,
-                        f"unsupported security-critical field {critical_field}",
-                    )
-                )
-                continue
             proxy_type = _string(proxy.get("type")).lower()
             renderer = renderers.get(proxy_type)
             if renderer is None:

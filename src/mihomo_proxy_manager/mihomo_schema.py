@@ -663,7 +663,9 @@ def normalize_proxy(proxy: dict[str, Any]) -> tuple[dict[str, Any] | None, list[
     proxy_type = str(raw_type).lower()
     schema = PROXY_SCHEMAS.get(proxy_type)
     if schema is None:
-        return None, [f"proxy {proxy.get('name', '<unnamed>')!r} unsupported proxy type {raw_type!r}"]
+        return None, [
+            f"proxy {proxy.get('name', '<unnamed>')!r} unsupported proxy type {raw_type!r}"
+        ]
 
     merged_schema = {**COMMON_PROXY_FIELDS, **schema}
     normalized: dict[str, Any] = {"type": proxy_type}
@@ -713,7 +715,9 @@ def _normalize_value(
             if child_kind is None:
                 normalized[str(key)] = item
                 continue
-            normalized_item, error = _normalize_value(f"{field}.{key!s}", item, child_kind)
+            normalized_item, error = _normalize_value(
+                f"{field}.{key!s}", item, child_kind
+            )
             if error:
                 return None, error
             normalized[str(key)] = normalized_item
@@ -812,7 +816,9 @@ def _validate_reality_options(proxy: dict[str, Any], warnings: list[str]) -> Non
         return
     short_id = opts.get("short-id", "")
     if not isinstance(short_id, str):
-        warnings.append(f"proxy {proxy.get('name', '<unnamed>')!r} reality-opts.short-id must be string")
+        warnings.append(
+            f"proxy {proxy.get('name', '<unnamed>')!r} reality-opts.short-id must be string"
+        )
         return
     if len(short_id) % 2 != 0 or len(short_id) > 16 or not _HEX_RE.fullmatch(short_id):
         warnings.append(

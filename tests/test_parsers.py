@@ -402,7 +402,9 @@ proxies:
     )
 
     assert [record.data["name"] for record in result.records] == ["good"]
-    assert any("short-id" in warning and "hex" in warning for warning in result.warnings)
+    assert any(
+        "short-id" in warning and "hex" in warning for warning in result.warnings
+    )
 
 
 def test_yaml_drops_unsupported_proxy_type() -> None:
@@ -489,7 +491,9 @@ proxies:
     )
 
     assert [record.data["name"] for record in result.records] == ["good"]
-    assert any("ws-opts.headers" in warning and "map" in warning for warning in result.warnings)
+    assert any(
+        "ws-opts.headers" in warning and "map" in warning for warning in result.warnings
+    )
 
 
 def test_yaml_preserves_unknown_fields_without_warning() -> None:
@@ -688,26 +692,69 @@ PROXY_VARIANTS: tuple[ProxyVariant, ...] = (
     ("routing_mark_hex_string", lambda proxy: proxy.update({"routing-mark": "0x10"})),
     ("common_bool_ints", lambda proxy: proxy.update({"tfo": 1, "mptcp": 0})),
     ("common_bool_texts", lambda proxy: proxy.update({"tfo": "yes", "mptcp": "off"})),
-    ("common_string_numbers", lambda proxy: proxy.update({"interface-name": 123, "dialer-proxy": 456})),
+    (
+        "common_string_numbers",
+        lambda proxy: proxy.update({"interface-name": 123, "dialer-proxy": 456}),
+    ),
     ("unknown_top_scalar", lambda proxy: proxy.update({"unknown-top-level": "kept"})),
     ("unknown_top_map", lambda proxy: proxy.update({"unknown-top-map": {"a": "b"}})),
     ("unknown_top_list", lambda proxy: proxy.update({"unknown-top-list": ["a", "b"]})),
     ("unknown_nested", _add_unknown_nested),
-    ("smux_number_strings", lambda proxy: proxy.update({"smux": {"enabled": 1, "max-connections": "8", "min-streams": "1", "max-streams": "16"}})),
-    ("smux_brutal", lambda proxy: proxy.update({"smux": {"enabled": 1, "brutal-opts": {"enabled": 1, "up": 100, "down": 200}}})),
-    ("first_string_numeric", lambda proxy: _set_first_schema_kind(proxy, "string", 123)),
-    ("first_number_string", lambda proxy: _set_first_schema_kind(proxy, "number", "321")),
-    ("first_number_float", lambda proxy: _set_first_schema_kind(proxy, "number", 321.0)),
+    (
+        "smux_number_strings",
+        lambda proxy: proxy.update(
+            {
+                "smux": {
+                    "enabled": 1,
+                    "max-connections": "8",
+                    "min-streams": "1",
+                    "max-streams": "16",
+                }
+            }
+        ),
+    ),
+    (
+        "smux_brutal",
+        lambda proxy: proxy.update(
+            {
+                "smux": {
+                    "enabled": 1,
+                    "brutal-opts": {"enabled": 1, "up": 100, "down": 200},
+                }
+            }
+        ),
+    ),
+    (
+        "first_string_numeric",
+        lambda proxy: _set_first_schema_kind(proxy, "string", 123),
+    ),
+    (
+        "first_number_string",
+        lambda proxy: _set_first_schema_kind(proxy, "number", "321"),
+    ),
+    (
+        "first_number_float",
+        lambda proxy: _set_first_schema_kind(proxy, "number", 321.0),
+    ),
     ("first_bool_int", lambda proxy: _set_first_schema_kind(proxy, "bool", 1)),
     ("first_bool_text", lambda proxy: _set_first_schema_kind(proxy, "bool", "true")),
     ("first_string_list_csv", _set_csv_list),
-    ("first_number_list_strings", lambda proxy: _set_first_schema_kind(proxy, "number-list", ["1", "2"])),
+    (
+        "first_number_list_strings",
+        lambda proxy: _set_first_schema_kind(proxy, "number-list", ["1", "2"]),
+    ),
     ("first_string_map_numbers", _set_string_map_numbers),
     ("first_string_list_map_csv", _set_string_list_map_csv),
     ("first_any_map_nested", _set_any_map_nested),
     ("name_numeric_string", lambda proxy: proxy.update({"name": 1001})),
-    ("server_numeric_string", lambda proxy: proxy.update({"server": 12345}) if "server" in proxy else None),
-    ("port_string", lambda proxy: proxy.update({"port": "443"}) if "port" in proxy else None),
+    (
+        "server_numeric_string",
+        lambda proxy: proxy.update({"server": 12345}) if "server" in proxy else None,
+    ),
+    (
+        "port_string",
+        lambda proxy: proxy.update({"port": "443"}) if "port" in proxy else None,
+    ),
 )
 
 

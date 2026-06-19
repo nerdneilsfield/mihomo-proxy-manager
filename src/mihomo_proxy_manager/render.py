@@ -52,7 +52,9 @@ def _normalize_render_records(records: list[ProxyRecord]) -> list[ProxyRecord]:
         normalized, warnings = normalize_proxy(dict(record.data))
         if normalized is None:
             for warning in warnings:
-                logger.warning("dropping invalid proxy before render: {warning}", warning=warning)
+                logger.warning(
+                    "dropping invalid proxy before render: {warning}", warning=warning
+                )
             continue
         normalized_records.append(ProxyRecord(source=record.source, data=normalized))
     return normalized_records

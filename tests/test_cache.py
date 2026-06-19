@@ -82,7 +82,9 @@ async def test_cache_json_includes_type_schema_metadata(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_cache_json_reads_legacy_v1_without_type_schema_metadata(tmp_path) -> None:
+async def test_cache_json_reads_legacy_v1_without_type_schema_metadata(
+    tmp_path,
+) -> None:
     """测试旧版 v1 缓存缺少 metadata 仍可读取 / Test legacy v1 cache without metadata still loads."""
     path = tmp_path / "airport_a.json"
     path.write_text(

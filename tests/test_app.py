@@ -119,7 +119,7 @@ async def test_status_endpoint_returns_source_states(tmp_path) -> None:
     app = create_app(config, cache_store=store, refresher=None, scheduler=None)
 
     with TestClient(app) as client:
-        response = client.get("/s/X6HfeBRQz6xqk9S4dTV7gQwL2nP8aYcM")
+        response = client.get("/s/X6HfeBRQz6xqk9S4dTV7gQwL2nP8aYcM/api")
 
     assert response.status_code == 200
     data = response.json()
@@ -543,7 +543,7 @@ async def test_status_endpoint_redacts_route_path_in_last_error(tmp_path) -> Non
     app = create_app(config, cache_store=store, refresher=None, scheduler=None)
 
     with TestClient(app) as client:
-        response = client.get("/s/X6HfeBRQz6xqk9S4dTV7gQwL2nP8aYcM")
+        response = client.get("/s/X6HfeBRQz6xqk9S4dTV7gQwL2nP8aYcM/api")
 
     assert response.status_code == 200
     data = response.json()
@@ -661,3 +661,83 @@ def test_health_ignores_route_user_agent_access(tmp_path) -> None:
         response = client.get("/healthz", headers={"User-Agent": ""})
 
     assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_status_root_returns_html_dashboard(tmp_path) -> None:
+    """测试状态根路径返回 HTML 页面。"""
+    config = load_config(config_file(tmp_path))
+    store = JsonSourceCacheStore(config.cache)
+    now = datetime.now(UTC)
+    await store.set(
+        "airport_a",
+        SourceCache(
+            "airport_a",
+            1,
+            now,
+            now,
+            None,
+            None,
+            2,
+            (),
+            None,
+            (
+                ProxyRecord("airport_a", {"name": "HK", "type": "vmess"}),
+                ProxyRecord("airport_a", {"name": "JP", "type": "ss"}),
+            ),
+        ),
+    )
+    app = create_app(config, cache_store=store, refresher=None, scheduler=None)
+
+    with TestClient(app) as client:
+        response = client.get("/s/X6HfeBRQz6xqk9S4dTV7gQwL2nP8aYcM")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    text = response.text
+    assert "Sources" in text
+    assert "Routes" in text
+    assert "airport_a" in text
+    assert "phone" in text
+
+
+@pytest.mark.asyncio
+async def test_status_api_returns_json_and_route_stats(tmp_path) -> None:
+    """测试状态 API 返回 JSON，并包含路由与协议统计。"""
+    config = load_config(config_file(tmp_path))
+    store = JsonSourceCacheStore(config.cache)
+    now = datetime.now(UTC)
+    await store.set(
+        "airport_a",
+        SourceCache(
+            "airport_a",
+            1,
+            now,
+            now,
+            None,
+            None,
+            2,
+            (),
+            None,
+            (
+                ProxyRecord("airport_a", {"name": "HK", "type": "vmess"}),
+                ProxyRecord("airport_a", {"name": "JP", "type": "ss"}),
+            ),
+        ),
+    )
+    app = create_app(config, cache_store=store, refresher=None, scheduler=None)
+
+    with TestClient(app) as client:
+        response = client.get("/s/X6HfeBRQz6xqk9S4dTV7gQwL2nP8aYcM/api")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/json")
+    data = response.json()
+    assert data["summary"]["sources"]["total"] == 1
+    assert data["summary"]["routes"]["total"] == 1
+    assert data["summary"]["protocols"] == {"ss": 1, "vmess": 1}
+    assert data["routes"][0]["name"] == "phone"
+    assert data["routes"][0]["node_count"] == 2
+    assert data["routes"][0]["protocols"] == {"ss": 1, "vmess": 1}
+    assert data["sources"][0]["protocols"] == {"ss": 1, "vmess": 1}
+    assert data["sources"][0]["healthy"] is True

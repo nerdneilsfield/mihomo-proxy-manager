@@ -385,6 +385,88 @@ async def test_surfboard_nodes_companion_uses_same_access_policy(tmp_path) -> No
     assert matching_ua.text.startswith("SS 01 = ss,")
 
 
+@pytest.mark.asyncio
+async def test_all_skipped_nodes_return_422(tmp_path) -> None:
+    """Test route returns 422 when the renderer skips every node."""
+    config = app_config_with_route_output(
+        tmp_path,
+        RouteOutputConfig(format="surfboard"),
+        public_base_url="https://mpm.example.com",
+    )
+    store = JsonSourceCacheStore(config.cache)
+    await store.set(
+        "airport_a",
+        source_cache_with_nodes(
+            ProxyRecord(
+                "airport_a",
+                {
+                    "name": "VLESS 01",
+                    "type": "vless",
+                    "server": "example.com",
+                    "port": 443,
+                    "uuid": "00000000-0000-0000-0000-000000000000",
+                },
+            )
+        ),
+    )
+    app = create_app(config, cache_store=store, refresher=None, scheduler=None)
+
+    with TestClient(app) as client:
+        response = client.get(config.routes["phone"].path)
+
+    assert response.status_code == 422
+    assert "no supported nodes" in response.text
+
+
+@pytest.mark.asyncio
+async def test_render_warnings_redact_secrets(tmp_path, monkeypatch) -> None:
+    """Test app-level render warning logs redact configured secrets."""
+    from mihomo_proxy_manager import app as app_module
+
+    warnings: list[str] = []
+
+    def capture_warning(message: str, **kwargs: object) -> None:
+        warnings.append(message.format(**kwargs))
+
+    monkeypatch.setattr(app_module.logger, "warning", capture_warning)
+
+    config = app_config_with_route_output(
+        tmp_path,
+        RouteOutputConfig(format="surfboard"),
+        public_base_url="https://mpm.example.com",
+    )
+    secret_route_path = "/p/secret-value-CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml"
+    route = replace(config.routes["phone"], path=secret_route_path)
+    config = replace(config, routes={**config.routes, "phone": route})
+    store = JsonSourceCacheStore(config.cache)
+    await store.set(
+        "airport_a",
+        source_cache_with_nodes(
+            ProxyRecord(
+                "airport_a",
+                {
+                    "name": secret_route_path,
+                    "type": "vless",
+                    "server": "example.com",
+                    "port": 443,
+                    "uuid": "00000000-0000-0000-0000-000000000000",
+                    "password": secret_route_path,
+                },
+            )
+        ),
+    )
+    app = create_app(config, cache_store=store, refresher=None, scheduler=None)
+
+    with TestClient(app) as client:
+        response = client.get(secret_route_path)
+
+    rendered_warnings = "\n".join(warnings)
+    assert response.status_code == 422
+    assert "route render warning" in rendered_warnings
+    assert "secret-value" not in rendered_warnings
+    assert "***" in rendered_warnings
+
+
 def test_health_and_unknown_path(tmp_path) -> None:
     """测试健康检查和未知路径返回正确的状态码。
 

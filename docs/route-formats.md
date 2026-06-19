@@ -2,11 +2,12 @@
 
 Date: 2026-06-19
 
-本文记录 `mihomo-proxy-manager` 未来扩展 route 输出格式时的格式边界、字段映射、写法示例和实现检查项。当前实现只支持：
+本文记录 `mihomo-proxy-manager` route 输出格式的格式边界、字段映射、写法示例和后续实现检查项。当前实现支持：
 
 - source input: `auto`, `yaml`, `share-links`
-- route output: `provider`
+- route output: `provider`, `xray-uri`, `quantumult-x`, `surfboard`
 - provider payload: Mihomo/Clash `proxies:` YAML
+- direct subscription payloads: Xray/V2Ray URI subscription, Quantumult X server lines plus import companion, Surfboard minimal full profile plus nodes companion
 
 目标不是一次做成所有客户端的完整配置生成器，而是先把本服务已经规范化的 proxy node，可靠输出成各客户端可消费的订阅片段。完整 profile 只在格式确实需要 wrapper 时生成。
 
@@ -29,14 +30,32 @@ Date: 2026-06-19
 
 ## Support Matrix
 
-| Target | Current support | Future route format | Recommended MVP | Notes |
+| Target | Current support | Route format | Recommended MVP | Notes |
 | --- | --- | --- | --- | --- |
 | Clash/Mihomo provider | Supported as input and output | `provider` or alias `clash-provider` | Keep current `proxies:` YAML | Mihomo provider content也可为 URI lines/base64，但 YAML 最稳。 |
-| Xray/V2Ray subscription | Source supported when payload is share links or base64 share links | `xray-uri`, later `xray-json` | Plain URI lines, optional base64 wrapper | URI 订阅是生态约定；完整 Xray JSON 需要 inbounds/routing。 |
-| sing-box subscription | Not route output yet | `sing-box` | `{ "outbounds": [...] }` JSON fragment | Full config 需 DNS、route、inbounds、selector/urltest 策略。 |
-| Surfboard profile | Not route output yet | `surfboard` | `[Proxy]` snippet, optional minimal profile | Follows Surge profile sections: `[Proxy]`, `[Proxy Group]`, `[Rule]`。 |
-| Quantumult X profile | Not route output yet | `quantumult-x` | `[server_local]` snippet | Full profile has `[server_remote]`, `[policy]`, `[filter_*]`, `[rewrite_*]` 等。 |
-| Loon profile | Not route output yet | `loon` | `[Proxy]` snippet | Loon 手册稳定示例覆盖 HTTP/HTTPS/SS/SSR/VMess/Trojan。 |
+| Xray/V2Ray subscription | Implemented route output | `xray-uri` | Default base64 URI subscription; `encoding = "plain"` optional | Direct v2rayN-compatible subscription; no companion endpoint. Full Xray JSON remains future work. |
+| Quantumult X profile | Implemented route output | `quantumult-x` | Server lines on main route plus `-import` companion | `server_remote`/server lines output; app-scheme/universal-link and redirect/plain import supported. |
+| Surfboard profile | Implemented route output | `surfboard` | Minimal full profile with `Main`, `Auto`, `Proxy`, `FINAL,Main` | Main route returns profile; `-nodes` companion returns proxy lines for `policy-path`. |
+| sing-box subscription | Future / not implemented | `sing-box` | `{ "outbounds": [...] }` JSON fragment | Full config 需 DNS、route、inbounds、selector/urltest 策略。 |
+| Loon profile | Future / not implemented | `loon` | `[Proxy]` snippet | Loon 手册稳定示例覆盖 HTTP/HTTPS/SS/SSR/VMess/Trojan。 |
+
+Minimal direct route output snippets:
+
+```toml
+[server]
+public_base_url = "https://mpm.example.com"
+
+[routes.surfboard.output]
+format = "surfboard"
+
+[routes.qx.output]
+format = "quantumult-x"
+
+[routes.v2rayn.output]
+format = "xray-uri"
+```
+
+Each `[routes.*]` still needs `path` and `sources`; omitted here for brevity.
 
 ## Common Source Input
 
@@ -148,29 +167,32 @@ In subscription ecosystems, "Xray subscription" usually means one of these:
 - base64-encoded share-link lines
 - complete Xray JSON config
 
-The first two are already valid source input for this project. Route output is not implemented yet.
+The first two are valid source input and route output for this project. The implemented `xray-uri` route returns a direct v2rayN-compatible subscription. Complete Xray JSON config output remains future work.
 
-### Future `xray-uri` Output
+### Implemented `xray-uri` Output
 
-Recommended MVP:
+Route config:
 
 ```toml
 [routes.phone.output]
 format = "xray-uri"
-encoding = "plain" # plain | base64
+encoding = "base64" # default; plain is also available
 ```
 
-Good minimal route output:
+The main route directly returns URI lines. There is no companion endpoint. With default `encoding = "base64"`, the joined URI-line payload is base64-wrapped for common subscription clients. `encoding = "plain"` returns raw lines.
+
+Good plain route output:
 
 ```text
 vmess://<base64-json>
 vless://00000000-0000-0000-0000-000000000000@example.com:443?encryption=none&security=tls&sni=example.com&type=ws&host=example.com&path=%2Fws#VLESS%2001
 trojan://password@example.com:443?security=tls&sni=example.com&type=ws&host=example.com&path=%2Fws#Trojan%2001
 ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTpwYXNzd29yZA@example.com:443#SS%2001
-hysteria2://password@example.com:443?sni=example.com&insecure=0&obfs=salamander&obfs-password=obfs-pass#HY2%2001
 ```
 
 `encoding = "base64"` wraps the whole text payload after joining lines with `\n`. Do not base64 each URI separately.
+
+Phase-one supported protocols are `ss`, `vmess`, `vless`, and `trojan`. Unsupported protocols and unsupported security-critical fields are skipped with route render warnings; if every node is skipped, the route returns HTTP 422 with `no supported nodes for xray-uri output`.
 
 ### URI Mapping
 
@@ -180,7 +202,7 @@ hysteria2://password@example.com:443?sni=example.com&insecure=0&obfs=salamander&
 | `vmess` | `uuid`, `server`, `port` | `vmess://base64(json)` | JSON usually carries `v`, `ps`, `add`, `port`, `id`, `aid`, `scy`, `net`, `type`, `host`, `path`, `tls`, `sni`, `alpn`, `fp`。 |
 | `vless` | `uuid`, `server`, `port`, `encryption=none` | `vless://uuid@host:port?...#name` | `flow`, `security=tls/reality`, `sni`, `fp`, `pbk`, `sid`, `type`, `path`, `host` are query params. |
 | `trojan` | `password`, `server`, `port` | `trojan://password@host:port?...#name` | TLS fields are query params; websocket uses `type=ws`, `path`, `host`。 |
-| `hysteria2` | `password`, `server`, `port` | `hysteria2://password@host:port?...#name` | URI field names vary across clients; document supported params in tests. |
+| `hysteria2` | future | `hysteria2://password@host:port?...#name` | Not implemented for `xray-uri` phase one; URI field names vary across clients. |
 
 Shared URI rules:
 
@@ -248,7 +270,7 @@ final_outbound = "selector" # future if selector/routing is implemented
 
 Do not invent local `inbounds`, DNS, routing, sniffing, or balancer behavior without config.
 
-## sing-box Subscription
+## Future sing-box Subscription
 
 ### What To Output
 
@@ -407,63 +429,49 @@ Use `mode = "outbounds"` first. Full config generation needs explicit decisions 
 
 Surfboard follows Surge profile format. A complete profile commonly uses `[General]`, `[Proxy]`, `[Proxy Group]`, `[Rule]`, and optional sections such as `[Host]` or `[Panel]`.
 
-### Recommended Output Modes
+### Implemented Output Mode
 
 ```toml
+[server]
+public_base_url = "https://mpm.example.com"
+
 [routes.phone.output]
 format = "surfboard"
-mode = "proxy-section" # proxy-section | full-profile
+# mode omitted/default is treated as full-profile; mode = "full-profile" is equivalent
 ```
 
-`proxy-section` should emit only node lines plus the `[Proxy]` header. `full-profile` may add a minimal group and `FINAL` rule, but should not generate DNS or MITM sections by default.
+`public_base_url` is required. The effective mode is full-profile only. The main route returns a minimal Surfboard profile; `<route.path>-nodes` returns proxy lines without `[Proxy]` for `policy-path` use.
 
-### Node Snippet
+### Nodes Companion
 
 ```ini
-[Proxy]
 SS 01 = ss, example.com, 443, encrypt-method=chacha20-ietf-poly1305, password=password, udp-relay=true
 VMess 01 = vmess, example.com, 443, username=00000000-0000-0000-0000-000000000000, ws=true, tls=true, ws-path=/ws, ws-headers=Host:example.com, sni=example.com, vmess-aead=true
 Trojan 01 = trojan, example.com, 443, password=password, udp-relay=true, skip-cert-verify=false, sni=example.com
-HY2 01 = hysteria2, example.com, 443, password=password, download-bandwidth=100, port-hopping="1234;5000-6000", port-hopping-interval=30, skip-cert-verify=false, sni=example.com, udp-relay=true
 ```
 
-### Minimal Full Profile
+### Main Route Full Profile
 
 ```ini
 [General]
-proxy-test-url = http://www.gstatic.com/generate_204
-test-timeout = 5
 
 [Proxy]
 SS 01 = ss, example.com, 443, encrypt-method=chacha20-ietf-poly1305, password=password, udp-relay=true
-VMess 01 = vmess, example.com, 443, username=00000000-0000-0000-0000-000000000000, ws=true, tls=true, ws-path=/ws, ws-headers=Host:example.com, sni=example.com
+VMess 01 = vmess, example.com, 443, username=00000000-0000-0000-0000-000000000000, ws=true, tls=true, ws-path=/ws, ws-headers=Host:example.com, sni=example.com, vmess-aead=true
 Trojan 01 = trojan, example.com, 443, password=password, skip-cert-verify=false, sni=example.com
 
 [Proxy Group]
-Auto = url-test, SS 01, VMess 01, Trojan 01, url=http://www.gstatic.com/generate_204, interval=600, tolerance=100, timeout=5
+Main = select, Auto, Proxy, DIRECT
+Auto = url-test, SS 01, VMess 01, Trojan 01, policy-path=https://mpm.example.com/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml-nodes, policy-regex-filter=.*, url=http://www.gstatic.com/generate_204, interval=600, tolerance=100, timeout=5
+Proxy = select, SS 01, VMess 01, Trojan 01, policy-path=https://mpm.example.com/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml-nodes, policy-regex-filter=.*
 
 [Rule]
-FINAL,Auto
+FINAL,Main
 ```
 
-### Remote Provider Style
+The main group is always `Main = select, Auto, Proxy, DIRECT`; the rule tail is `FINAL,Main`. The nodes companion uses the same route access policy as the main route.
 
-Surfboard can reference an external policy list from a group:
-
-```ini
-[Proxy Group]
-Remote = select, policy-path=https://mpm.example.com/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.surfboard, policy-regex-filter=.*
-```
-
-For this use case, the route payload should be Surfboard-compatible proxy lines, not Mihomo YAML. Keep wrapper profile and node-list payload separate:
-
-```toml
-[routes.phone.output]
-format = "surfboard"
-mode = "proxy-list" # no [Proxy] header, for policy-path if validated
-```
-
-Only enable `proxy-list` after testing import behavior in Surfboard, because client versions may differ on whether remote policy files expect section headers.
+Phase-one supported protocols are `ss`, `vmess`, and `trojan`. `vless`, `hysteria2`, and other unsupported protocols are skipped with route render warnings; if every node is skipped, the route returns HTTP 422 with `no supported nodes for surfboard output`.
 
 ### Field Mapping Notes
 
@@ -471,13 +479,13 @@ Only enable `proxy-list` after testing import behavior in Surfboard, because cli
 | --- | --- | --- |
 | `name` | left side before `=` | Escape commas and line breaks; avoid duplicate names. |
 | `ss.cipher` | `encrypt-method=` | Shadowsocks only. |
-| `uuid` | `username=` | VMess. VLESS support is not documented in the fetched Surfboard overview; do not claim until validated. |
-| `password` | `password=` | SS/Trojan/HY2. |
+| `uuid` | `username=` | VMess. VLESS is skipped in phase one. |
+| `password` | `password=` | SS/Trojan. |
 | `network = ws` | `ws=true`, `ws-path=`, `ws-headers=` | `ws-headers` uses `Header:value` pairs; multiple headers use `|` in examples. |
 | TLS enabled | `tls=true` or protocol-specific TLS defaults | VMess uses `tls=true`; Trojan is TLS-based. |
 | `sni` | `sni=` | Preserve if present. |
 | `skip-cert-verify` | `skip-cert-verify=` | Boolean lower-case. |
-| Hysteria2 bandwidth | `download-bandwidth=` and likely upload field if supported | Validate exact upload key before outputting. |
+| Hysteria2 bandwidth | future | Hysteria2 is skipped in phase one; validate exact keys before outputting. |
 
 ## Quantumult X Profile
 
@@ -489,15 +497,30 @@ Quantumult X uses sections:
 - `[filter_remote]` and `[filter_local]` for rules.
 - `[rewrite_*]`, `[task_local]`, `[mitm]` for features outside route node output scope.
 
-### Recommended Output Modes
+### Implemented Output Mode
+
+```toml
+[server]
+public_base_url = "https://mpm.example.com"
+
+[routes.phone.output]
+format = "quantumult-x"
+# mode omitted/default is treated as server-remote; mode = "server-remote" is equivalent
+```
+
+The effective mode is server-remote. The main route returns server lines only, without a `[server_local]` header. When `import_link = true` (default), `<route.path>-import` returns a one-click import target for adding the main route as a `server_remote` resource. `public_base_url` is required when `import_link = true`.
+
+Import response defaults to redirect:
 
 ```toml
 [routes.phone.output]
 format = "quantumult-x"
-mode = "server-local" # server-local | server-lines
+import_response = "redirect"      # redirect | plain
+import_target = "app-scheme"      # app-scheme | universal-link
+resource_tag = "MPM"
 ```
 
-`server-local` emits `[server_local]` and node lines. `server-lines` emits only node lines for remote snippet usage after import validation.
+Default redirect target starts with `quantumult-x:///add-resource?...`. `import_response = "plain"` returns the target as text instead of HTTP 302. `import_target = "universal-link"` uses `https://quantumult.app/x/open-app/add-resource?...`.
 
 ### Remote Subscription Reference
 
@@ -512,19 +535,20 @@ static = MPM, resource-tag-regex=^MPM, server-tag-regex=.*, img-url=https://exam
 available = MPM-Auto, resource-tag-regex=^MPM, server-tag-regex=.*, check-interval=600
 ```
 
-The route itself should return server definitions, not the wrapper above, unless `mode = "full-profile"` is added later.
+The route itself returns server definitions, not the wrapper above.
 
-### Inline Node Snippet
+### Main Route Server Lines
 
 ```ini
-[server_local]
 shadowsocks=example.com:443, method=chacha20-ietf-poly1305, password=password, udp-relay=true, tag=SS 01
 vmess=example.com:443, method=none, password=00000000-0000-0000-0000-000000000000, obfs=wss, obfs-host=example.com, obfs-uri=/ws, udp-relay=true, tag=VMess 01
 vless=example.com:443, method=none, password=00000000-0000-0000-0000-000000000000, obfs=wss, obfs-host=example.com, obfs-uri=/ws, udp-relay=true, tag=VLESS 01
 trojan=example.com:443, password=password, over-tls=true, tls-host=example.com, tls-verification=true, udp-relay=true, tag=Trojan 01
 ```
 
-Reality and Vision examples from the sample config use QX-specific params:
+Unsupported security-critical fields and unsupported Shadowsocks plugin/obfs fields are skipped with route render warnings; if every node is skipped, the route returns HTTP 422 with `no supported nodes for quantumult-x output`.
+
+Future Reality and Vision mapping should use QX-specific params like these after source-field support is validated:
 
 ```ini
 vless=example.com:443, method=none, password=00000000-0000-0000-0000-000000000000, obfs=over-tls, obfs-host=apple.com, reality-base64-pubkey=base64pubkey, reality-hex-shortid=0123456789abcdef, vless-flow=xtls-rprx-vision, tag=VLESS Reality
@@ -544,12 +568,12 @@ vless=example.com:443, method=none, password=00000000-0000-0000-0000-00000000000
 | WebSocket TLS | `obfs=wss`, `obfs-host=`, `obfs-uri=` | `obfs-host` is also TLS host for `wss`. |
 | WebSocket cleartext | `obfs=ws`, `obfs-host=`, `obfs-uri=` | No `over-tls`. |
 | `skip-cert-verify` | `tls-verification=false` | Inverted boolean. |
-| Reality | `reality-base64-pubkey`, `reality-hex-shortid` | Add only when source has exact fields. |
-| VLESS flow | `vless-flow=` | Example: `xtls-rprx-vision`. |
+| Reality | `reality-base64-pubkey`, `reality-hex-shortid` | Future; add only when source has exact fields. |
+| VLESS flow | `vless-flow=` | Future; example: `xtls-rprx-vision`. |
 
 Do not include `[filter_local]`, `[rewrite_local]`, scripts, or MITM in route output. Those are user policy, not node serialization.
 
-## Loon Profile
+## Future Loon Profile
 
 Loon supports inline proxy nodes under `[Proxy]`. The documented examples cover HTTP, HTTPS, Shadowsocks, ShadowsocksR, VMess, and Trojan. Loon UI also distinguishes subscription nodes when adding nodes to a policy group, so remote subscription behavior should be tested separately from inline `[Proxy]` serialization.
 
@@ -638,14 +662,13 @@ Recommended behavior:
 
 ## Recommended Config Shape
 
-Recommended output enum expansion:
+Current and future output enum shape:
 
 ```toml
 [routes.phone.output]
-format = "provider"     # provider | xray-uri | xray-json | sing-box | surfboard | quantumult-x | loon
-mode = "default"        # target-specific; optional
-encoding = "plain"      # xray-uri: plain | base64
-include_wrapper = false # profile targets only, if implemented
+format = "provider" # implemented: provider | xray-uri | surfboard | quantumult-x
+mode = "default"    # surfboard also accepts full-profile; quantumult-x also accepts server-remote
+encoding = "base64" # xray-uri: base64 | plain
 ```
 
 Target-specific modes:
@@ -653,22 +676,22 @@ Target-specific modes:
 | Format | MVP mode | Later modes |
 | --- | --- | --- |
 | `provider` | existing YAML provider | `uri`, `base64-uri`, or alias `clash-provider` |
-| `xray-uri` | `plain` URI lines | base64 wrapper |
-| `xray-json` | `outbounds` | `full-config` |
-| `sing-box` | `outbounds` | `full-config`, `selector`, `urltest` |
-| `surfboard` | `proxy-section` | `proxy-lines`, `full-profile` |
-| `quantumult-x` | `server-local` | `server-lines`, `full-profile` |
-| `loon` | `proxy-section` | `proxy-lines`, `full-profile` |
+| `xray-uri` | default base64 URI subscription | plain URI lines |
+| `xray-json` | future `outbounds` | future `full-config` |
+| `sing-box` | future `outbounds` | future `full-config`, `selector`, `urltest` |
+| `surfboard` | full profile | future additional modes if needed |
+| `quantumult-x` | server-remote lines plus import companion | future full-profile if needed |
+| `loon` | future `proxy-section` | future `proxy-lines`, `full-profile` |
 
 Renderer split:
 
 - `provider`: existing `proxies:` YAML renderer.
 - `xray-uri`: URI line renderer.
-- `xray-json`: JSON outbounds/full config renderer.
-- `sing-box`: JSON outbounds/full config renderer.
+- `xray-json`: future JSON outbounds/full config renderer.
+- `sing-box`: future JSON outbounds/full config renderer.
 - `surfboard`: INI-style profile/snippet renderer.
 - `quantumult-x`: INI-style server snippet renderer.
-- `loon`: INI-style proxy snippet renderer.
+- `loon`: future INI-style proxy snippet renderer.
 
 ## Cross-Target Field Map
 

@@ -13,11 +13,19 @@ from mihomo_proxy_manager.models import (
     RouteOutputConfig,
 )
 from mihomo_proxy_manager.render import ProviderRenderer
+from mihomo_proxy_manager.render import (
+    RenderRequest,
+    build_renderer_registry,
+    prepare_render_records,
+)
 
 REALITY_PUBLIC_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 
 
-def route(include_meta_comments: bool = False) -> RouteConfig:
+def route(
+    include_meta_comments: bool = False,
+    output: RouteOutputConfig | None = None,
+) -> RouteConfig:
     """创建测试用路由配置。
 
     Create a route config for testing.
@@ -33,7 +41,10 @@ def route(include_meta_comments: bool = False) -> RouteConfig:
         path="/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml",
         sources=("airport_a",),
         require_all_sources=False,
-        output=RouteOutputConfig("provider", include_meta_comments),
+        output=output
+        or RouteOutputConfig(
+            format="provider", include_meta_comments=include_meta_comments
+        ),
         rename=RenameConfig(prefix="[phone] "),
         filter=FilterConfig(),
     )
@@ -202,3 +213,39 @@ def test_provider_renderer_normalizes_and_drops_invalid_records() -> None:
     assert proxy["tls"] is True
     text = body.decode("utf-8")
     assert 'short-id: "0b7caf92d4"' in text
+
+
+def test_provider_route_renderer_matches_provider_renderer_bytes() -> None:
+    """测试渲染器注册表的 provider 适配器保持现有字节输出 / Test provider adapter keeps existing bytes."""
+    test_route = route()
+    records = [ProxyRecord("airport_a", {"name": "HK", "type": "direct"})]
+
+    registry = build_renderer_registry()
+    response = registry["provider"].render(RenderRequest(test_route, records))
+
+    assert "provider" in registry
+    assert response.body == ProviderRenderer().render_sync(test_route, records)
+    assert response.media_type == "text/yaml; charset=utf-8"
+    assert response.headers == {}
+
+
+def test_prepare_render_records_preserves_filtering_and_renaming() -> None:
+    """测试共享准备流程保留过滤、重命名、标准化与去重 / Test shared preparation keeps filter, rename, normalize, and dedupe."""
+    test_route = RouteConfig(
+        name="phone",
+        path="/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml",
+        sources=("airport_a",),
+        require_all_sources=False,
+        output=RouteOutputConfig(format="provider"),
+        rename=RenameConfig(prefix="[phone] "),
+        filter=FilterConfig(include="HK"),
+    )
+    records = [
+        ProxyRecord("airport_a", {"name": "HK", "type": "direct"}),
+        ProxyRecord("airport_a", {"name": "HK", "type": "direct"}),
+        ProxyRecord("airport_a", {"name": "TW", "type": "direct"}),
+    ]
+
+    proxies = prepare_render_records(test_route, records)
+
+    assert [proxy["name"] for proxy in proxies] == ["[phone] HK", "[phone] HK #2"]

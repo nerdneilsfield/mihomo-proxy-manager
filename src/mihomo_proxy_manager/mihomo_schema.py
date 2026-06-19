@@ -7,8 +7,12 @@ Schema source: MetaCubeX/mihomo ``Meta`` branch, tag ``v1.19.27``
 
 from __future__ import annotations
 
+import base64
+import binascii
+import ipaddress
 import re
-from typing import Any, Literal
+import uuid
+from typing import Any, Literal, cast
 
 FieldKind = Literal[
     "string",
@@ -652,6 +656,75 @@ REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
 }
 
 _HEX_RE = re.compile(r"^[0-9a-fA-F]*$")
+_RATE_RE = re.compile(r"^(\d+)\s*([KMGT]?)([Bb])ps$")
+_PATH_ROOT_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+_PEM_RE = re.compile(
+    r"-----BEGIN [^-]+-----\s+([A-Za-z0-9+/=\s]+)-----END [^-]+-----",
+    re.DOTALL,
+)
+
+SS_CIPHERS = {
+    "none",
+    "aes-128-gcm",
+    "aes-192-gcm",
+    "aes-256-gcm",
+    "chacha20-ietf-poly1305",
+    "xchacha20-ietf-poly1305",
+    "2022-blake3-aes-128-gcm",
+    "2022-blake3-aes-256-gcm",
+    "2022-blake3-chacha20-poly1305",
+}
+SSR_STREAM_CIPHERS = {
+    "none",
+    "dummy",
+    "rc4-md5",
+    "aes-128-cfb",
+    "aes-192-cfb",
+    "aes-256-cfb",
+    "aes-128-ctr",
+    "aes-192-ctr",
+    "aes-256-ctr",
+    "chacha20",
+    "chacha20-ietf",
+    "xchacha20",
+}
+SSR_OBFS = {"plain", "tls1.2_ticket_auth", "tls1.2_ticket_fastauth"}
+SSR_PROTOCOLS = {"origin", "auth_sha1_v4", "auth_aes128_md5", "auth_aes128_sha1", "auth_chain_a", "auth_chain_b"}
+VMESS_CIPHERS = {"auto", "aes-128-gcm", "chacha20-poly1305", "none"}
+TROJAN_SS_CIPHERS = {"aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305"}
+SUDOKU_TABLE_TYPES = {
+    "",
+    "prefer_ascii",
+    "prefer_entropy",
+    "up_ascii_down_entropy",
+    "up_entropy_down_ascii",
+}
+OPENVPN_CIPHERS = {
+    "",
+    "AES-128-GCM",
+    "AES-192-GCM",
+    "AES-256-GCM",
+    "AES-CBC",
+    "AES-128-CBC",
+    "AES-192-CBC",
+    "AES-256-CBC",
+    "CHACHA20-POLY1305",
+}
+OPENVPN_AUTHS = {"", "MD5", "SHA1", "SHA-1", "SHA256", "SHA384", "SHA512"}
+MIERU_MULTIPLEXING = {
+    "",
+    "MULTIPLEXING_DEFAULT",
+    "MULTIPLEXING_OFF",
+    "MULTIPLEXING_LOW",
+    "MULTIPLEXING_MIDDLE",
+    "MULTIPLEXING_HIGH",
+}
+MIERU_HANDSHAKE_MODES = {
+    "",
+    "HANDSHAKE_STANDARD",
+    "HANDSHAKE_NO_WAIT",
+    "HANDSHAKE_RANDOM_PADDING",
+}
 
 
 def normalize_proxy(proxy: dict[str, Any]) -> tuple[dict[str, Any] | None, list[str]]:
@@ -686,7 +759,7 @@ def normalize_proxy(proxy: dict[str, Any]) -> tuple[dict[str, Any] | None, list[
                 f"proxy {proxy.get('name', '<unnamed>')!r} missing required field {field!r}"
             )
 
-    _validate_reality_options(normalized, warnings)
+    _validate_known_content(normalized, warnings)
     return (None, warnings) if warnings else (normalized, [])
 
 
@@ -810,17 +883,497 @@ def _to_bool(value: Any) -> bool | None:
     return None
 
 
-def _validate_reality_options(proxy: dict[str, Any], warnings: list[str]) -> None:
-    opts = proxy.get("reality-opts")
-    if not isinstance(opts, dict) or not opts.get("public-key"):
+def _warn(proxy: dict[str, Any], warnings: list[str], message: str) -> None:
+    warnings.append(f"proxy {proxy.get('name', '<unnamed>')!r} {message}")
+
+
+def _validate_known_content(proxy: dict[str, Any], warnings: list[str]) -> None:
+    proxy_type = str(proxy.get("type", "")).lower()
+    _validate_nested_crypto_options(proxy, warnings)
+    _validate_common_proxy_values(proxy, warnings)
+    if proxy_type == "ss":
+        _validate_ss(proxy, warnings)
+    elif proxy_type == "ssr":
+        _validate_ssr(proxy, warnings)
+    elif proxy_type == "vmess":
+        _validate_vmess(proxy, warnings)
+    elif proxy_type == "vless":
+        _validate_vless(proxy, warnings)
+    elif proxy_type == "snell":
+        _validate_snell(proxy, warnings)
+    elif proxy_type == "trojan":
+        _validate_trojan(proxy, warnings)
+    elif proxy_type == "hysteria":
+        _validate_hysteria(proxy, warnings)
+    elif proxy_type == "hysteria2":
+        _validate_hysteria2(proxy, warnings)
+    elif proxy_type == "wireguard":
+        _validate_wireguard(proxy, warnings)
+    elif proxy_type == "tuic":
+        _validate_uot_version(proxy, warnings, "udp-over-stream-version")
+    elif proxy_type == "gost-relay":
+        if not proxy.get("server") or not _valid_port(proxy.get("port")):
+            _warn(proxy, warnings, "requires a valid server and port")
+    elif proxy_type == "ssh":
+        _validate_ssh(proxy, warnings)
+    elif proxy_type == "mieru":
+        _validate_mieru(proxy, warnings)
+    elif proxy_type == "sudoku":
+        _validate_sudoku(proxy, warnings)
+    elif proxy_type == "masque":
+        _validate_masque(proxy, warnings)
+    elif proxy_type == "openvpn":
+        _validate_openvpn(proxy, warnings)
+
+
+def _validate_common_proxy_values(proxy: dict[str, Any], warnings: list[str]) -> None:
+    for field in ("server", "name", "password", "key", "username"):
+        if field in REQUIRED_FIELDS.get(str(proxy.get("type", "")).lower(), ()) and proxy.get(field) == "":
+            _warn(proxy, warnings, f"{field} is empty")
+
+
+def _validate_nested_crypto_options(value: Any, warnings: list[str], proxy: dict[str, Any] | None = None, path: str = "") -> None:
+    if proxy is None and isinstance(value, dict):
+        proxy = value
+    if isinstance(value, dict):
+        for key, item in value.items():
+            child_path = f"{path}.{key}" if path else str(key)
+            if key == "reality-opts" and isinstance(item, dict) and proxy is not None:
+                _validate_reality_options(proxy, item, warnings, child_path)
+            elif key == "ech-opts" and isinstance(item, dict) and proxy is not None:
+                _validate_ech_options(proxy, item, warnings, child_path)
+            else:
+                _validate_nested_crypto_options(item, warnings, proxy, child_path)
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            _validate_nested_crypto_options(item, warnings, proxy, f"{path}[{index}]")
+
+
+def _validate_reality_options(
+    proxy: dict[str, Any], opts: dict[str, Any], warnings: list[str], path: str
+) -> None:
+    public_key = opts.get("public-key", "")
+    if not public_key:
         return
+    decoded = _decode_raw_url_base64(str(public_key))
+    if decoded is None or len(decoded) != 32:
+        _warn(proxy, warnings, f"{path}.public-key invalid REALITY public key")
     short_id = opts.get("short-id", "")
     if not isinstance(short_id, str):
-        warnings.append(
-            f"proxy {proxy.get('name', '<unnamed>')!r} reality-opts.short-id must be string"
-        )
+        _warn(proxy, warnings, f"{path}.short-id must be string")
         return
     if len(short_id) % 2 != 0 or len(short_id) > 16 or not _HEX_RE.fullmatch(short_id):
-        warnings.append(
-            f"proxy {proxy.get('name', '<unnamed>')!r} reality-opts.short-id must be even-length hex up to 16 chars"
-        )
+        _warn(proxy, warnings, f"{path}.short-id must be even-length hex up to 16 chars")
+
+
+def _validate_ech_options(
+    proxy: dict[str, Any], opts: dict[str, Any], warnings: list[str], path: str
+) -> None:
+    if not opts.get("enable") or not opts.get("config"):
+        return
+    if _decode_std_base64(str(opts["config"])) is None:
+        _warn(proxy, warnings, f"{path}.config must be standard base64")
+
+
+def _validate_ss(proxy: dict[str, Any], warnings: list[str]) -> None:
+    cipher = str(proxy.get("cipher", "")).lower()
+    if cipher not in SS_CIPHERS:
+        _warn(proxy, warnings, f"cipher {proxy.get('cipher')!r} not supported")
+    _validate_uot_version(proxy, warnings, "udp-over-tcp-version")
+    plugin = proxy.get("plugin")
+    opts = proxy.get("plugin-opts")
+    if plugin == "obfs":
+        mode = opts.get("mode") if isinstance(opts, dict) else ""
+        if mode not in {"tls", "http"}:
+            _warn(proxy, warnings, f"plugin-opts.mode obfs mode error: {mode}")
+    elif plugin in {"v2ray-plugin", "gost-plugin"}:
+        mode = opts.get("mode") if isinstance(opts, dict) else ""
+        if mode != "websocket":
+            _warn(proxy, warnings, f"plugin-opts.mode obfs mode error: {mode}")
+    elif plugin == "shadow-tls":
+        if not isinstance(opts, dict) or not opts.get("host"):
+            _warn(proxy, warnings, "shadow-tls plugin-opts.host is required")
+    elif plugin == "restls":
+        if not isinstance(opts, dict) or not opts.get("host") or not opts.get("password") or not opts.get("version-hint"):
+            _warn(proxy, warnings, "restls plugin-opts host/password/version-hint are required")
+
+
+def _validate_ssr(proxy: dict[str, Any], warnings: list[str]) -> None:
+    cipher = str(proxy.get("cipher", "")).lower()
+    if cipher not in SSR_STREAM_CIPHERS:
+        _warn(proxy, warnings, f"{cipher} is not none or a supported stream cipher in ssr")
+    if str(proxy.get("obfs", "")).lower() not in SSR_OBFS:
+        _warn(proxy, warnings, f"initialize obfs error: {proxy.get('obfs')}")
+    if str(proxy.get("protocol", "")).lower() not in SSR_PROTOCOLS:
+        _warn(proxy, warnings, f"initialize protocol error: {proxy.get('protocol')}")
+
+
+def _validate_vmess(proxy: dict[str, Any], warnings: list[str]) -> None:
+    if str(proxy.get("cipher", "")).lower() not in VMESS_CIPHERS:
+        _warn(proxy, warnings, f"cipher {proxy.get('cipher')!r} not supported")
+    _validate_uuid(proxy, warnings)
+
+
+def _validate_vless(proxy: dict[str, Any], warnings: list[str]) -> None:
+    _validate_uuid(proxy, warnings)
+    flow = str(proxy.get("flow", ""))
+    if len(flow) >= 16 and flow[:16] != "xtls-rprx-vision":
+        _warn(proxy, warnings, f"unsupported xtls flow type: {flow[:16]}")
+    if not _valid_vless_encryption(str(proxy.get("encryption", ""))):
+        _warn(proxy, warnings, f"invalid vless encryption value: {proxy.get('encryption')}")
+    xhttp = proxy.get("xhttp-opts")
+    if isinstance(xhttp, dict) and xhttp.get("mode") == "stream-one" and xhttp.get("download-settings") is not None:
+        _warn(proxy, warnings, 'xhttp mode "stream-one" cannot be used with download-settings')
+
+
+def _validate_snell(proxy: dict[str, Any], warnings: list[str]) -> None:
+    version = int(proxy.get("version") or 0)
+    if version == 0:
+        version = 4
+    if version == 5:
+        version = 4
+    if version in {1, 2} and proxy.get("udp"):
+        _warn(proxy, warnings, f"snell version {version} not support UDP")
+    elif version not in {1, 2, 3, 4}:
+        _warn(proxy, warnings, f"snell version error: {version}")
+    opts = proxy.get("obfs-opts")
+    if isinstance(opts, dict) and str(opts.get("mode", "")) not in {"", "tls", "http"}:
+        _warn(proxy, warnings, f"snell obfs mode error: {opts.get('mode')}")
+
+
+def _validate_trojan(proxy: dict[str, Any], warnings: list[str]) -> None:
+    opts = proxy.get("ss-opts")
+    if not isinstance(opts, dict) or not opts.get("enabled"):
+        return
+    if opts.get("password", "") == "":
+        _warn(proxy, warnings, "empty password")
+    method = str(opts.get("method") or "AES-128-GCM").lower()
+    if method not in TROJAN_SS_CIPHERS:
+        _warn(proxy, warnings, f"ss-opts.method {opts.get('method')!r} not supported")
+
+
+def _validate_hysteria(proxy: dict[str, Any], warnings: list[str]) -> None:
+    if not _valid_speed(str(proxy.get("up", ""))):
+        _warn(proxy, warnings, f"invalid upload speed: {proxy.get('up')}")
+    if not _valid_speed(str(proxy.get("down", ""))):
+        _warn(proxy, warnings, f"invalid download speed: {proxy.get('down')}")
+    if proxy.get("auth") and _decode_std_base64(str(proxy["auth"])) is None:
+        _warn(proxy, warnings, "auth must be standard base64")
+
+
+def _validate_hysteria2(proxy: dict[str, Any], warnings: list[str]) -> None:
+    obfs = str(proxy.get("obfs", ""))
+    if obfs:
+        if not proxy.get("obfs-password"):
+            _warn(proxy, warnings, "missing obfs password")
+        if obfs not in {"salamander", "gecko"}:
+            _warn(proxy, warnings, f"unknown obfs type: {obfs}")
+    if proxy.get("ports"):
+        if not _valid_unsigned_ranges(str(proxy["ports"]), max_value=65535):
+            _warn(proxy, warnings, "ports must be unsigned port ranges")
+        if proxy.get("hop-interval") and not _valid_unsigned_range(str(proxy["hop-interval"])):
+            _warn(proxy, warnings, "hop-interval must be unsigned range")
+    elif not _valid_port(proxy.get("port")):
+        _warn(proxy, warnings, "invalid port")
+
+
+def _validate_wireguard(proxy: dict[str, Any], warnings: list[str]) -> None:
+    _validate_prefixes(proxy, warnings)
+    _validate_std_base64_field(proxy, warnings, "private-key")
+    if proxy.get("reserved") and len(proxy["reserved"]) != 3:
+        _warn(proxy, warnings, "invalid reserved value, required 3 bytes")
+    peers = proxy.get("peers")
+    if isinstance(peers, list) and peers:
+        for index, peer in enumerate(peers):
+            if not isinstance(peer, dict):
+                continue
+            peer_map = cast(dict[str, Any], peer)
+            if _decode_std_base64(str(peer_map.get("public-key", ""))) is None:
+                _warn(proxy, warnings, f"decode public key for peer {index}")
+            if peer_map.get("pre-shared-key") and _decode_std_base64(str(peer_map["pre-shared-key"])) is None:
+                _warn(proxy, warnings, f"decode pre shared key for peer {index}")
+            if not peer_map.get("allowed-ips"):
+                _warn(proxy, warnings, f"missing allowed-ips for peer {index}")
+            reserved = peer_map.get("reserved")
+            if reserved and hasattr(reserved, "__len__") and len(reserved) != 3:
+                _warn(proxy, warnings, f"invalid reserved value for peer {index}, required 3 bytes")
+    else:
+        _validate_std_base64_field(proxy, warnings, "public-key")
+        if proxy.get("pre-shared-key"):
+            _validate_std_base64_field(proxy, warnings, "pre-shared-key")
+
+
+def _validate_ssh(proxy: dict[str, Any], warnings: list[str]) -> None:
+    private_key = str(proxy.get("private-key", ""))
+    if "PRIVATE KEY" in private_key and not _valid_pem(private_key):
+        _warn(proxy, warnings, "private-key must be valid PEM")
+    for host_key in proxy.get("host-key", []) or []:
+        if not _valid_authorized_key(str(host_key)):
+            _warn(proxy, warnings, "host-key must be authorized-key text")
+
+
+def _validate_mieru(proxy: dict[str, Any], warnings: list[str]) -> None:
+    port = int(proxy.get("port") or 0)
+    port_range = str(proxy.get("port-range") or "")
+    if port == 0 and port_range == "":
+        _warn(proxy, warnings, "either port or port-range must be set")
+    if port != 0 and port_range != "":
+        _warn(proxy, warnings, "port and port-range cannot be set at the same time")
+    if port != 0 and not _valid_port(port):
+        _warn(proxy, warnings, "port must be between 1 and 65535")
+    if port_range:
+        parsed = _parse_mieru_port_range(port_range)
+        if parsed is None:
+            _warn(proxy, warnings, "invalid port-range format")
+        else:
+            begin, end = parsed
+            if begin < 1 or begin > 65535:
+                _warn(proxy, warnings, "begin port must be between 1 and 65535")
+            if end < 1 or end > 65535:
+                _warn(proxy, warnings, "end port must be between 1 and 65535")
+            if begin > end:
+                _warn(proxy, warnings, "begin port must be less than or equal to end port")
+    if proxy.get("transport") not in {"TCP", "UDP"}:
+        _warn(proxy, warnings, "transport must be TCP or UDP")
+    if str(proxy.get("multiplexing", "")) not in MIERU_MULTIPLEXING:
+        _warn(proxy, warnings, f"invalid multiplexing level: {proxy.get('multiplexing')}")
+    if str(proxy.get("handshake-mode", "")) not in MIERU_HANDSHAKE_MODES:
+        _warn(proxy, warnings, f"invalid handshake mode: {proxy.get('handshake-mode')}")
+
+
+def _validate_sudoku(proxy: dict[str, Any], warnings: list[str]) -> None:
+    if not proxy.get("server"):
+        _warn(proxy, warnings, "server is required")
+    if not _valid_port(proxy.get("port")):
+        _warn(proxy, warnings, f"invalid port: {proxy.get('port')}")
+    if not proxy.get("key"):
+        _warn(proxy, warnings, "key is required")
+    aead = str(proxy.get("aead-method") or "chacha20-poly1305")
+    if aead not in {"aes-128-gcm", "chacha20-poly1305", "none"}:
+        _warn(proxy, warnings, f"invalid aead-method: {aead}")
+    padding_min = int(proxy.get("padding-min", 10))
+    padding_max = int(proxy.get("padding-max", 30))
+    if "padding-min" not in proxy and "padding-max" in proxy and padding_max < padding_min:
+        padding_min = padding_max
+    if "padding-max" not in proxy and "padding-min" in proxy and padding_max < padding_min:
+        padding_max = padding_min
+    if padding_min < 0 or padding_min > 100:
+        _warn(proxy, warnings, f"padding-min must be between 0 and 100, got {padding_min}")
+    if padding_max < 0 or padding_max > 100:
+        _warn(proxy, warnings, f"padding-max must be between 0 and 100, got {padding_max}")
+    if padding_max < padding_min:
+        _warn(proxy, warnings, f"padding-max ({padding_max}) must be >= padding-min ({padding_min})")
+    if str(proxy.get("table-type", "")) not in SUDOKU_TABLE_TYPES:
+        _warn(proxy, warnings, "table-type must be prefer_ascii, prefer_entropy, up_ascii_down_entropy, or up_entropy_down_ascii")
+    mode = str(proxy.get("http-mask-mode", ""))
+    multiplex = str(proxy.get("http-mask-multiplex", ""))
+    path_root = str(proxy.get("path-root", ""))
+    hm = proxy.get("httpmask")
+    if isinstance(hm, dict):
+        mode = str(hm.get("mode") or mode)
+        multiplex = str(hm.get("multiplex") or multiplex)
+        path_root = str(hm.get("path-root") or path_root)
+    if mode.strip().lower() not in {"", "legacy", "stream", "poll", "auto", "ws"}:
+        _warn(proxy, warnings, f"invalid http-mask-mode: {mode}")
+    path_root = path_root.strip().strip("/")
+    if path_root and ("/" in path_root or not _PATH_ROOT_RE.fullmatch(path_root)):
+        _warn(proxy, warnings, "invalid http-mask-path-root")
+    if multiplex.strip().lower() not in {"", "off", "auto", "on"}:
+        _warn(proxy, warnings, f"invalid http-mask-multiplex: {multiplex}")
+    for field in ("custom-table",):
+        if proxy.get(field) and not _valid_sudoku_table(str(proxy[field])):
+            _warn(proxy, warnings, "custom table must contain exactly 2 x, 2 p, 4 v")
+    for table in proxy.get("custom-tables", []) or []:
+        if not _valid_sudoku_table(str(table)):
+            _warn(proxy, warnings, "custom table must contain exactly 2 x, 2 p, 4 v")
+
+
+def _validate_masque(proxy: dict[str, Any], warnings: list[str]) -> None:
+    _validate_prefixes(proxy, warnings)
+    if _decode_std_base64(str(proxy.get("private-key", ""))) is None:
+        _warn(proxy, warnings, "failed to decode private key")
+    if _decode_std_base64(str(proxy.get("public-key", ""))) is None:
+        _warn(proxy, warnings, "failed to decode public key")
+
+
+def _validate_openvpn(proxy: dict[str, Any], warnings: list[str]) -> None:
+    proto = _normalize_openvpn_proto(str(proxy.get("proto", "")))
+    if proto not in {"udp", "tcp"}:
+        _warn(proxy, warnings, f"unsupported openvpn proto {proto!r}")
+    dev = str(proxy.get("dev") or "tun").strip().lower()
+    if dev != "tun":
+        _warn(proxy, warnings, f"unsupported openvpn dev {dev!r}")
+    cipher = str(proxy.get("cipher") or "").strip().upper()
+    if cipher not in OPENVPN_CIPHERS:
+        _warn(proxy, warnings, f"unsupported openvpn cipher {cipher!r}")
+    auth = str(proxy.get("auth") or "").strip().upper()
+    if auth not in OPENVPN_AUTHS:
+        _warn(proxy, warnings, f"unsupported openvpn auth {auth!r}")
+    ca = str(proxy.get("ca", ""))
+    if not _valid_pem(ca):
+        _warn(proxy, warnings, "inline <ca> block is not PEM")
+    cert = str(proxy.get("cert") or "")
+    key = str(proxy.get("key") or "")
+    if cert.strip() or key.strip():
+        if not cert.strip() or not key.strip():
+            _warn(proxy, warnings, "openvpn cert and key must both be set when using client certificate auth")
+        elif not _valid_pem(cert) or not _valid_pem(key):
+            _warn(proxy, warnings, "inline <cert>/<key> block is not PEM")
+    elif not str(proxy.get("username") or "").strip():
+        _warn(proxy, warnings, "openvpn requires either cert+key or username")
+    if int(proxy.get("ping") or 0) < 0:
+        _warn(proxy, warnings, "openvpn ping interval must be positive")
+    if int(proxy.get("ping-restart") or 0) < 0:
+        _warn(proxy, warnings, "openvpn ping restart must be positive")
+
+
+def _validate_uuid(proxy: dict[str, Any], warnings: list[str]) -> None:
+    try:
+        uuid.UUID(str(proxy.get("uuid", "")))
+    except ValueError:
+        _warn(proxy, warnings, "uuid must be valid UUID")
+
+
+def _validate_uot_version(proxy: dict[str, Any], warnings: list[str], field: str) -> None:
+    version = int(proxy.get(field) or 0)
+    if version not in {0, 1, 2}:
+        _warn(proxy, warnings, f"unknown {field}: {version}")
+
+
+def _valid_port(value: Any) -> bool:
+    return isinstance(value, int) and 1 <= value <= 65535
+
+
+def _valid_speed(value: str) -> bool:
+    if value == "":
+        return False
+    if value.isdecimal():
+        return int(value) > 0
+    match = _RATE_RE.fullmatch(value)
+    return bool(match and int(match.group(1)) > 0)
+
+
+def _valid_vless_encryption(value: str) -> bool:
+    if value in {"", "none"}:
+        return True
+    parts = value.split(".")
+    if len(parts) < 4 or parts[0] != "mlkem768x25519plus":
+        return False
+    if parts[1] not in {"native", "xorpub", "random"}:
+        return False
+    if parts[2] not in {"1rtt", "0rtt"}:
+        return False
+    found_key = False
+    for part in parts[3:]:
+        if len(part) < 20:
+            continue
+        decoded = _decode_raw_url_base64(part)
+        if decoded is None or len(decoded) not in {32, 1216}:
+            return False
+        found_key = True
+    return found_key
+
+
+def _decode_std_base64(value: str) -> bytes | None:
+    try:
+        return base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+
+
+def _decode_raw_url_base64(value: str) -> bytes | None:
+    if "=" in value:
+        return None
+    try:
+        padded = value + "=" * (-len(value) % 4)
+        return base64.b64decode(padded, altchars=b"-_", validate=True)
+    except (binascii.Error, ValueError):
+        return None
+
+
+def _validate_std_base64_field(proxy: dict[str, Any], warnings: list[str], field: str) -> None:
+    if _decode_std_base64(str(proxy.get(field, ""))) is None:
+        _warn(proxy, warnings, f"decode {field}")
+
+
+def _validate_prefixes(proxy: dict[str, Any], warnings: list[str]) -> None:
+    found = False
+    for field, suffix in (("ip", "/32"), ("ipv6", "/128")):
+        value = str(proxy.get(field) or "")
+        if not value:
+            continue
+        found = True
+        if "/" not in value:
+            value += suffix
+        try:
+            ipaddress.ip_network(value, strict=False)
+        except ValueError:
+            _warn(proxy, warnings, f"{field} address parse error")
+    if not found:
+        _warn(proxy, warnings, "missing local address")
+
+
+def _valid_unsigned_range(value: str) -> bool:
+    return _parse_unsigned_range(value) is not None
+
+
+def _valid_unsigned_ranges(value: str, *, max_value: int) -> bool:
+    text = value.strip()
+    if text in {"", "*"}:
+        return True
+    parts = text.replace(",", "/").split("/")
+    if len(parts) > 28:
+        return False
+    for part in parts:
+        if part == "":
+            continue
+        parsed = _parse_unsigned_range(part)
+        if parsed is None:
+            return False
+        start, end = parsed
+        if start > max_value or end > max_value:
+            return False
+    return True
+
+
+def _parse_unsigned_range(value: str) -> tuple[int, int] | None:
+    parts = [part.strip().strip("[] ") for part in value.strip().split("-")]
+    if len(parts) not in {1, 2} or any(not part.isdecimal() for part in parts):
+        return None
+    start = int(parts[0])
+    end = int(parts[-1])
+    return (min(start, end), max(start, end))
+
+
+def _parse_mieru_port_range(value: str) -> tuple[int, int] | None:
+    parts = value.split("-")
+    if len(parts) != 2 or any(not part.strip().isdecimal() for part in parts):
+        return None
+    return int(parts[0]), int(parts[1])
+
+
+def _valid_pem(value: str) -> bool:
+    match = _PEM_RE.search(value)
+    if not match:
+        return False
+    body = "".join(match.group(1).split())
+    return _decode_std_base64(body) is not None
+
+
+def _valid_authorized_key(value: str) -> bool:
+    parts = value.split()
+    return len(parts) >= 2 and parts[0].startswith("ssh-") and _decode_std_base64(parts[1]) is not None
+
+
+def _valid_sudoku_table(value: str) -> bool:
+    cleaned = "".join(ch for ch in value.lower() if not ch.isspace())
+    return len(cleaned) == 8 and cleaned.count("x") == 2 and cleaned.count("p") == 2 and cleaned.count("v") == 4 and set(cleaned) <= {"x", "p", "v"}
+
+
+def _normalize_openvpn_proto(value: str) -> str:
+    text = value.strip().lower()
+    if text in {"", "udp", "udp4"}:
+        return "udp"
+    if text in {"tcp", "tcp-client", "tcp4", "tcp4-client"}:
+        return "tcp"
+    return text

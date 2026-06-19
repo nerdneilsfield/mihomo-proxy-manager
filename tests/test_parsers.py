@@ -21,6 +21,19 @@ from mihomo_proxy_manager.mihomo_schema import (
     SchemaValue,
 )
 
+REALITY_PUBLIC_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+WG_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+MASQUE_PRIVATE_KEY = (
+    "MHcCAQEEIGSrunTUzTMIVBzvWmVehBzEqd/Cq6dDZwl0doJqqQyDoAoGCCqGSM49AwEHoUQDQgAE"
+    "9B4aqblSflZ1qf76aV3Za+YcrhFjyJ5Y8ljgCTFUrlZSwO33ezO1iMm22v/o2Vu20NtIjG38H08"
+    "4kWemZv7oHg=="
+)
+MASQUE_PUBLIC_KEY = (
+    "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE9B4aqblSflZ1qf76aV3Za+YcrhFjyJ5Y8ljgCTF"
+    "UrlZSwO33ezO1iMm22v/o2Vu20NtIjG38H084kWemZv7oHg=="
+)
+TEST_PEM = "-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----\n"
+
 
 def test_parse_yaml_provider_payload() -> None:
     """测试解析 YAML 提供者格式的订阅内容。
@@ -135,7 +148,7 @@ def test_validate_required_fields_complete_proxy_has_no_warnings(
         "port": 443,
     }
     if proxy_type in {"ss"}:
-        proxy["cipher"] = "aes"
+        proxy["cipher"] = "chacha20-ietf-poly1305"
         proxy["password"] = "p"
     if proxy_type == "vless":
         proxy["uuid"] = "00000000-0000-0000-0000-000000000000"
@@ -216,7 +229,8 @@ def test_vless_share_link_maps_reality_and_transport_options() -> None:
     body = (
         b"vless://00000000-0000-0000-0000-000000000000@example.com:443"
         b"?encryption=none&security=reality&type=tcp&sni=example.com"
-        b"&flow=xtls-rprx-vision&pbk=pubkey&sid=abcd&fp=chrome#VL%2001\n"
+        b"&flow=xtls-rprx-vision&pbk=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        b"&sid=abcd&fp=chrome#VL%2001\n"
     )
     result = parse_subscription(
         body, source="airport_a", fmt="share-links", parse_error="fail"
@@ -225,7 +239,10 @@ def test_vless_share_link_maps_reality_and_transport_options() -> None:
     proxy = result.records[0].data
     assert proxy["network"] == "tcp"
     assert proxy["tls"] is True
-    assert proxy["reality-opts"] == {"public-key": "pubkey", "short-id": "abcd"}
+    assert proxy["reality-opts"] == {
+        "public-key": REALITY_PUBLIC_KEY,
+        "short-id": "abcd",
+    }
     assert proxy["client-fingerprint"] == "chrome"
     assert proxy["flow"] == "xtls-rprx-vision"
 
@@ -544,6 +561,133 @@ def _schema_value(kind: SchemaValue) -> Any:
     raise AssertionError(f"unhandled schema kind {kind!r}")
 
 
+def _repair_crypto_constraints(value: Any) -> None:
+    if isinstance(value, dict):
+        for key, item in list(value.items()):
+            if key == "reality-opts" and isinstance(item, dict):
+                reality_opts = cast(dict[str, Any], item)
+                reality_opts["public-key"] = REALITY_PUBLIC_KEY
+                reality_opts["short-id"] = "0a"
+                continue
+            if key == "ech-opts" and isinstance(item, dict):
+                ech_opts = cast(dict[str, Any], item)
+                ech_opts["enable"] = False
+                ech_opts["config"] = ""
+                continue
+            _repair_crypto_constraints(item)
+    elif isinstance(value, list):
+        for item in value:
+            _repair_crypto_constraints(item)
+
+
+def _repair_content_constraints(proxy_type: str, proxy: dict[str, Any]) -> None:
+    _repair_crypto_constraints(proxy)
+    if proxy_type == "ss":
+        proxy["cipher"] = "chacha20-ietf-poly1305"
+        proxy["udp-over-tcp-version"] = 2
+    elif proxy_type == "ssr":
+        proxy["cipher"] = "aes-256-cfb"
+        proxy["obfs"] = "plain"
+        proxy["protocol"] = "origin"
+    elif proxy_type == "vmess":
+        proxy["cipher"] = "auto"
+        proxy["uuid"] = "00000000-0000-0000-0000-000000000000"
+    elif proxy_type == "vless":
+        proxy["uuid"] = "00000000-0000-0000-0000-000000000000"
+        proxy["flow"] = "xtls-rprx-vision"
+        proxy["encryption"] = "none"
+        xhttp = proxy.get("xhttp-opts")
+        if isinstance(xhttp, dict) and xhttp.get("mode") == "stream-one":
+            xhttp.pop("download-settings", None)
+    elif proxy_type == "snell":
+        proxy["version"] = 4
+        opts = proxy.setdefault("obfs-opts", {})
+        if isinstance(opts, dict):
+            opts["mode"] = "tls"
+    elif proxy_type == "trojan":
+        opts = proxy.get("ss-opts")
+        if isinstance(opts, dict) and opts.get("enabled"):
+            opts["method"] = "aes-128-gcm"
+            opts["password"] = "p"
+    elif proxy_type == "hysteria":
+        proxy["up"] = "10 Mbps"
+        proxy["down"] = "20 Mbps"
+        proxy["auth"] = "AA=="
+    elif proxy_type == "hysteria2":
+        proxy["port"] = 443
+        proxy["ports"] = "443"
+        proxy["hop-interval"] = "30"
+        proxy["obfs"] = "salamander"
+        proxy["obfs-password"] = "p"
+    elif proxy_type == "wireguard":
+        proxy["ip"] = "172.16.0.2/32"
+        proxy["ipv6"] = ""
+        proxy["private-key"] = WG_KEY
+        proxy["public-key"] = WG_KEY
+        proxy["pre-shared-key"] = WG_KEY
+        proxy["reserved"] = [1, 2, 3]
+        proxy["peers"] = [
+            {
+                "server": "example.com",
+                "port": 443,
+                "public-key": WG_KEY,
+                "pre-shared-key": WG_KEY,
+                "reserved": [1, 2, 3],
+                "allowed-ips": ["0.0.0.0/0"],
+            }
+        ]
+    elif proxy_type == "tuic":
+        proxy["udp-over-stream-version"] = 2
+    elif proxy_type == "gost-relay":
+        proxy["server"] = "example.com"
+        proxy["port"] = 443
+    elif proxy_type == "ssh":
+        proxy["private-key"] = "private-key-path"
+        proxy["host-key"] = []
+    elif proxy_type == "mieru":
+        proxy["port"] = 443
+        proxy["port-range"] = ""
+        proxy["transport"] = "TCP"
+        proxy["multiplexing"] = "MULTIPLEXING_DEFAULT"
+        proxy["handshake-mode"] = "HANDSHAKE_STANDARD"
+    elif proxy_type == "sudoku":
+        proxy["port"] = 443
+        proxy["key"] = "secret"
+        proxy["aead-method"] = "chacha20-poly1305"
+        proxy["padding-min"] = 10
+        proxy["padding-max"] = 30
+        proxy["table-type"] = "prefer_ascii"
+        proxy["http-mask-mode"] = "legacy"
+        proxy["http-mask-multiplex"] = "off"
+        proxy["path-root"] = "root"
+        proxy["httpmask"] = {
+            "disable": False,
+            "mode": "legacy",
+            "tls": False,
+            "host": "example.com",
+            "path-root": "root",
+            "multiplex": "off",
+        }
+        proxy["custom-table"] = "xpxvvpvv"
+        proxy["custom-tables"] = ["xpxvvpvv"]
+    elif proxy_type == "masque":
+        proxy["private-key"] = MASQUE_PRIVATE_KEY
+        proxy["public-key"] = MASQUE_PUBLIC_KEY
+        proxy["ip"] = "172.16.0.2/32"
+        proxy["ipv6"] = ""
+    elif proxy_type == "openvpn":
+        proxy["proto"] = "udp"
+        proxy["dev"] = "tun"
+        proxy["cipher"] = "AES-128-GCM"
+        proxy["auth"] = "SHA256"
+        proxy["ca"] = TEST_PEM
+        proxy["cert"] = ""
+        proxy["key"] = ""
+        proxy["username"] = "user"
+        proxy["ping"] = 10
+        proxy["ping-restart"] = 60
+
+
 def _max_proxy(proxy_type: str) -> dict[str, Any]:
     schema = {**COMMON_PROXY_FIELDS, **PROXY_SCHEMAS[proxy_type]}
     proxy = {field: _schema_value(kind) for field, kind in schema.items()}
@@ -555,35 +699,19 @@ def _max_proxy(proxy_type: str) -> dict[str, Any]:
         proxy["port"] = "443"
     if "uuid" in schema:
         proxy["uuid"] = "00000000-0000-0000-0000-000000000000"
-    if proxy_type == "wireguard":
-        proxy["ip"] = "172.16.0.2/32"
     if "private-key" in schema:
         proxy["private-key"] = "private-key"
     if "public-key" in schema:
         proxy["public-key"] = "public-key"
     if "reality-opts" in schema:
         proxy["reality-opts"] = {
-            "public-key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "public-key": REALITY_PUBLIC_KEY,
             "short-id": "0a",
             "support-x25519mlkem768": 1,
             "unknown-reality": "kept",
         }
-    if proxy_type == "ss":
-        proxy["cipher"] = "chacha20-ietf-poly1305"
-    if proxy_type == "ssr":
-        proxy["cipher"] = "aes-256-cfb"
-        proxy["obfs"] = "plain"
-        proxy["protocol"] = "origin"
-    if proxy_type == "vmess":
-        proxy["cipher"] = "auto"
-    if proxy_type == "hysteria":
-        proxy["up"] = "10 Mbps"
-        proxy["down"] = "20 Mbps"
-    if proxy_type == "mieru":
-        proxy["transport"] = "TCP"
-    if proxy_type == "openvpn":
-        proxy["ca"] = "-----BEGIN CERTIFICATE-----"
     proxy["unknown-top-level"] = "kept"
+    _repair_content_constraints(proxy_type, proxy)
     return proxy
 
 
@@ -779,6 +907,7 @@ def test_yaml_accepts_max_config_variants_for_every_mihomo_proxy(
     variant = dict(PROXY_VARIANTS)[variant_name]
     proxy = deepcopy(_max_proxy(proxy_type))
     variant(proxy)
+    _repair_content_constraints(proxy_type, proxy)
     body = yaml_dump({"proxies": [proxy]})
 
     result = parse_subscription(
@@ -841,15 +970,23 @@ def _fuzz_proxy(proxy_type: str, seed: int) -> dict[str, Any]:
         proxy["private-key"] = "private-key"
     if "public-key" in schema:
         proxy["public-key"] = "public-key"
+    if proxy_type == "wireguard":
+        proxy["private-key"] = WG_KEY
+        proxy["public-key"] = WG_KEY
+        proxy["pre-shared-key"] = WG_KEY
+    if proxy_type == "masque":
+        proxy["private-key"] = MASQUE_PRIVATE_KEY
+        proxy["public-key"] = MASQUE_PUBLIC_KEY
     if "reality-opts" in schema:
         proxy["reality-opts"] = {
-            "public-key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "public-key": REALITY_PUBLIC_KEY,
             "short-id": rng.choice(["", "0a", "0b7caf92d4"]),
             "unknown-reality": {"kept": True},
         }
     proxy[f"unknown-fuzz-{seed}"] = rng.choice(
         ["00123", False, {"nested": ["kept", 1]}, ["x", "y"]]
     )
+    _repair_content_constraints(proxy_type, proxy)
     return proxy
 
 
@@ -869,6 +1006,121 @@ def test_yaml_fuzzes_repairable_configs_for_every_mihomo_proxy(
     assert result.warnings == []
     assert normalized["type"] == proxy_type
     assert normalized[f"unknown-fuzz-{seed}"] == proxy[f"unknown-fuzz-{seed}"]
+
+
+CONTENT_INVALID_CASES = [
+    ("ss", {"cipher": "bad-cipher"}, "cipher"),
+    ("ss", {"udp-over-tcp-version": 9}, "udp-over-tcp-version"),
+    ("ssr", {"cipher": "aes-256-gcm"}, "stream cipher"),
+    ("ssr", {"obfs": "bad-obfs"}, "obfs"),
+    ("ssr", {"protocol": "bad-protocol"}, "protocol"),
+    ("vmess", {"cipher": "bad-cipher"}, "cipher"),
+    (
+        "vmess",
+        {"reality-opts": {"public-key": "bad", "short-id": "0a"}},
+        "REALITY public key",
+    ),
+    (
+        "vmess",
+        {"ech-opts": {"enable": True, "config": "***"}},
+        "ech-opts.config",
+    ),
+    ("vless", {"uuid": "not-a-uuid"}, "uuid"),
+    ("vless", {"flow": "bad-flow-that-is-long"}, "flow"),
+    (
+        "vless",
+        {"xhttp-opts": {"mode": "stream-one", "download-settings": {"path": "/dl"}}},
+        "download-settings",
+    ),
+    ("vless", {"encryption": "bad"}, "vless encryption"),
+    ("snell", {"version": 9}, "version"),
+    ("snell", {"version": 1, "udp": True}, "UDP"),
+    ("snell", {"obfs-opts": {"mode": "bad"}}, "obfs"),
+    ("trojan", {"ss-opts": {"enabled": True, "password": ""}}, "empty password"),
+    (
+        "trojan",
+        {"ss-opts": {"enabled": True, "method": "bad", "password": "p"}},
+        "method",
+    ),
+    ("hysteria", {"up": "bad"}, "upload speed"),
+    ("hysteria", {"down": "bad"}, "download speed"),
+    ("hysteria", {"auth": "***"}, "auth"),
+    ("hysteria2", {"obfs": "salamander", "obfs-password": ""}, "obfs password"),
+    ("hysteria2", {"obfs": "bad", "obfs-password": "p"}, "obfs type"),
+    ("hysteria2", {"port": 0, "ports": ""}, "invalid port"),
+    ("hysteria2", {"ports": "bad"}, "ports"),
+    ("wireguard", {"reserved": [1, 2]}, "reserved"),
+    ("wireguard", {"ip": "bad-ip"}, "ip address"),
+    ("wireguard", {"private-key": "***"}, "private-key"),
+    (
+        "wireguard",
+        {"peers": [{"public-key": WG_KEY, "allowed-ips": []}]},
+        "allowed-ips",
+    ),
+    (
+        "wireguard",
+        {"peers": [{"public-key": "***", "allowed-ips": ["0.0.0.0/0"]}]},
+        "peer",
+    ),
+    ("tuic", {"udp-over-stream-version": 9}, "udp-over-stream-version"),
+    ("gost-relay", {"port": 70000}, "server and port"),
+    (
+        "ssh",
+        {"private-key": "-----BEGIN PRIVATE KEY-----\nBAD\n-----END PRIVATE KEY-----"},
+        "private-key",
+    ),
+    ("ssh", {"host-key": ["not-a-host-key"]}, "host-key"),
+    ("mieru", {"port": 443, "port-range": "1000-2000"}, "port and port-range"),
+    ("mieru", {"port": 0, "port-range": ""}, "port or port-range"),
+    ("mieru", {"port-range": "2000-1000", "port": 0}, "begin port"),
+    ("mieru", {"transport": "QUIC"}, "transport"),
+    ("mieru", {"multiplexing": "BAD"}, "multiplexing"),
+    ("mieru", {"handshake-mode": "BAD"}, "handshake"),
+    ("anytls", {"password": ""}, "password"),
+    ("sudoku", {"port": 70000}, "port"),
+    ("sudoku", {"aead-method": "bad"}, "aead-method"),
+    ("sudoku", {"padding-min": -1}, "padding-min"),
+    ("sudoku", {"padding-min": 90, "padding-max": 10}, "padding-max"),
+    ("sudoku", {"table-type": "bad"}, "table-type"),
+    ("sudoku", {"httpmask": {"mode": "bad"}}, "http-mask-mode"),
+    ("sudoku", {"httpmask": {"path-root": "bad/path"}}, "path-root"),
+    ("sudoku", {"httpmask": {"multiplex": "bad"}}, "multiplex"),
+    ("sudoku", {"custom-table": "xxxxxxxx"}, "custom table"),
+    ("masque", {"ip": "", "ipv6": ""}, "local address"),
+    ("masque", {"ip": "bad-ip"}, "ip address"),
+    ("masque", {"private-key": "***"}, "private key"),
+    ("masque", {"public-key": "***"}, "public key"),
+    ("trusttunnel", {"password": ""}, "password"),
+    ("openvpn", {"proto": "icmp"}, "proto"),
+    ("openvpn", {"dev": "tap"}, "dev"),
+    ("openvpn", {"cipher": "BAD"}, "cipher"),
+    ("openvpn", {"auth": "BAD"}, "auth"),
+    ("openvpn", {"ca": "not-pem"}, "ca"),
+    ("openvpn", {"username": "", "cert": "", "key": ""}, "username"),
+    ("openvpn", {"cert": "not-pem", "key": ""}, "cert and key"),
+    ("openvpn", {"ping": -1}, "ping interval"),
+    ("openvpn", {"ping-restart": -1}, "ping restart"),
+]
+
+
+@pytest.mark.parametrize(
+    ("proxy_type", "updates", "message"),
+    [pytest.param(*case, id=f"{case[0]}-{case[2]}") for case in CONTENT_INVALID_CASES],
+)
+def test_yaml_drops_known_fields_that_fail_mihomo_content_validation(
+    proxy_type: str, updates: dict[str, Any], message: str
+) -> None:
+    """测试已知字段必须满足 Mihomo constructor/Parse 内容要求 / Test known-field value rules."""
+    proxy = deepcopy(_max_proxy(proxy_type))
+    proxy.update(updates)
+    body = yaml_dump({"proxies": [proxy, {"name": "good", "type": "direct"}]})
+
+    result = parse_subscription(
+        body, source="airport_a", fmt="yaml", parse_error="skip"
+    )
+
+    assert [record.data["name"] for record in result.records] == ["good"]
+    assert any(message in warning for warning in result.warnings)
 
 
 def test_yaml_schema_validation_fail_raises_when_parse_error_fail() -> None:

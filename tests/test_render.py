@@ -14,6 +14,8 @@ from mihomo_proxy_manager.models import (
 )
 from mihomo_proxy_manager.render import ProviderRenderer
 
+REALITY_PUBLIC_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
 
 def route(include_meta_comments: bool = False) -> RouteConfig:
     """创建测试用路由配置。
@@ -50,7 +52,7 @@ def test_provider_renderer_preserves_fields_and_strips_internal_metadata() -> No
                     "type": "vmess",
                     "server": "example.com",
                     "port": 443,
-                    "uuid": "id",
+                    "uuid": "00000000-0000-0000-0000-000000000000",
                     "cipher": "auto",
                 },
             )
@@ -107,13 +109,13 @@ def test_provider_renderer_quotes_string_identity_fields() -> None:
                     "type": "vless",
                     "server": "1.2.3.4",
                     "port": 443,
-                    "uuid": "00123",
+                    "uuid": "00000000-0000-0000-0000-000000000000",
                     "tls": True,
                     "servername": "github.com",
                     "client-fingerprint": "chrome",
                     "flow": "xtls-rprx-vision",
                     "reality-opts": {
-                        "public-key": "pubkey",
+                        "public-key": REALITY_PUBLIC_KEY,
                         "short-id": "0a1b2c3d",
                     },
                     "ws-opts": {
@@ -141,13 +143,13 @@ def test_provider_renderer_quotes_string_identity_fields() -> None:
     assert 'name: "[phone] HK"' in text
     assert 'server: "1.2.3.4"' in text
     assert "port: 443" in text
-    assert 'uuid: "00123"' in text
+    assert 'uuid: "00000000-0000-0000-0000-000000000000"' in text
     assert 'cipher: "chacha20-ietf-poly1305"' in text
     assert "tls: true" in text
     assert 'servername: "github.com"' in text
     assert 'client-fingerprint: "chrome"' in text
     assert 'flow: "xtls-rprx-vision"' in text
-    assert 'public-key: "pubkey"' in text
+    assert f'public-key: "{REALITY_PUBLIC_KEY}"' in text
     assert 'short-id: "0a1b2c3d"' in text
     assert 'path: "/ray"' in text
     assert 'Host: "example.com"' in text
@@ -170,7 +172,7 @@ def test_provider_renderer_normalizes_and_drops_invalid_records() -> None:
                     "uuid": "00000000-0000-0000-0000-000000000000",
                     "tls": "true",
                     "reality-opts": {
-                        "public-key": "pubkey",
+                        "public-key": REALITY_PUBLIC_KEY,
                         "short-id": "0b7caf92d4",
                     },
                 },
@@ -184,7 +186,7 @@ def test_provider_renderer_normalizes_and_drops_invalid_records() -> None:
                     "port": 443,
                     "uuid": "00000000-0000-0000-0000-000000000000",
                     "reality-opts": {
-                        "public-key": "pubkey",
+                        "public-key": REALITY_PUBLIC_KEY,
                         "short-id": "xyz",
                     },
                 },

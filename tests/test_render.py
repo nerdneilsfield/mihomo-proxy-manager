@@ -3,6 +3,8 @@
 YAML renderer tests including renaming, deduplication, and meta comments.
 """
 
+import base64
+
 import yaml
 
 from mihomo_proxy_manager.models import (
@@ -12,7 +14,7 @@ from mihomo_proxy_manager.models import (
     RouteConfig,
     RouteOutputConfig,
 )
-from mihomo_proxy_manager.render import ProviderRenderer
+from mihomo_proxy_manager.render import ProviderRenderer, XrayUriRenderer
 from mihomo_proxy_manager.render import (
     RenderRequest,
     build_renderer_registry,
@@ -46,6 +48,19 @@ def route(
             format="provider", include_meta_comments=include_meta_comments
         ),
         rename=RenameConfig(prefix="[phone] "),
+        filter=FilterConfig(),
+    )
+
+
+def xray_route(encoding: str = "base64") -> RouteConfig:
+    """Create a route for xray-uri renderer tests."""
+    return RouteConfig(
+        name="xray",
+        path="/xray",
+        sources=("airport_a",),
+        require_all_sources=False,
+        output=RouteOutputConfig(format="xray-uri", encoding=encoding),
+        rename=RenameConfig(),
         filter=FilterConfig(),
     )
 
@@ -227,6 +242,131 @@ def test_provider_route_renderer_matches_provider_renderer_bytes() -> None:
     assert response.body == ProviderRenderer().render_sync(test_route, records)
     assert response.media_type == "text/yaml; charset=utf-8"
     assert response.headers == {}
+
+
+def test_xray_uri_renderer_base64_subscription_defaults_to_base64() -> None:
+    """测试 xray-uri 默认 base64 订阅 / Test xray-uri default base64 subscription."""
+    records = [
+        ProxyRecord(
+            "airport_a",
+            {
+                "name": "SS 01",
+                "type": "ss",
+                "server": "example.net",
+                "port": 8388,
+                "cipher": "chacha20-ietf-poly1305",
+                "password": "secret",
+            },
+        ),
+        ProxyRecord(
+            "airport_a",
+            {
+                "name": "VLESS 01",
+                "type": "vless",
+                "server": "example.com",
+                "port": 443,
+                "uuid": "00000000-0000-0000-0000-000000000000",
+                "tls": True,
+                "servername": "example.com",
+            },
+        ),
+    ]
+
+    response = build_renderer_registry()["xray-uri"].render(
+        RenderRequest(xray_route(), records)
+    )
+
+    decoded = base64.urlsafe_b64decode(response.body).decode("utf-8")
+    assert response.media_type == "text/plain; charset=utf-8"
+    assert response.status_code == 200
+    assert "ss://" in decoded
+    assert "vless://00000000-0000-0000-0000-000000000000@example.com:443" in decoded
+    assert "#VLESS%2001" in decoded
+
+
+def test_xray_uri_renderer_plain_trojan_query() -> None:
+    """测试 xray-uri plain trojan 输出 / Test xray-uri plain trojan output."""
+    response = XrayUriRenderer().render(
+        RenderRequest(
+            xray_route(encoding="plain"),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "Trojan 01",
+                        "type": "trojan",
+                        "server": "example.com",
+                        "port": 443,
+                        "password": "secret",
+                        "sni": "example.com",
+                    },
+                )
+            ],
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert text.startswith("trojan://secret@example.com:443?")
+    assert "sni=example.com" in text
+    assert text.endswith("#Trojan%2001\n")
+    assert response.media_type == "text/plain; charset=utf-8"
+
+
+def test_xray_uri_renderer_escapes_userinfo_fragment_and_brackets_ipv6() -> None:
+    """测试 xray-uri 转义 userinfo、fragment，并为 IPv6 加括号。"""
+    response = XrayUriRenderer().render(
+        RenderRequest(
+            xray_route(encoding="plain"),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": '名字 #%,"/',
+                        "type": "trojan",
+                        "server": "2001:db8::1",
+                        "port": 443,
+                        "password": "p#%,\"/",
+                    },
+                )
+            ],
+        )
+    )
+
+    assert (
+        response.body.decode("utf-8")
+        == "trojan://p%23%25%2C%22%2F@[2001:db8::1]:443#%E5%90%8D%E5%AD%97%20%23%25%2C%22%2F\n"
+    )
+
+
+def test_xray_uri_renderer_rejects_unmapped_security_critical_fields() -> None:
+    """测试未映射安全关键字段会被拒绝 / Test unmapped security-critical fields are rejected."""
+    response = XrayUriRenderer().render(
+        RenderRequest(
+            xray_route(encoding="plain"),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "Reality",
+                        "type": "vless",
+                        "server": "example.com",
+                        "port": 443,
+                        "uuid": "00000000-0000-0000-0000-000000000000",
+                        "tls": True,
+                        "reality-opts": {
+                            "public-key": REALITY_PUBLIC_KEY,
+                            "short-id": "0a1b2c3d",
+                        },
+                    },
+                )
+            ],
+        )
+    )
+
+    assert response.status_code == 422
+    assert response.media_type == "text/plain; charset=utf-8"
+    assert response.body == b"no supported nodes for xray-uri output"
+    assert any("reality-opts" in warning for warning in response.warnings)
 
 
 def test_prepare_render_records_preserves_filtering_and_renaming() -> None:

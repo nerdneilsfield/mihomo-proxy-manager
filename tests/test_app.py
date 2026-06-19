@@ -4,7 +4,7 @@ Web application route and lifecycle tests.
 """
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -13,7 +13,13 @@ from starlette.testclient import TestClient
 from mihomo_proxy_manager.app import create_app
 from mihomo_proxy_manager.cache import JsonSourceCacheStore
 from mihomo_proxy_manager.config import load_config
-from mihomo_proxy_manager.models import ProxyRecord, SourceCache
+from mihomo_proxy_manager.models import (
+    AppConfig,
+    ProxyRecord,
+    RouteAccessConfig,
+    RouteOutputConfig,
+    SourceCache,
+)
 
 
 def config_file(tmp_path):
@@ -52,6 +58,44 @@ sources = ["airport_a"]
         encoding="utf-8",
     )
     return path
+
+
+def app_config_with_route_output(
+    tmp_path,
+    output: RouteOutputConfig,
+    public_base_url: str | None = None,
+    allowed_user_agents: tuple[str, ...] = (),
+) -> AppConfig:
+    """Create app config with a replaced route output."""
+    config = load_config(config_file(tmp_path))
+    route = config.routes["phone"]
+    route = replace(
+        route,
+        output=output,
+        access=RouteAccessConfig(user_agent=tuple(allowed_user_agents)),
+    )
+    return replace(
+        config,
+        server=replace(config.server, public_base_url=public_base_url),
+        routes={**config.routes, "phone": route},
+    )
+
+
+def source_cache_with_nodes(*nodes: ProxyRecord) -> SourceCache:
+    """Create a valid source cache containing the given nodes."""
+    now = datetime.now(UTC)
+    return SourceCache(
+        "airport_a",
+        1,
+        now,
+        now,
+        None,
+        None,
+        len(nodes),
+        (),
+        None,
+        nodes,
+    )
 
 
 class FakeRefresher:
@@ -158,6 +202,39 @@ async def test_provider_route_returns_yaml(tmp_path) -> None:
 
     assert response.status_code == 200
     assert "proxies:" in response.text
+
+
+@pytest.mark.asyncio
+async def test_route_serves_xray_uri_output(tmp_path) -> None:
+    """Test that route dispatch serves xray-uri output."""
+    config = app_config_with_route_output(
+        tmp_path, RouteOutputConfig(format="xray-uri", encoding="plain")
+    )
+    store = JsonSourceCacheStore(config.cache)
+    await store.set(
+        "airport_a",
+        source_cache_with_nodes(
+            ProxyRecord(
+                "airport_a",
+                {
+                    "name": "Trojan 01",
+                    "type": "trojan",
+                    "server": "example.com",
+                    "port": 443,
+                    "password": "secret",
+                    "sni": "example.com",
+                },
+            )
+        ),
+    )
+    app = create_app(config, cache_store=store, refresher=None, scheduler=None)
+
+    with TestClient(app) as client:
+        response = client.get(config.routes["phone"].path)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/plain")
+    assert response.text.startswith("trojan://")
 
 
 def test_health_and_unknown_path(tmp_path) -> None:

@@ -21,7 +21,8 @@ from .access import sanitize_user_agent, user_agent_allowed
 from .cache import SourceCacheStore
 from .logging import _collect_secret_values
 from .models import AppConfig, ProxyRecord, SourceCache, SourceConfig
-from .render import ProviderRenderer
+from .render import RenderRequest, build_renderer_registry
+from .security import redact_secret
 from .status import build_status, render_status_html
 
 
@@ -167,10 +168,31 @@ def create_app(
     Returns:
         配置完成的 Starlette 应用实例 / The configured Starlette application instance.
     """
-    renderer = ProviderRenderer(yaml_sort_keys=config.output.yaml_sort_keys)
-    route_by_path = {route.path: route for route in config.routes.values()}
+    renderers = build_renderer_registry(yaml_sort_keys=config.output.yaml_sort_keys)
     background_tasks: set[asyncio.Task[Any]] = set()
     secrets = _collect_secret_values(config)
+
+    def _public_url(path: str) -> str:
+        if config.server.public_base_url:
+            return f"{config.server.public_base_url}{path}"
+        return path
+
+    route_by_path = {}
+    companion_public_urls_by_route: dict[str, dict[str, str]] = {}
+    for route in config.routes.values():
+        route_by_path[route.path] = (route, None)
+        route_companion_urls: dict[str, str] = {}
+        renderer = renderers[route.output.format]
+        for companion_path in renderer.companion_paths(route):
+            prefix = f"{route.path}-"
+            companion = (
+                companion_path[len(prefix) :]
+                if companion_path.startswith(prefix)
+                else companion_path
+            )
+            route_by_path[companion_path] = (route, companion)
+            route_companion_urls[companion] = _public_url(companion_path)
+        companion_public_urls_by_route[route.name] = route_companion_urls
 
     async def health(request):
         """健康检查端点。
@@ -242,10 +264,11 @@ def create_app(
             Does not raise exceptions directly, but returns 404 or 503 status codes
             when sources are unavailable.
         """
-        route = route_by_path.get(request.url.path)
-        if route is None:
+        route_match = route_by_path.get(request.url.path)
+        if route_match is None:
             logger.debug("provider 404: path={path}", path=request.url.path)
             return PlainTextResponse("not found", status_code=404)
+        route, companion = route_match
 
         request_user_agent = request.headers.get("user-agent")
         if not user_agent_allowed(route.access, request_user_agent):
@@ -340,14 +363,37 @@ def create_app(
             )
             return PlainTextResponse("route unavailable", status_code=503)
 
-        body = await renderer.render(route, records)
+        renderer = renderers[route.output.format]
+        response = renderer.render(
+            RenderRequest(
+                route,
+                records,
+                request_base_url=str(request.base_url),
+                main_public_url=_public_url(route.path),
+                companion_public_urls=companion_public_urls_by_route.get(
+                    route.name, {}
+                ),
+                companion=companion,
+            )
+        )
+        for warning in response.warnings:
+            logger.warning(
+                "route render warning: route={route} warning={warning}",
+                route=route.name,
+                warning=redact_secret(warning, extra_secrets=secrets),
+            )
         logger.info(
             "provider served: route={route} nodes={nodes} bytes={bytes}",
             route=route.name,
             nodes=len(records),
-            bytes=len(body),
+            bytes=len(response.body),
         )
-        return Response(body, media_type="application/yaml; charset=utf-8")
+        return Response(
+            response.body,
+            status_code=response.status_code,
+            media_type=response.media_type,
+            headers=response.headers,
+        )
 
     routes = [Route(config.server.health_path, health)]
     if config.server.status_path:

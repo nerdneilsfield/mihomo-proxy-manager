@@ -9,7 +9,7 @@ import base64
 import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Protocol, Sequence, cast
+from typing import Mapping, Protocol, Sequence, cast
 from urllib.parse import quote, urlencode
 
 import yaml
@@ -46,6 +46,9 @@ class RenderRequest:
     route: RouteConfig
     records: Sequence[SourceRecord]
     request_base_url: str | None = None
+    main_public_url: str = ""
+    companion_public_urls: Mapping[str, str] = field(default_factory=dict)
+    companion: str | None = None
 
 
 @dataclass(frozen=True)
@@ -61,6 +64,9 @@ class RenderResponse:
 
 class RouteRenderer(Protocol):
     """Protocol for route output renderers."""
+
+    def companion_paths(self, route: RouteConfig) -> tuple[str, ...]:
+        """Return companion paths served by this renderer for the route."""
 
     def render(self, request: RenderRequest) -> RenderResponse:
         """Render a route request into a response."""
@@ -303,6 +309,10 @@ def _render_vmess_uri(data: dict[str, object]) -> str | None:
 class XrayUriRenderer:
     """Render route records as v2rayN-compatible xray URI subscriptions."""
 
+    def companion_paths(self, route: RouteConfig) -> tuple[str, ...]:
+        """Return companion paths for xray-uri output."""
+        return ()
+
     def render(self, request: RenderRequest) -> RenderResponse:
         """Render xray-uri output and collect skipped-node warnings."""
         proxies = prepare_render_records(request.route, request.records)
@@ -425,6 +435,10 @@ class ProviderRouteRenderer:
 
     renderer: ProviderRenderer
 
+    def companion_paths(self, route: RouteConfig) -> tuple[str, ...]:
+        """Return companion paths for provider output."""
+        return ()
+
     def render(self, request: RenderRequest) -> RenderResponse:
         """Render provider output and wrap it in RenderResponse."""
         return RenderResponse(
@@ -432,9 +446,11 @@ class ProviderRouteRenderer:
         )
 
 
-def build_renderer_registry() -> dict[str, RouteRenderer]:
+def build_renderer_registry(*, yaml_sort_keys: bool = False) -> dict[str, RouteRenderer]:
     """Build route renderer registry keyed by route output format."""
     return {
-        "provider": ProviderRouteRenderer(ProviderRenderer()),
+        "provider": ProviderRouteRenderer(
+            ProviderRenderer(yaml_sort_keys=yaml_sort_keys)
+        ),
         "xray-uri": XrayUriRenderer(),
     }

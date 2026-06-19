@@ -442,7 +442,8 @@ class ProviderRouteRenderer:
     def render(self, request: RenderRequest) -> RenderResponse:
         """Render provider output and wrap it in RenderResponse."""
         return RenderResponse(
-            body=self.renderer.render_sync(request.route, request.records)
+            body=self.renderer.render_sync(request.route, request.records),
+            media_type="application/yaml; charset=utf-8",
         )
 
 

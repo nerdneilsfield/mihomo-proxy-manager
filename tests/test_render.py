@@ -240,7 +240,7 @@ def test_provider_route_renderer_matches_provider_renderer_bytes() -> None:
 
     assert "provider" in registry
     assert response.body == ProviderRenderer().render_sync(test_route, records)
-    assert response.media_type == "text/yaml; charset=utf-8"
+    assert response.media_type == "application/yaml; charset=utf-8"
     assert response.headers == {}
 
 

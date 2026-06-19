@@ -201,6 +201,7 @@ async def test_provider_route_returns_yaml(tmp_path) -> None:
         response = client.get("/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml")
 
     assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/yaml")
     assert "proxies:" in response.text
 
 

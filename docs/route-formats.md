@@ -445,9 +445,9 @@ format = "surfboard"
 ### Nodes Companion
 
 ```ini
-SS 01 = ss, example.com, 443, encrypt-method=chacha20-ietf-poly1305, password=password, udp-relay=true
-VMess 01 = vmess, example.com, 443, username=00000000-0000-0000-0000-000000000000, ws=true, tls=true, ws-path=/ws, ws-headers=Host:example.com, sni=example.com, vmess-aead=true
-Trojan 01 = trojan, example.com, 443, password=password, udp-relay=true, skip-cert-verify=false, sni=example.com
+SS 01 = ss, example.com, 443, encrypt-method=chacha20-ietf-poly1305, password=password
+VMess 01 = vmess, example.com, 443, username=00000000-0000-0000-0000-000000000000, ws=true, tls=true, ws-path=/ws, ws-headers=Host:example.com, sni=example.com
+Trojan 01 = trojan, example.com, 443, password=password, skip-cert-verify=false, sni=example.com
 ```
 
 ### Main Route Full Profile
@@ -456,8 +456,8 @@ Trojan 01 = trojan, example.com, 443, password=password, udp-relay=true, skip-ce
 [General]
 
 [Proxy]
-SS 01 = ss, example.com, 443, encrypt-method=chacha20-ietf-poly1305, password=password, udp-relay=true
-VMess 01 = vmess, example.com, 443, username=00000000-0000-0000-0000-000000000000, ws=true, tls=true, ws-path=/ws, ws-headers=Host:example.com, sni=example.com, vmess-aead=true
+SS 01 = ss, example.com, 443, encrypt-method=chacha20-ietf-poly1305, password=password
+VMess 01 = vmess, example.com, 443, username=00000000-0000-0000-0000-000000000000, ws=true, tls=true, ws-path=/ws, ws-headers=Host:example.com, sni=example.com
 Trojan 01 = trojan, example.com, 443, password=password, skip-cert-verify=false, sni=example.com
 
 [Proxy Group]
@@ -540,10 +540,10 @@ The route itself returns server definitions, not the wrapper above.
 ### Main Route Server Lines
 
 ```ini
-shadowsocks=example.com:443, method=chacha20-ietf-poly1305, password=password, udp-relay=true, tag=SS 01
-vmess=example.com:443, method=none, password=00000000-0000-0000-0000-000000000000, obfs=wss, obfs-host=example.com, obfs-uri=/ws, udp-relay=true, tag=VMess 01
-vless=example.com:443, method=none, password=00000000-0000-0000-0000-000000000000, obfs=wss, obfs-host=example.com, obfs-uri=/ws, udp-relay=true, tag=VLESS 01
-trojan=example.com:443, password=password, over-tls=true, tls-host=example.com, tls-verification=true, udp-relay=true, tag=Trojan 01
+shadowsocks=example.com:443, method=chacha20-ietf-poly1305, password=password, tag=SS 01
+vmess=example.com:443, method=none, password=00000000-0000-0000-0000-000000000000, obfs=wss, obfs-host=example.com, obfs-uri=/ws, tag=VMess 01
+vless=example.com:443, method=none, password=00000000-0000-0000-0000-000000000000, obfs=wss, obfs-host=example.com, obfs-uri=/ws, tag=VLESS 01
+trojan=example.com:443, password=password, over-tls=true, tls-host=example.com, tls-verification=true, tag=Trojan 01
 ```
 
 Unsupported security-critical fields and unsupported Shadowsocks plugin/obfs fields are skipped with route render warnings; if every node is skipped, the route returns HTTP 422 with `no supported nodes for quantumult-x output`.
@@ -704,7 +704,7 @@ Renderer split:
 | `cipher` | `cipher` | SS userinfo / VMess `scy` | protocol-specific | `method` | `encrypt-method` | `method` | encryption method |
 | `uuid` | `uuid` | userinfo / VMess JSON `id` | `settings.id` | `uuid` | `username` for VMess | `password` for VMess/VLESS | quoted UUID for VMess |
 | `password` | `password` | userinfo | protocol-specific | `password` | `password` | `password` | quoted/positional password |
-| `alterId` | `alterId` | VMess JSON `aid` | VMess settings | `alter_id` | `vmess-aead` or unsupported legacy | `aead=false` for legacy | not documented in fetched example |
+| `alterId` | `alterId` | VMess JSON `aid` | VMess settings | `alter_id` | future legacy AEAD flag | `aead=false` for legacy | not documented in fetched example |
 | `network = ws` | `network`, `ws-opts` | `type=ws`, `path`, `host` | `streamSettings.wsSettings` | `transport.type = ws` | `ws=true`, `ws-path`, `ws-headers` | `obfs=ws/wss`, `obfs-uri`, `obfs-host` | `transport:ws`, `path`, `host` |
 | TLS enabled | `tls` | `security=tls` | `streamSettings.security` | `tls.enabled` | `tls=true` / protocol default | `over-tls=true` or `obfs=wss` | `over-tls:true` |
 | `sni` / `servername` | `sni` / `servername` | `sni` | TLS server name | `tls.server_name` | `sni` | `tls-host` / `obfs-host` | `tls-name` |

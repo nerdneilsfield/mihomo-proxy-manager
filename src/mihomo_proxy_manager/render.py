@@ -153,6 +153,14 @@ def _query_string(params: dict[str, str]) -> str:
     return urlencode({key: value for key, value in params.items() if value != ""})
 
 
+def _client_fingerprint_params(data: dict[str, object]) -> dict[str, str]:
+    """Map Mihomo client-fingerprint to xray URI query params."""
+    fingerprint = _string(data.get("client-fingerprint"))
+    if not fingerprint:
+        return {}
+    return {"fp": fingerprint}
+
+
 def _network_params(data: dict[str, object]) -> dict[str, str]:
     """Map common network transport fields to xray URI query params."""
     params: dict[str, str] = {}
@@ -227,6 +235,7 @@ def _render_trojan_uri(data: dict[str, object]) -> str | None:
         params["sni"] = sni
     if _boolish(data.get("skip-cert-verify")):
         params["allowInsecure"] = "1"
+    params.update(_client_fingerprint_params(data))
     params.update(_network_params(data))
     query = _query_string(params)
     query_part = f"?{query}" if query else ""
@@ -248,6 +257,7 @@ def _render_vless_uri(data: dict[str, object]) -> str | None:
     sni = _string(data.get("servername") or data.get("sni"))
     if sni:
         params["sni"] = sni
+    params.update(_client_fingerprint_params(data))
     params.update(_network_params(data))
     query = _query_string(params)
     query_part = f"?{query}" if query else ""
@@ -282,6 +292,9 @@ def _render_vmess_uri(data: dict[str, object]) -> str | None:
         headers = ws_opts.get("headers")
         if isinstance(headers, dict):
             payload["host"] = _string(headers.get("Host") or headers.get("host"))
+    fingerprint = _string(data.get("client-fingerprint"))
+    if fingerprint:
+        payload["fp"] = fingerprint
     raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     encoded = base64.b64encode(raw).decode("ascii")
     return f"vmess://{encoded}"

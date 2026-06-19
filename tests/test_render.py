@@ -312,6 +312,34 @@ def test_xray_uri_renderer_plain_trojan_query() -> None:
     assert response.media_type == "text/plain; charset=utf-8"
 
 
+def test_xray_uri_renderer_preserves_vless_client_fingerprint() -> None:
+    """测试 VLESS client-fingerprint 映射为 fp / Test VLESS client-fingerprint maps to fp."""
+    response = XrayUriRenderer().render(
+        RenderRequest(
+            xray_route(encoding="plain"),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "VLESS Chrome",
+                        "type": "vless",
+                        "server": "example.com",
+                        "port": 443,
+                        "uuid": "00000000-0000-0000-0000-000000000000",
+                        "tls": True,
+                        "client-fingerprint": "chrome",
+                    },
+                )
+            ],
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert response.status_code == 200
+    assert response.warnings == ()
+    assert "fp=chrome" in text
+
+
 def test_xray_uri_renderer_escapes_userinfo_fragment_and_brackets_ipv6() -> None:
     """测试 xray-uri 转义 userinfo、fragment，并为 IPv6 加括号。"""
     response = XrayUriRenderer().render(

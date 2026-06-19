@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 from croniter import croniter
 from loguru import logger
 from starlette.applications import Starlette
-from starlette.responses import JSONResponse, PlainTextResponse, Response
+from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route
 
 from .access import sanitize_user_agent, user_agent_allowed
@@ -22,7 +22,7 @@ from .cache import SourceCacheStore
 from .logging import _collect_secret_values
 from .models import AppConfig, ProxyRecord, SourceCache, SourceConfig
 from .render import ProviderRenderer
-from .status import build_status
+from .status import build_status, render_status_html
 
 
 class _Refresher(Protocol):
@@ -185,20 +185,28 @@ def create_app(
         """
         return JSONResponse({"ok": True})
 
-    async def status(request):
-        """状态端点，返回各源的刷新状态。
+    api_path = (
+        f"{config.server.status_path.rstrip('/')}/api"
+        if config.server.status_path
+        else None
+    )
 
-        Status endpoint returning the refresh status of each source.
+    async def status(request):
+        """状态端点：根路径返回 HTML，/api 子路径返回 JSON。
+
+        Status endpoint: the root path returns an HTML dashboard; the ``/api``
+        sub-path returns the JSON API.
 
         Args:
             request: HTTP 请求对象 / The HTTP request object.
 
         Returns:
-            包含各源刷新状态的 JSON 响应 / A JSON response containing the refresh status of each source.
+            HTML 响应或 JSON 响应 / HTML or JSON response.
         """
-        return JSONResponse(
-            await build_status(cache_store, list(config.sources), extra_secrets=secrets)
-        )
+        data = await build_status(cache_store, config, extra_secrets=secrets)
+        if api_path is not None and request.url.path == api_path:
+            return JSONResponse(data)
+        return HTMLResponse(render_status_html(data))
 
     def _spawn_background_refresh(source_name: str) -> None:
         """在后台触发源的刷新。
@@ -344,6 +352,8 @@ def create_app(
     routes = [Route(config.server.health_path, health)]
     if config.server.status_path:
         routes.append(Route(config.server.status_path, status))
+        if api_path:
+            routes.append(Route(api_path, status))
     routes.append(Route("/{path:path}", provider))
 
     @contextlib.asynccontextmanager

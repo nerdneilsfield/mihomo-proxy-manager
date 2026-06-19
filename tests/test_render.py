@@ -337,6 +337,38 @@ def test_xray_uri_renderer_plain_trojan_query() -> None:
     assert response.media_type == "text/plain; charset=utf-8"
 
 
+def test_xray_uri_renderer_allows_shadowsocks_plugin_fields() -> None:
+    """Test xray-uri does not apply Quantumult X-only SS plugin guard."""
+    response = XrayUriRenderer().render(
+        RenderRequest(
+            xray_route(encoding="plain"),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "SS Plugin",
+                        "type": "ss",
+                        "server": "example.com",
+                        "port": 443,
+                        "cipher": "chacha20-ietf-poly1305",
+                        "password": "password",
+                        "plugin": "obfs",
+                        "plugin-opts": {"mode": "tls"},
+                    },
+                )
+            ],
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert response.status_code == 200
+    assert text.startswith("ss://")
+    assert not any(
+        "unsupported Shadowsocks field" in warning
+        for warning in response.warnings
+    )
+
+
 def test_xray_uri_renderer_preserves_vless_client_fingerprint() -> None:
     """测试 VLESS client-fingerprint 映射为 fp / Test VLESS client-fingerprint maps to fp."""
     response = XrayUriRenderer().render(
@@ -494,6 +526,34 @@ def test_quantumult_x_renderer_outputs_server_lines() -> None:
         "tls-host=example.com, tls-verification=true, tag=Trojan 01"
     ) in text
     assert response.status_code == 200
+
+
+def test_quantumult_x_renderer_sanitizes_node_tag() -> None:
+    """Test quantumult-x server line tag avoids comma/control characters."""
+    response = build_renderer_registry()["quantumult-x"].render(
+        RenderRequest(
+            quantumult_x_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "HK, 01\n",
+                        "type": "ss",
+                        "server": "example.com",
+                        "port": 443,
+                        "cipher": "chacha20-ietf-poly1305",
+                        "password": "password",
+                    },
+                )
+            ],
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    tag_segment = text.split("tag=", 1)[1]
+    assert tag_segment == "HK 01\n"
+    assert "HK, 01" not in tag_segment
+    assert "\n" not in tag_segment.rstrip("\n")
 
 
 def test_quantumult_x_vless_tcp_tls_uses_obfs_over_tls() -> None:

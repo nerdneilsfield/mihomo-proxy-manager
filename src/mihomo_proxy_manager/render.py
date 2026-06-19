@@ -240,7 +240,7 @@ def _qx_hostport(data: dict[str, object]) -> str | None:
 
 def _qx_tag(data: dict[str, object]) -> str:
     """Build Quantumult X tag segment."""
-    return f"tag={_qx_value(data.get('name'))}"
+    return f"tag={_qx_clean_label(data.get('name'))}"
 
 
 def _qx_ws_segments(data: dict[str, object], obfs: str) -> list[str]:
@@ -333,7 +333,14 @@ def _qx_trojan_tls_segments(data: dict[str, object], *, default_host: str) -> li
 
 def _has_unsupported_qx_ss_plugin(data: dict[str, object]) -> str | None:
     """Return first Shadowsocks plugin/obfs field Quantumult X renderer skips."""
-    for field_name in ("plugin", "plugin-opts", "obfs", "obfs-opts"):
+    for field_name in (
+        "plugin",
+        "plugin-opts",
+        "obfs",
+        "obfs-host",
+        "obfs-uri",
+        "obfs-opts",
+    ):
         if field_name in data and data[field_name] not in (None, "", False):
             return field_name
     return None
@@ -537,16 +544,6 @@ class XrayUriRenderer:
                 )
                 continue
             proxy_type = _string(proxy.get("type")).lower()
-            if proxy_type == "ss":
-                unsupported_ss_field = _has_unsupported_qx_ss_plugin(proxy)
-                if unsupported_ss_field is not None:
-                    warnings.append(
-                        _skip_warning(
-                            proxy,
-                            f"unsupported Shadowsocks field {unsupported_ss_field}",
-                        )
-                    )
-                    continue
             renderer = renderers.get(proxy_type)
             if renderer is None:
                 warnings.append(
@@ -614,6 +611,16 @@ class QuantumultXRenderer:
                 )
                 continue
             proxy_type = _string(proxy.get("type")).lower()
+            if proxy_type == "ss":
+                unsupported_ss_field = _has_unsupported_qx_ss_plugin(proxy)
+                if unsupported_ss_field is not None:
+                    warnings.append(
+                        _skip_warning(
+                            proxy,
+                            f"unsupported Shadowsocks field {unsupported_ss_field}",
+                        )
+                    )
+                    continue
             renderer = renderers.get(proxy_type)
             if renderer is None:
                 warnings.append(

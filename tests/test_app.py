@@ -238,6 +238,78 @@ async def test_route_serves_xray_uri_output(tmp_path) -> None:
     assert response.text.startswith("trojan://")
 
 
+@pytest.mark.asyncio
+async def test_qx_import_endpoint_redirects_with_public_base_url(tmp_path) -> None:
+    """Test quantumult-x import companion redirects with public main URL."""
+    config = app_config_with_route_output(
+        tmp_path,
+        RouteOutputConfig(format="quantumult-x", resource_tag="MPM"),
+        public_base_url="https://mpm.example.com",
+    )
+    store = JsonSourceCacheStore(config.cache)
+    await store.set(
+        "airport_a",
+        source_cache_with_nodes(
+            ProxyRecord(
+                "airport_a",
+                {
+                    "name": "SS 01",
+                    "type": "ss",
+                    "server": "example.com",
+                    "port": 443,
+                    "cipher": "chacha20-ietf-poly1305",
+                    "password": "password",
+                },
+            )
+        ),
+    )
+    app = create_app(config, cache_store=store, refresher=None, scheduler=None)
+
+    with TestClient(app) as client:
+        response = client.get(
+            f"{config.routes['phone'].path}-import", follow_redirects=False
+        )
+
+    assert response.status_code == 302
+    assert response.headers["location"].startswith(
+        "quantumult-x:///add-resource?remote-resource="
+    )
+    assert "https%3A%2F%2Fmpm.example.com" in response.headers["location"]
+
+
+@pytest.mark.asyncio
+async def test_qx_import_endpoint_not_registered_when_disabled(tmp_path) -> None:
+    """Test quantumult-x import companion is absent when import_link is disabled."""
+    config = app_config_with_route_output(
+        tmp_path,
+        RouteOutputConfig(format="quantumult-x", import_link=False),
+        public_base_url="https://mpm.example.com",
+    )
+    store = JsonSourceCacheStore(config.cache)
+    await store.set(
+        "airport_a",
+        source_cache_with_nodes(
+            ProxyRecord(
+                "airport_a",
+                {
+                    "name": "SS 01",
+                    "type": "ss",
+                    "server": "example.com",
+                    "port": 443,
+                    "cipher": "chacha20-ietf-poly1305",
+                    "password": "password",
+                },
+            )
+        ),
+    )
+    app = create_app(config, cache_store=store, refresher=None, scheduler=None)
+
+    with TestClient(app) as client:
+        response = client.get(f"{config.routes['phone'].path}-import")
+
+    assert response.status_code == 404
+
+
 def test_health_and_unknown_path(tmp_path) -> None:
     """测试健康检查和未知路径返回正确的状态码。
 

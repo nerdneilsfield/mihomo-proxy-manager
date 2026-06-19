@@ -217,6 +217,158 @@ def _skip_warning(data: dict[str, object], reason: str) -> str:
     return f"skipping {name}: {reason}"
 
 
+def _qx_value(value: object) -> str:
+    """Convert a Quantumult X field value to a single-line scalar."""
+    return _string(value).replace("\r", " ").replace("\n", " ")
+
+
+def _qx_hostport(data: dict[str, object]) -> str | None:
+    """Build Quantumult X host:port endpoint."""
+    host = _string(data.get("server"))
+    port = _string(data.get("port"))
+    if not host or not port:
+        return None
+    return f"{host}:{port}"
+
+
+def _qx_tag(data: dict[str, object]) -> str:
+    """Build Quantumult X tag segment."""
+    return f"tag={_qx_value(data.get('name'))}"
+
+
+def _qx_tls_segments(
+    data: dict[str, object],
+    *,
+    default_host: str = "",
+    include_over_tls: bool = True,
+) -> list[str]:
+    """Build common Quantumult X TLS segments."""
+    segments: list[str] = []
+    if include_over_tls and _boolish(data.get("tls")):
+        segments.append("over-tls=true")
+    tls_host = _string(data.get("servername") or data.get("sni") or default_host)
+    if tls_host:
+        segments.append(f"tls-host={_qx_value(tls_host)}")
+    if "skip-cert-verify" in data:
+        verification = "false" if _boolish(data.get("skip-cert-verify")) else "true"
+        segments.append(f"tls-verification={verification}")
+    return segments
+
+
+def _qx_transport_segments(data: dict[str, object]) -> list[str] | None:
+    """Build simple Quantumult X transport segments, or None if unsupported."""
+    network = _string(data.get("network"))
+    if not network or network == "tcp":
+        return []
+    if network == "ws":
+        segments = ["obfs=ws"]
+        ws_opts = data.get("ws-opts")
+        if isinstance(ws_opts, dict):
+            path = _string(ws_opts.get("path"))
+            if path:
+                segments.append(f"obfs-uri={_qx_value(path)}")
+            headers = ws_opts.get("headers")
+            if isinstance(headers, dict):
+                host = _string(headers.get("Host") or headers.get("host"))
+                if host:
+                    segments.append(f"obfs-host={_qx_value(host)}")
+        return segments
+    if network == "grpc":
+        segments = ["obfs=grpc"]
+        grpc_opts = data.get("grpc-opts")
+        if isinstance(grpc_opts, dict):
+            service_name = _string(grpc_opts.get("grpc-service-name"))
+            if service_name:
+                segments.append(f"obfs-uri={_qx_value(service_name)}")
+        return segments
+    return None
+
+
+def _render_qx_ss(data: dict[str, object]) -> str | None:
+    """Render Shadowsocks proxy as Quantumult X server_remote line."""
+    hostport = _qx_hostport(data)
+    method = _string(data.get("cipher") or data.get("method"))
+    password = _string(data.get("password"))
+    if not hostport or not method or not password:
+        return None
+    transport = _qx_transport_segments(data)
+    if transport is None:
+        return None
+    segments = [
+        f"shadowsocks={hostport}",
+        f"method={_qx_value(method)}",
+        f"password={_qx_value(password)}",
+    ]
+    segments.extend(transport)
+    segments.append(_qx_tag(data))
+    return ", ".join(segments)
+
+
+def _render_qx_trojan(data: dict[str, object]) -> str | None:
+    """Render Trojan proxy as Quantumult X server_remote line."""
+    hostport = _qx_hostport(data)
+    password = _string(data.get("password"))
+    host = _string(data.get("server"))
+    if not hostport or not password:
+        return None
+    segments = [
+        f"trojan={hostport}",
+        f"password={_qx_value(password)}",
+        "over-tls=true",
+    ]
+    segments.extend(
+        _qx_tls_segments(data, default_host=host, include_over_tls=False)
+    )
+    transport = _qx_transport_segments(data)
+    if transport is None:
+        return None
+    segments.extend(transport)
+    segments.append(_qx_tag(data))
+    return ", ".join(segments)
+
+
+def _render_qx_vless(data: dict[str, object]) -> str | None:
+    """Render VLESS proxy as Quantumult X server_remote line."""
+    hostport = _qx_hostport(data)
+    uuid = _string(data.get("uuid"))
+    host = _string(data.get("server"))
+    if not hostport or not uuid:
+        return None
+    transport = _qx_transport_segments(data)
+    if transport is None:
+        return None
+    segments = [
+        f"vless={hostport}",
+        "method=none",
+        f"password={_qx_value(uuid)}",
+    ]
+    segments.extend(_qx_tls_segments(data, default_host=host))
+    segments.extend(transport)
+    segments.append(_qx_tag(data))
+    return ", ".join(segments)
+
+
+def _render_qx_vmess(data: dict[str, object]) -> str | None:
+    """Render VMess proxy as Quantumult X server_remote line."""
+    hostport = _qx_hostport(data)
+    uuid = _string(data.get("uuid"))
+    host = _string(data.get("server"))
+    if not hostport or not uuid:
+        return None
+    transport = _qx_transport_segments(data)
+    if transport is None:
+        return None
+    segments = [
+        f"vmess={hostport}",
+        "method=none",
+        f"password={_qx_value(uuid)}",
+    ]
+    segments.extend(_qx_tls_segments(data, default_host=host))
+    segments.extend(transport)
+    segments.append(_qx_tag(data))
+    return ", ".join(segments)
+
+
 def _render_ss_uri(data: dict[str, object]) -> str | None:
     """Render Shadowsocks proxy as xray-compatible URI."""
     hostport = _hostport(data)
@@ -368,6 +520,109 @@ class XrayUriRenderer:
     render_sync = render
 
 
+class QuantumultXRenderer:
+    """Render route records as Quantumult X server_remote output."""
+
+    def companion_paths(self, route: RouteConfig) -> tuple[str, ...]:
+        """Return Quantumult X import companion path when enabled."""
+        if route.output.import_link:
+            return (f"{route.path}-import",)
+        return ()
+
+    def render(self, request: RenderRequest) -> RenderResponse:
+        """Render Quantumult X output or import companion response."""
+        if request.companion == "import":
+            return self._render_import(request)
+
+        proxies = prepare_render_records(request.route, request.records)
+        warnings: list[str] = []
+        lines: list[str] = []
+        renderers = {
+            "ss": _render_qx_ss,
+            "trojan": _render_qx_trojan,
+            "vless": _render_qx_vless,
+            "vmess": _render_qx_vmess,
+        }
+
+        for proxy in proxies:
+            critical_field = _has_security_critical_field(proxy)
+            if critical_field is not None:
+                warnings.append(
+                    _skip_warning(
+                        proxy,
+                        f"unsupported security-critical field {critical_field}",
+                    )
+                )
+                continue
+            proxy_type = _string(proxy.get("type")).lower()
+            renderer = renderers.get(proxy_type)
+            if renderer is None:
+                warnings.append(
+                    _skip_warning(proxy, f"unsupported proxy type {proxy_type}")
+                )
+                continue
+            line = renderer(proxy)
+            if line is None:
+                network = _string(proxy.get("network"))
+                reason = (
+                    f"unsupported transport {network}"
+                    if network and network not in {"tcp", "ws", "grpc"}
+                    else "missing required Quantumult X fields"
+                )
+                warnings.append(_skip_warning(proxy, reason))
+                continue
+            lines.append(line)
+
+        if not lines:
+            return RenderResponse(
+                body=b"no supported nodes for quantumult-x output",
+                media_type="text/plain; charset=utf-8",
+                status_code=422,
+                warnings=tuple(warnings),
+            )
+
+        return RenderResponse(
+            body=("\n".join(lines) + "\n").encode("utf-8"),
+            media_type="text/plain; charset=utf-8",
+            warnings=tuple(warnings),
+        )
+
+    def _render_import(self, request: RenderRequest) -> RenderResponse:
+        """Render Quantumult X remote resource import response."""
+        resource_tag = request.route.output.resource_tag or request.route.name
+        payload = {
+            "server_remote": [
+                f"{request.main_public_url}, tag={resource_tag}, "
+                "update-interval=86400, enabled=true"
+            ]
+        }
+        encoded = quote(
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+            safe="",
+        )
+        if request.route.output.import_target == "universal-link":
+            target = (
+                "https://quantumult.app/x/open-app/add-resource"
+                f"?remote-resource={encoded}"
+            )
+        else:
+            target = f"quantumult-x:///add-resource?remote-resource={encoded}"
+
+        if request.route.output.import_response == "plain":
+            return RenderResponse(
+                body=f"{target}\n".encode("utf-8"),
+                media_type="text/plain; charset=utf-8",
+            )
+        return RenderResponse(
+            body=b"",
+            media_type="text/plain; charset=utf-8",
+            headers={"Location": target},
+            status_code=302,
+        )
+
+    render_sync = render
+
+
 class ProviderRenderer:
     """将代理记录渲染为 Mihomo provider 格式 YAML 的渲染器。
 
@@ -454,4 +709,5 @@ def build_renderer_registry(*, yaml_sort_keys: bool = False) -> dict[str, RouteR
             ProviderRenderer(yaml_sort_keys=yaml_sort_keys)
         ),
         "xray-uri": XrayUriRenderer(),
+        "quantumult-x": QuantumultXRenderer(),
     }

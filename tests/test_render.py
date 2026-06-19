@@ -4,6 +4,8 @@ YAML renderer tests including renaming, deduplication, and meta comments.
 """
 
 import base64
+import json
+from urllib.parse import unquote
 
 import yaml
 
@@ -60,6 +62,29 @@ def xray_route(encoding: str = "base64") -> RouteConfig:
         sources=("airport_a",),
         require_all_sources=False,
         output=RouteOutputConfig(format="xray-uri", encoding=encoding),
+        rename=RenameConfig(),
+        filter=FilterConfig(),
+    )
+
+
+def quantumult_x_route(
+    *,
+    import_response: str = "redirect",
+    import_target: str = "app-scheme",
+    resource_tag: str | None = None,
+) -> RouteConfig:
+    """Create a route for quantumult-x renderer tests."""
+    return RouteConfig(
+        name="qx",
+        path="/qx",
+        sources=("airport_a",),
+        require_all_sources=False,
+        output=RouteOutputConfig(
+            format="quantumult-x",
+            import_response=import_response,
+            import_target=import_target,
+            resource_tag=resource_tag,
+        ),
         rename=RenameConfig(),
         filter=FilterConfig(),
     )
@@ -423,6 +448,127 @@ def test_xray_uri_renderer_rejects_certificate_pinning_like_fields() -> None:
         assert response.status_code == 422
         assert response.body == b"no supported nodes for xray-uri output"
         assert any(field_name in warning for warning in response.warnings)
+
+
+def test_quantumult_x_renderer_outputs_server_lines() -> None:
+    """Test quantumult-x server_remote lines for SS and Trojan nodes."""
+    response = build_renderer_registry()["quantumult-x"].render(
+        RenderRequest(
+            quantumult_x_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "SS 01",
+                        "type": "ss",
+                        "server": "example.com",
+                        "port": 443,
+                        "cipher": "chacha20-ietf-poly1305",
+                        "password": "password",
+                    },
+                ),
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "Trojan 01",
+                        "type": "trojan",
+                        "server": "example.com",
+                        "port": 443,
+                        "password": "secret",
+                        "sni": "example.com",
+                        "skip-cert-verify": False,
+                    },
+                ),
+            ],
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert response.media_type == "text/plain; charset=utf-8"
+    assert (
+        "shadowsocks=example.com:443, method=chacha20-ietf-poly1305, "
+        "password=password, tag=SS 01"
+    ) in text
+    assert (
+        "trojan=example.com:443, password=secret, over-tls=true, "
+        "tls-host=example.com, tls-verification=true, tag=Trojan 01"
+    ) in text
+    assert response.status_code == 200
+
+
+def test_quantumult_x_import_redirect_response() -> None:
+    """Test quantumult-x app-scheme import redirect response."""
+    response = build_renderer_registry()["quantumult-x"].render(
+        RenderRequest(
+            quantumult_x_route(resource_tag="MPM"),
+            [],
+            main_public_url="https://mpm.example.com/qx",
+            companion="import",
+        )
+    )
+
+    assert response.status_code == 302
+    assert response.body == b""
+    assert response.headers["Location"].startswith(
+        "quantumult-x:///add-resource?remote-resource="
+    )
+    encoded = response.headers["Location"].split("remote-resource=", 1)[1]
+    payload = json.loads(unquote(encoded))
+    assert payload == {
+        "server_remote": [
+            "https://mpm.example.com/qx, tag=MPM, update-interval=86400, "
+            "enabled=true"
+        ]
+    }
+
+
+def test_quantumult_x_import_plain_universal_link_response() -> None:
+    """Test quantumult-x universal-link import plain response."""
+    response = build_renderer_registry()["quantumult-x"].render(
+        RenderRequest(
+            quantumult_x_route(
+                import_response="plain", import_target="universal-link"
+            ),
+            [],
+            main_public_url="https://mpm.example.com/qx",
+            companion="import",
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert response.status_code == 200
+    assert text.startswith(
+        "https://quantumult.app/x/open-app/add-resource?remote-resource="
+    )
+    assert "remote-resource=" in text
+    assert text.endswith("\n")
+
+
+def test_quantumult_x_renderer_skips_unsupported_reality_node() -> None:
+    """Test quantumult-x rejects unsupported Reality/flow fields."""
+    response = build_renderer_registry()["quantumult-x"].render(
+        RenderRequest(
+            quantumult_x_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "Reality",
+                        "type": "vless",
+                        "server": "example.com",
+                        "port": 443,
+                        "uuid": "00000000-0000-0000-0000-000000000000",
+                        "reality-opts": {"public-key": REALITY_PUBLIC_KEY},
+                        "flow": "xtls-rprx-vision",
+                    },
+                )
+            ],
+        )
+    )
+
+    assert response.status_code == 422
+    assert response.body == b"no supported nodes for quantumult-x output"
+    assert response.warnings
 
 
 def test_prepare_render_records_preserves_filtering_and_renaming() -> None:

@@ -227,7 +227,7 @@ exclude = "倍率|测试"
 | --- | --- |
 | `server.host` / `server.port` | HTTP listen address and port. Put the service behind a reverse proxy for public deployments. |
 | `server.health_path` | Liveness path. It only means the process is alive. |
-| `server.status_path` | Status path. Use a random path and avoid exposing it to clients. |
+| `server.status_path` | Status path. Use a random path and avoid exposing it to clients. The root path returns an HTML dashboard; `{status_path}/api` returns the JSON API. |
 | `server.route_refresh_wait` | How long a route request waits when a required cache is missing. |
 | `cache.dir` | Directory for source JSON cache files. Cache files contain proxy data. |
 | `cache.max_stale` | Maximum age for cache entries. Older entries are treated as unavailable. |

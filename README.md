@@ -227,7 +227,7 @@ exclude = "倍率|测试"
 | --- | --- |
 | `server.host` / `server.port` | HTTP 服务监听地址和端口。公网部署时建议放在反向代理后面。 |
 | `server.health_path` | liveness 检查路径，只表示服务进程还活着。 |
-| `server.status_path` | 状态接口路径，建议使用随机路径，不要公开给客户端。 |
+| `server.status_path` | 状态页面路径，建议使用随机路径，不要公开给客户端。根路径返回 HTML 面板，`{status_path}/api` 返回 JSON API。 |
 | `server.route_refresh_wait` | route 请求发现缓存缺失时，最多等待刷新完成的时间。 |
 | `cache.dir` | source JSON 缓存目录。缓存里包含代理节点信息，应保护目录权限。 |
 | `cache.max_stale` | 缓存最长可用时间，超过后 route 会把该 source 视为不可用。 |

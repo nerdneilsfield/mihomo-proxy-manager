@@ -185,6 +185,8 @@ def _has_security_critical_field(data: dict[str, object]) -> str | None:
         "reality-opts",
         "ech-opts",
         "flow",
+        "fingerprint",
+        "certificate",
         "certificate-pinning",
         "pinned-cert",
         "fingerprint-sha256",

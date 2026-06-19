@@ -369,6 +369,34 @@ def test_xray_uri_renderer_rejects_unmapped_security_critical_fields() -> None:
     assert any("reality-opts" in warning for warning in response.warnings)
 
 
+def test_xray_uri_renderer_rejects_certificate_pinning_like_fields() -> None:
+    """测试证书钉扎类字段会被拒绝 / Test certificate pinning-like fields are rejected."""
+    for field_name in ("fingerprint", "certificate"):
+        response = XrayUriRenderer().render(
+            RenderRequest(
+                xray_route(encoding="plain"),
+                [
+                    ProxyRecord(
+                        "airport_a",
+                        {
+                            "name": f"Unsafe {field_name}",
+                            "type": "vless",
+                            "server": "example.com",
+                            "port": 443,
+                            "uuid": "00000000-0000-0000-0000-000000000000",
+                            "tls": True,
+                            field_name: "sha256/example",
+                        },
+                    )
+                ],
+            )
+        )
+
+        assert response.status_code == 422
+        assert response.body == b"no supported nodes for xray-uri output"
+        assert any(field_name in warning for warning in response.warnings)
+
+
 def test_prepare_render_records_preserves_filtering_and_renaming() -> None:
     """测试共享准备流程保留过滤、重命名、标准化与去重 / Test shared preparation keeps filter, rename, normalize, and dedupe."""
     test_route = RouteConfig(

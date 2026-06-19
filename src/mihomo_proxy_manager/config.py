@@ -698,6 +698,7 @@ def load_config(path: Path, *, validate: bool = True) -> LoadedConfig:
         health_path=server_raw.get("health_path", "/healthz"),
         status_path=server_raw.get("status_path"),
         route_refresh_wait=parse_duration(server_raw.get("route_refresh_wait", "10s")),
+        public_base_url=server_raw.get("public_base_url"),
     )
     cache = CacheConfig(
         dir=Path(cache_raw.get("dir", "data/cache")),
@@ -791,8 +792,30 @@ def load_config(path: Path, *, validate: bool = True) -> LoadedConfig:
         )
 
     routes = {}
+    allowed_route_output_keys = {
+        "format",
+        "include_meta_comments",
+        "mode",
+        "encoding",
+        "import_link",
+        "import_response",
+        "import_target",
+        "resource_tag",
+        "test_url",
+        "test_interval",
+        "test_timeout",
+        "test_tolerance",
+    }
     for name, values in _table(raw, "routes").items():
         output_values = _table(values, "output")
+        unknown_output_keys = sorted(set(output_values) - allowed_route_output_keys)
+        if unknown_output_keys:
+            raise ValueError(
+                "\n".join(
+                    f"route {name!r} output key is unsupported: {key!r}"
+                    for key in unknown_output_keys
+                )
+            )
         routes[name] = RouteConfig(
             name=name,
             path=values.get("path", ""),
@@ -805,6 +828,18 @@ def load_config(path: Path, *, validate: bool = True) -> LoadedConfig:
                         "include_meta_comments", output.default_include_meta_comments
                     )
                 ),
+                mode=output_values.get("mode", "default"),
+                encoding=output_values.get("encoding", "base64"),
+                import_link=bool(output_values.get("import_link", True)),
+                import_response=output_values.get("import_response", "redirect"),
+                import_target=output_values.get("import_target", "app-scheme"),
+                resource_tag=output_values.get("resource_tag"),
+                test_url=output_values.get(
+                    "test_url", "http://www.gstatic.com/generate_204"
+                ),
+                test_interval=int(output_values.get("test_interval", 600)),
+                test_timeout=int(output_values.get("test_timeout", 5)),
+                test_tolerance=int(output_values.get("test_tolerance", 100)),
             ),
             rename=_rename(_table(values, "rename")),
             filter=_filter(_table(values, "filter")),

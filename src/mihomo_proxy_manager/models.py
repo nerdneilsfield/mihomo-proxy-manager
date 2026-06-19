@@ -146,8 +146,18 @@ class RouteOutputConfig:
     Route output configuration controlling output format and meta comments.
     """
 
-    format: Literal["provider"] = "provider"
+    format: Literal["provider", "surfboard", "quantumult-x", "xray-uri"] = "provider"
     include_meta_comments: bool = False
+    mode: Literal["default", "full-profile", "server-remote"] = "default"
+    encoding: Literal["base64", "plain"] = "base64"
+    import_link: bool = True
+    import_response: Literal["redirect", "plain"] = "redirect"
+    import_target: Literal["app-scheme", "universal-link"] = "app-scheme"
+    resource_tag: str | None = None
+    test_url: str = "http://www.gstatic.com/generate_204"
+    test_interval: int = 600
+    test_timeout: int = 5
+    test_tolerance: int = 100
 
 
 @dataclass(frozen=True)
@@ -205,6 +215,7 @@ class ServerConfig:
     health_path: str
     status_path: str | None
     route_refresh_wait: timedelta
+    public_base_url: str | None = None
 
 
 @dataclass(frozen=True)

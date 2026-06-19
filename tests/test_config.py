@@ -84,6 +84,85 @@ def test_load_config_applies_defaults(temp_config_path: Path) -> None:
     assert config.routes["phone"].sources == ("airport_a",)
 
 
+def test_route_output_new_format_fields_are_parsed(temp_config_path: Path) -> None:
+    body = """
+[server]
+public_base_url = "https://mpm.example.com/base"
+
+[sources.a]
+url = "https://example.com/sub"
+
+[routes.surf]
+path = "/p/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+sources = ["a"]
+
+[routes.surf.output]
+format = "surfboard"
+mode = "full-profile"
+test_url = "http://www.gstatic.com/generate_204"
+test_interval = 300
+test_timeout = 4
+test_tolerance = 50
+
+[routes.qx]
+path = "/p/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+sources = ["a"]
+
+[routes.qx.output]
+format = "quantumult-x"
+mode = "server-remote"
+import_link = true
+import_response = "plain"
+import_target = "universal-link"
+resource_tag = "Phones"
+
+[routes.v2rayn]
+path = "/p/cccccccccccccccccccccccccccccccccccccccc"
+sources = ["a"]
+
+[routes.v2rayn.output]
+format = "xray-uri"
+encoding = "plain"
+"""
+    loaded = load_config(write_config(temp_config_path, body), validate=False)
+
+    assert loaded.server.public_base_url == "https://mpm.example.com/base"
+
+    surf_output = loaded.routes["surf"].output
+    assert surf_output.format == "surfboard"
+    assert surf_output.include_meta_comments is False
+    assert surf_output.mode == "full-profile"
+    assert surf_output.test_url == "http://www.gstatic.com/generate_204"
+    assert surf_output.test_interval == 300
+    assert surf_output.test_timeout == 4
+    assert surf_output.test_tolerance == 50
+
+    qx_output = loaded.routes["qx"].output
+    assert qx_output.format == "quantumult-x"
+    assert qx_output.mode == "server-remote"
+    assert qx_output.import_link is True
+    assert qx_output.import_response == "plain"
+    assert qx_output.import_target == "universal-link"
+    assert qx_output.resource_tag == "Phones"
+
+    v2rayn_output = loaded.routes["v2rayn"].output
+    assert v2rayn_output.format == "xray-uri"
+    assert v2rayn_output.encoding == "plain"
+
+
+def test_route_output_unknown_key_raises_clear_error(temp_config_path: Path) -> None:
+    body = (
+        minimal_config()
+        + """
+[routes.phone.output]
+unexpected = "value"
+"""
+    )
+
+    with pytest.raises(ValueError, match="output key is unsupported"):
+        load_config(write_config(temp_config_path, body), validate=False)
+
+
 def test_validation_collects_multiple_errors(temp_config_path: Path) -> None:
     """测试验证收集多个错误。
 

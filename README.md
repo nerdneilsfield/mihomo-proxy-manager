@@ -33,6 +33,7 @@
 - 聚合多个 source，并按 route 输出不同 provider。
 - 支持 Clash/Mihomo YAML provider、完整 YAML 配置、常见 share links 和 base64 订阅。
 - 支持 `ss://`、`vmess://`、`vless://`、`trojan://`、`hysteria2://`。
+- Route 格式研究与扩展边界见 [docs/route-formats.md](docs/route-formats.md)。
 - 支持 source 层和 route 层的 include/exclude 正则过滤、类型过滤、前后缀重命名。
 - 输出 Mihomo 兼容的 `proxies:` YAML。
 - source 级 JSON 缓存，刷新失败时保留旧缓存。

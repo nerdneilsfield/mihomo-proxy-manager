@@ -33,6 +33,7 @@ The project is built for a practical problem: raw subscription URLs are often no
 - Aggregates multiple sources and exposes different provider routes.
 - Parses Clash/Mihomo provider YAML, full YAML configs, common share links, and base64 subscriptions.
 - Supports `ss://`, `vmess://`, `vless://`, `trojan://`, and `hysteria2://`.
+- Route format research and extension boundaries are documented in [docs/route-formats.md](docs/route-formats.md).
 - Supports source-level and route-level regex filters, type filters, prefixes, and suffixes.
 - Renders Mihomo-compatible `proxies:` YAML.
 - Keeps source-level JSON caches and preserves old cache on refresh failure.

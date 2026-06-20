@@ -32,7 +32,7 @@ Date: 2026-06-19
 
 | Target | Current support | Route format | Recommended MVP | Notes |
 | --- | --- | --- | --- | --- |
-| Clash/Mihomo provider | Supported as input and output | `provider` or alias `clash-provider` | Keep current `proxies:` YAML | Mihomo provider content也可为 URI lines/base64，但 YAML 最稳。 |
+| Clash/Mihomo provider | Supported as input and output | `provider` | Keep current `proxies:` YAML | Mihomo provider content也可为 URI lines/base64，但 YAML 最稳。 |
 | Xray/V2Ray subscription | Implemented route output | `xray-uri` | Default base64 URI subscription; `encoding = "plain"` optional | Direct v2rayN-compatible subscription; no companion endpoint. Full Xray JSON remains future work. |
 | Quantumult X profile | Implemented route output | `quantumult-x` | Server lines on main route plus `-import` companion | `server_remote`/server lines output; app-scheme/universal-link and redirect/plain import supported. |
 | Surfboard profile | Implemented route output | `surfboard` | Minimal full profile with `Main`, `Auto`, `Proxy`, `FINAL,Main` | Main route returns profile; `-nodes` companion returns proxy lines for `policy-path`. |
@@ -148,12 +148,7 @@ proxy-providers:
 | `type = trojan` | `type: trojan` | Needs `password`; TLS is normally expected. |
 | `type = hysteria2` | `type: hysteria2` | Needs `password` or auth field; port hopping and obfs need explicit mapping. |
 
-MVP: keep existing renderer unchanged. Add alias only if config ergonomics matters:
-
-```toml
-[routes.phone.output]
-format = "clash-provider" # alias of provider
-```
+MVP keeps the existing `provider` renderer unchanged. No provider alias is implemented.
 
 ## Xray/V2Ray Subscription
 
@@ -186,22 +181,22 @@ Good plain route output:
 ```text
 vmess://<base64-json>
 vless://00000000-0000-0000-0000-000000000000@example.com:443?encryption=none&security=tls&sni=example.com&type=ws&host=example.com&path=%2Fws#VLESS%2001
-trojan://password@example.com:443?security=tls&sni=example.com&type=ws&host=example.com&path=%2Fws#Trojan%2001
+trojan://password@example.com:443?sni=example.com&type=ws&host=example.com&path=%2Fws#Trojan%2001
 ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTpwYXNzd29yZA@example.com:443#SS%2001
 ```
 
 `encoding = "base64"` wraps the whole text payload after joining lines with `\n`. Do not base64 each URI separately.
 
-Phase-one supported protocols are `ss`, `vmess`, `vless`, and `trojan`. Unsupported protocols and unsupported security-critical fields are skipped with route render warnings; if every node is skipped, the route returns HTTP 422 with `no supported nodes for xray-uri output`.
+Phase-one supported protocols are `ss`, `vmess`, `vless`, and `trojan`. Unsupported protocols, Shadowsocks plugin fields, and unsupported security-critical fields are skipped with route render warnings; if every node is skipped, the route returns HTTP 422 with `no supported nodes for xray-uri output`.
 
 ### URI Mapping
 
 | Protocol | Required fields | URI shape | Notes |
 | --- | --- | --- | --- |
-| `ss` | `cipher`, `password`, `server`, `port` | `ss://base64(method:password)@host:port#name` | SIP002 plugin opts need URL query support before claiming support. |
-| `vmess` | `uuid`, `server`, `port` | `vmess://base64(json)` | JSON usually carries `v`, `ps`, `add`, `port`, `id`, `aid`, `scy`, `net`, `type`, `host`, `path`, `tls`, `sni`, `alpn`, `fp`。 |
-| `vless` | `uuid`, `server`, `port`, `encryption=none` | `vless://uuid@host:port?...#name` | `flow`, `security=tls/reality`, `sni`, `fp`, `pbk`, `sid`, `type`, `path`, `host` are query params. |
-| `trojan` | `password`, `server`, `port` | `trojan://password@host:port?...#name` | TLS fields are query params; websocket uses `type=ws`, `path`, `host`。 |
+| `ss` | `cipher`, `password`, `server`, `port` | `ss://base64(method:password)@host:port#name` | SIP002 plugin opts are not implemented; nodes with `plugin` / `plugin-opts` are skipped. |
+| `vmess` | `uuid`, `server`, `port` | `vmess://base64(json)` | JSON carries `v`, `ps`, `add`, `port`, `id`, `aid`, `net`, `type`, `host`, `path`, `tls`, `sni`, and optional `fp`。 |
+| `vless` | `uuid`, `server`, `port`, `encryption=none` | `vless://uuid@host:port?...#name` | Implemented query params include `encryption=none`, `security=tls`, `sni`, `fp`, `type`, `path`, `host`, and `serviceName`; `flow` and Reality are skipped. |
+| `trojan` | `password`, `server`, `port` | `trojan://password@host:port?...#name` | Implemented query params include `sni`, `allowInsecure`, `fp`, `type`, `path`, `host`, and `serviceName`. |
 | `hysteria2` | future | `hysteria2://password@host:port?...#name` | Not implemented for `xray-uri` phase one; URI field names vary across clients. |
 
 Shared URI rules:
@@ -210,8 +205,8 @@ Shared URI rules:
 - `server`, `port` -> URL host and port; IPv6 host must be bracketed.
 - `uuid` or `password` -> URL userinfo; percent-encode reserved characters.
 - `network = ws` -> `type=ws`, `path`, `host`.
-- TLS fields -> `security=tls`, `sni`, `alpn`, `fp`, `allowInsecure`/`insecure` depending target convention.
-- Reality fields -> `security=reality`, `pbk`, `sid`, `fp`, `sni`, `flow` when supported.
+- TLS fields -> VLESS uses `security=tls`; VMess JSON uses `tls`; SNI and client fingerprint map where supported by the implemented renderer.
+- Reality, ECH, certificate pinning-like fields, and VLESS `flow` are skipped until exact mapping is implemented.
 
 ### Future `xray-json` Output
 
@@ -675,7 +670,7 @@ Target-specific modes:
 
 | Format | MVP mode | Later modes |
 | --- | --- | --- |
-| `provider` | existing YAML provider | `uri`, `base64-uri`, or alias `clash-provider` |
+| `provider` | existing YAML provider | `uri` or `base64-uri` if needed later |
 | `xray-uri` | default base64 URI subscription | plain URI lines |
 | `xray-json` | future `outbounds` | future `full-config` |
 | `sing-box` | future `outbounds` | future `full-config`, `selector`, `urltest` |
@@ -706,12 +701,12 @@ Renderer split:
 | `password` | `password` | userinfo | protocol-specific | `password` | `password` | `password` | quoted/positional password |
 | `alterId` | `alterId` | VMess JSON `aid` | VMess settings | `alter_id` | future legacy AEAD flag | `aead=false` for legacy | not documented in fetched example |
 | `network = ws` | `network`, `ws-opts` | `type=ws`, `path`, `host` | `streamSettings.wsSettings` | `transport.type = ws` | `ws=true`, `ws-path`, `ws-headers` | `obfs=ws/wss`, `obfs-uri`, `obfs-host` | `transport:ws`, `path`, `host` |
-| TLS enabled | `tls` | `security=tls` | `streamSettings.security` | `tls.enabled` | `tls=true` / protocol default | `over-tls=true` or `obfs=wss` | `over-tls:true` |
+| TLS enabled | `tls` | VLESS `security=tls`; VMess JSON `tls`; Trojan keeps TLS implicit unless query params are present | `streamSettings.security` | `tls.enabled` | `tls=true` / protocol default | `over-tls=true` or `obfs=wss` | `over-tls:true` |
 | `sni` / `servername` | `sni` / `servername` | `sni` | TLS server name | `tls.server_name` | `sni` | `tls-host` / `obfs-host` | `tls-name` |
 | `skip-cert-verify` | `skip-cert-verify` | `allowInsecure` / `insecure` | `allowInsecure` | `tls.insecure` | `skip-cert-verify` | `tls-verification=false` | `skip-cert-verify:true` |
-| Reality public key | `reality-opts.public-key` | `pbk` | Reality settings | target-version-specific TLS Reality | not validated | `reality-base64-pubkey` | not validated |
-| Reality short id | `reality-opts.short-id` | `sid` | Reality settings | target-version-specific TLS Reality | not validated | `reality-hex-shortid` | not validated |
-| VLESS flow | `flow` | `flow` | `settings.flow` | `flow` | not validated | `vless-flow` | not validated |
+| Reality public key | `reality-opts.public-key` | skipped | Reality settings | target-version-specific TLS Reality | not validated | `reality-base64-pubkey` future | not validated |
+| Reality short id | `reality-opts.short-id` | skipped | Reality settings | target-version-specific TLS Reality | not validated | `reality-hex-shortid` future | not validated |
+| VLESS flow | `flow` | skipped | `settings.flow` | `flow` | not validated | `vless-flow` future | not validated |
 
 ## Implementation Checklist
 

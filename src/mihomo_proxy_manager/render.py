@@ -223,6 +223,16 @@ def _qx_value(value: object) -> str:
     return _string(value).replace("\r", " ").replace("\n", " ")
 
 
+def _profile_scalar_issue(value: object) -> str | None:
+    """Return why a comma-delimited profile scalar cannot be represented."""
+    text = _string(value)
+    if any(ch in text for ch in ("\r", "\n", ",")):
+        return "comma/control character"
+    if re.search(r"[\x00-\x1f\x7f]", text):
+        return "control character"
+    return None
+
+
 def _qx_clean_label(value: object) -> str:
     """Sanitize comma/control-sensitive Quantumult X label text."""
     cleaned = re.sub(r"[\x00-\x1f\x7f,]+", " ", _string(value))
@@ -300,6 +310,40 @@ def _has_unsupported_sb_ss_plugin(data: dict[str, object]) -> str | None:
     return None
 
 
+def _has_unrepresentable_sb_scalar(data: dict[str, object]) -> str | None:
+    """Return a Surfboard scalar field that needs unsupported escaping."""
+    scalar_fields = (
+        "server",
+        "port",
+        "cipher",
+        "method",
+        "password",
+        "uuid",
+        "sni",
+        "servername",
+        "obfs",
+        "obfs-host",
+        "obfs-uri",
+        "ws-path",
+    )
+    for field_name in scalar_fields:
+        if field_name in data and _profile_scalar_issue(data[field_name]) is not None:
+            return field_name
+    ws_opts = data.get("ws-opts")
+    if isinstance(ws_opts, dict):
+        if _profile_scalar_issue(ws_opts.get("path")) is not None:
+            return "ws-opts.path"
+        headers = ws_opts.get("headers")
+        if isinstance(headers, dict):
+            for key, value in headers.items():
+                if (
+                    _profile_scalar_issue(key) is not None
+                    or _profile_scalar_issue(value) is not None
+                ):
+                    return "ws-opts.headers"
+    return None
+
+
 def _prepare_surfboard_records(
     route: RouteConfig, records: Sequence[SourceRecord]
 ) -> tuple[list[dict[str, object]], tuple[str, ...]]:
@@ -337,6 +381,15 @@ def _prepare_surfboard_records(
                     )
                 )
                 continue
+        unrepresentable_field = _has_unrepresentable_sb_scalar(data)
+        if unrepresentable_field is not None:
+            warnings.append(
+                _skip_warning(
+                    data,
+                    f"unsupported comma/control character in {unrepresentable_field}",
+                )
+            )
+            continue
         normalized, normalize_warnings = normalize_proxy(data)
         if normalized is None:
             for warning in normalize_warnings:
@@ -425,6 +478,8 @@ def _qx_hostport(data: dict[str, object]) -> str | None:
     host = _string(data.get("server"))
     port = _string(data.get("port"))
     if not host or not port:
+        return None
+    if ":" in host:
         return None
     return f"{host}:{port}"
 
@@ -537,6 +592,43 @@ def _has_unsupported_qx_ss_plugin(data: dict[str, object]) -> str | None:
     return None
 
 
+def _has_unrepresentable_qx_scalar(data: dict[str, object]) -> str | None:
+    """Return a Quantumult X scalar field that needs unsupported escaping."""
+    if ":" in _string(data.get("server")):
+        return "server"
+    scalar_fields = (
+        "server",
+        "port",
+        "cipher",
+        "method",
+        "password",
+        "uuid",
+        "sni",
+        "servername",
+    )
+    for field_name in scalar_fields:
+        if field_name in data and _profile_scalar_issue(data[field_name]) is not None:
+            return field_name
+    ws_opts = data.get("ws-opts")
+    if isinstance(ws_opts, dict):
+        if _profile_scalar_issue(ws_opts.get("path")) is not None:
+            return "ws-opts.path"
+        headers = ws_opts.get("headers")
+        if isinstance(headers, dict):
+            for key, value in headers.items():
+                if (
+                    _profile_scalar_issue(key) is not None
+                    or _profile_scalar_issue(value) is not None
+                ):
+                    return "ws-opts.headers"
+    grpc_opts = data.get("grpc-opts")
+    if isinstance(grpc_opts, dict) and _profile_scalar_issue(
+        grpc_opts.get("grpc-service-name")
+    ) is not None:
+        return "grpc-opts.grpc-service-name"
+    return None
+
+
 def _render_qx_ss(data: dict[str, object]) -> str | None:
     """Render Shadowsocks proxy as Quantumult X server_remote line."""
     hostport = _qx_hostport(data)
@@ -626,6 +718,14 @@ def _render_ss_uri(data: dict[str, object]) -> str | None:
     userinfo = base64.urlsafe_b64encode(f"{method}:{password}".encode("utf-8"))
     encoded_userinfo = userinfo.decode("ascii").rstrip("=")
     return f"ss://{encoded_userinfo}@{hostport}#{_encoded_name(data)}"
+
+
+def _has_unsupported_xray_ss_plugin(data: dict[str, object]) -> str | None:
+    """Return unsupported Shadowsocks SIP002 plugin field for xray-uri."""
+    for field_name in ("plugin", "plugin-opts"):
+        if field_name in data and data[field_name] not in (None, "", False):
+            return field_name
+    return None
 
 
 def _render_trojan_uri(data: dict[str, object]) -> str | None:
@@ -735,6 +835,16 @@ class XrayUriRenderer:
                 )
                 continue
             proxy_type = _string(proxy.get("type")).lower()
+            if proxy_type == "ss":
+                unsupported_ss_field = _has_unsupported_xray_ss_plugin(proxy)
+                if unsupported_ss_field is not None:
+                    warnings.append(
+                        _skip_warning(
+                            proxy,
+                            f"unsupported Shadowsocks field {unsupported_ss_field}",
+                        )
+                    )
+                    continue
             renderer = renderers.get(proxy_type)
             if renderer is None:
                 warnings.append(
@@ -914,6 +1024,15 @@ class QuantumultXRenderer:
                         )
                     )
                     continue
+            unrepresentable_field = _has_unrepresentable_qx_scalar(proxy)
+            if unrepresentable_field is not None:
+                warnings.append(
+                    _skip_warning(
+                        proxy,
+                        f"unsupported comma/control or IPv6 field {unrepresentable_field}",
+                    )
+                )
+                continue
             renderer = renderers.get(proxy_type)
             if renderer is None:
                 warnings.append(

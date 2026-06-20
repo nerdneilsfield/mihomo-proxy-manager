@@ -391,8 +391,8 @@ def test_xray_uri_renderer_plain_trojan_query() -> None:
     assert response.media_type == "text/plain; charset=utf-8"
 
 
-def test_xray_uri_renderer_allows_shadowsocks_plugin_fields() -> None:
-    """Test xray-uri does not apply Quantumult X-only SS plugin guard."""
+def test_xray_uri_renderer_rejects_shadowsocks_plugin_fields() -> None:
+    """Test xray-uri skips unsupported Shadowsocks SIP002 plugin fields."""
     response = XrayUriRenderer().render(
         RenderRequest(
             xray_route(encoding="plain"),
@@ -414,11 +414,10 @@ def test_xray_uri_renderer_allows_shadowsocks_plugin_fields() -> None:
         )
     )
 
-    text = response.body.decode("utf-8")
-    assert response.status_code == 200
-    assert text.startswith("ss://")
-    assert not any(
-        "unsupported Shadowsocks field" in warning
+    assert response.status_code == 422
+    assert response.body == b"no supported nodes for xray-uri output"
+    assert any(
+        "unsupported Shadowsocks field plugin" in warning
         for warning in response.warnings
     )
 
@@ -608,6 +607,58 @@ def test_quantumult_x_renderer_sanitizes_node_tag() -> None:
     assert tag_segment == "HK 01\n"
     assert "HK, 01" not in tag_segment
     assert "\n" not in tag_segment.rstrip("\n")
+
+
+def test_quantumult_x_rejects_comma_delimited_scalar_values() -> None:
+    """Test quantumult-x skips values requiring unsupported comma escaping."""
+    response = build_renderer_registry()["quantumult-x"].render(
+        RenderRequest(
+            quantumult_x_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "SS Comma",
+                        "type": "ss",
+                        "server": "example.com",
+                        "port": 443,
+                        "cipher": "chacha20-ietf-poly1305",
+                        "password": "pa,ss",
+                    },
+                )
+            ],
+        )
+    )
+
+    assert response.status_code == 422
+    assert response.warnings
+    assert any("password" in warning for warning in response.warnings)
+
+
+def test_quantumult_x_rejects_ipv6_host_until_supported() -> None:
+    """Test quantumult-x skips IPv6 hosts instead of rendering ambiguous hostport."""
+    response = build_renderer_registry()["quantumult-x"].render(
+        RenderRequest(
+            quantumult_x_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "SS IPv6",
+                        "type": "ss",
+                        "server": "2001:db8::1",
+                        "port": 443,
+                        "cipher": "chacha20-ietf-poly1305",
+                        "password": "password",
+                    },
+                )
+            ],
+        )
+    )
+
+    assert response.status_code == 422
+    assert response.warnings
+    assert any("server" in warning for warning in response.warnings)
 
 
 def test_quantumult_x_vless_tcp_tls_uses_obfs_over_tls() -> None:
@@ -909,6 +960,32 @@ def test_surfboard_renderer_warns_when_unknown_node_is_dropped() -> None:
         "unsupported proxy type unknown" in warning
         for warning in response.warnings
     )
+
+
+def test_surfboard_rejects_comma_delimited_credentials() -> None:
+    """Test Surfboard skips credentials requiring unsupported comma escaping."""
+    response = build_renderer_registry()["surfboard"].render(
+        RenderRequest(
+            surfboard_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "SS Comma",
+                        "type": "ss",
+                        "server": "example.com",
+                        "port": 443,
+                        "cipher": "chacha20-ietf-poly1305",
+                        "password": "pa,ss",
+                    },
+                )
+            ],
+        )
+    )
+
+    assert response.status_code == 422
+    assert response.warnings
+    assert any("password" in warning for warning in response.warnings)
 
 
 def test_surfboard_vmess_tls_uses_sni_and_skip_cert_verify() -> None:

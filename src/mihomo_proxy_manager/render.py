@@ -364,7 +364,7 @@ def _prepare_surfboard_records(
     )
     normalized_records: list[ProxyRecord] = []
     warnings: list[str] = []
-    supported_types = {"ss", "trojan", "vmess", "hysteria2"}
+    supported_types = {"ss", "trojan", "vmess"}
     for record in transformed:
         data = dict(record.data)
         critical_field = _has_security_critical_field(data)
@@ -475,62 +475,6 @@ def _render_sb_vmess(data: dict[str, object]) -> str | None:
     alter_id = _string(data.get("alterId"))
     vmess_aead = "false" if alter_id and alter_id != "0" else "true"
     segments.append(f"vmess-aead={vmess_aead}")
-    return ", ".join(segments)
-
-
-def _sb_hysteria2_bandwidth(value: object) -> str:
-    """Render Hysteria2 bandwidth as Mbps for Surfboard."""
-    text = _string(value).strip()
-    if not text:
-        return ""
-    match = re.match(r"^\s*(\d+(?:\.\d+)?)\s*([kmgt]?bps|[kmgt]?b)?\s*$", text, re.I)
-    if match is None:
-        return _sb_value(text)
-    amount: float = float(match.group(1))
-    unit = (match.group(2) or "mbps").lower()
-    if unit.startswith("g"):
-        amount *= 1000
-    elif unit.startswith("k"):
-        amount /= 1000
-    elif unit.startswith("t"):
-        amount *= 1000000
-    rounded = int(amount)
-    return str(rounded) if amount == rounded else f"{amount:g}"
-
-
-def _sb_hysteria2_ports(value: object) -> str:
-    """Render Mihomo Hysteria2 comma ranges as Surfboard port hopping."""
-    ranges = [_sb_value(part) for part in _string(value).split(",") if _sb_value(part)]
-    return ";".join(ranges)
-
-
-def _render_sb_hysteria2(data: dict[str, object]) -> str | None:
-    """Render Hysteria2 proxy as a Surfboard proxy line."""
-    segments = _sb_base_segments(data, "hysteria2")
-    password = _sb_value(data.get("password"))
-    if segments is None or not password:
-        return None
-    segments.append(f"password={password}")
-    bandwidth = _sb_hysteria2_bandwidth(data.get("down") or data.get("down-speed"))
-    if bandwidth:
-        segments.append(f"download-bandwidth={bandwidth}")
-    ports = _sb_hysteria2_ports(data.get("ports"))
-    if ports:
-        segments.append(f'port-hopping="{ports}"')
-    hop_interval = _sb_value(data.get("hop-interval"))
-    if hop_interval:
-        segments.append(f"port-hopping-interval={hop_interval}")
-    if "skip-cert-verify" in data:
-        segments.append(f"skip-cert-verify={_sb_bool(data.get('skip-cert-verify'))}")
-    sni = _sb_value(data.get("sni") or data.get("servername"))
-    if sni:
-        segments.append(f"sni={sni}")
-    if _sb_value(data.get("obfs")).lower() == "salamander":
-        obfs_password = _sb_value(data.get("obfs-password"))
-        if obfs_password:
-            segments.append(f"salamander-password={obfs_password}")
-    udp_value = data.get("udp-relay", data.get("udp", True))
-    segments.append(f"udp-relay={_sb_bool(udp_value)}")
     return ", ".join(segments)
 
 
@@ -1145,7 +1089,6 @@ class SurfboardRenderer:
         names: list[str] = []
         renderers = {
             "ss": _render_sb_ss,
-            "hysteria2": _render_sb_hysteria2,
             "trojan": _render_sb_trojan,
             "vmess": _render_sb_vmess,
         }

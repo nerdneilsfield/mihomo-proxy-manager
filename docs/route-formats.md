@@ -456,12 +456,11 @@ Trojan 01 = trojan, example.com, 443, password=password, skip-cert-verify=false,
 SS 01 = ss, example.com, 443, encrypt-method=chacha20-ietf-poly1305, password=password
 VMess 01 = vmess, example.com, 443, username=00000000-0000-0000-0000-000000000000, udp-relay=false, ws=true, tls=true, ws-path=/ws, ws-headers=Host:example.com, sni=example.com, vmess-aead=true
 Trojan 01 = trojan, example.com, 443, password=password, udp-relay=false, skip-cert-verify=false, sni=example.com
-HY2 01 = hysteria2, example.com, 443, password=password, download-bandwidth=100, port-hopping="1234;5000-6000", port-hopping-interval=30, skip-cert-verify=false, sni=example.com, salamander-password=obfs-password, udp-relay=true
 
 [Proxy Group]
 Main = select, Auto, Proxy, DIRECT
-Auto = url-test, SS 01, VMess 01, Trojan 01, HY2 01, policy-path=https://mpm.example.com/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml-nodes, policy-regex-filter=.*, url=http://www.gstatic.com/generate_204, interval=600, tolerance=100, timeout=5
-Proxy = select, SS 01, VMess 01, Trojan 01, HY2 01, policy-path=https://mpm.example.com/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml-nodes, policy-regex-filter=.*
+Auto = url-test, SS 01, VMess 01, Trojan 01, policy-path=https://mpm.example.com/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml-nodes, policy-regex-filter=.*, url=http://www.gstatic.com/generate_204, interval=600, tolerance=100, timeout=5
+Proxy = select, SS 01, VMess 01, Trojan 01, policy-path=https://mpm.example.com/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml-nodes, policy-regex-filter=.*
 
 [Rule]
 FINAL,Main
@@ -469,7 +468,7 @@ FINAL,Main
 
 The main group is always `Main = select, Auto, Proxy, DIRECT`; the rule tail is `FINAL,Main`. The nodes companion uses the same route access policy as the main route.
 
-Supported protocols are `ss`, `vmess`, `trojan`, and `hysteria2`. Surfboard's documented protocol list does not include VLESS, so `vless` nodes are skipped with route render warnings. Nodes using unsupported security-critical fields such as `reality-opts`, `ech-opts`, `flow`, or client TLS `fingerprint` are also skipped; if every node is skipped, the route returns HTTP 422 with `no supported nodes for surfboard output`.
+Client-compatible protocols are `ss`, `vmess`, and `trojan`. Although Surfboard documentation lists Hysteria2, some Surfboard client decoders reject `hysteria2` profile lines; `hysteria2` is therefore skipped automatically for import safety. Surfboard's documented protocol list does not include VLESS, so `vless` nodes are also skipped with route render warnings. Nodes using unsupported security-critical fields such as `reality-opts`, `ech-opts`, `flow`, or client TLS `fingerprint` are skipped; if every node is skipped, the route returns HTTP 422 with `no supported nodes for surfboard output`.
 
 ### Field Mapping Notes
 
@@ -479,16 +478,12 @@ Supported protocols are `ss`, `vmess`, `trojan`, and `hysteria2`. Surfboard's do
 | `ss.cipher` | `encrypt-method=` | Shadowsocks only. |
 | `uuid` | `username=` | VMess. VLESS is skipped because Surfboard does not document VLESS support. |
 | `password` | `password=` | SS/Trojan. |
-| `udp` / `udp-relay` | `udp-relay=` | Emitted for SS, VMess, Trojan, and Hysteria2 when present; Hysteria2 defaults to `true` per Surfboard. |
+| `udp` / `udp-relay` | `udp-relay=` | Emitted for SS, VMess, and Trojan when present. |
 | `network = ws` | `ws=true`, `ws-path=`, `ws-headers=` | `ws-headers` uses `Header:value` pairs; multiple headers use `|` in examples. |
 | TLS enabled | `tls=true` or protocol-specific TLS defaults | VMess uses `tls=true`; Trojan is TLS-based. |
 | `sni` | `sni=` | Preserve if present. |
 | `skip-cert-verify` | `skip-cert-verify=` | Boolean lower-case. |
 | `alterId` | `vmess-aead=` | VMess uses `true` when absent or `0`, `false` for non-zero legacy nodes. |
-| `hysteria2.down` / `down-speed` | `download-bandwidth=` | Converted to Mbps where possible, for example `100 Mbps` -> `100`. |
-| `hysteria2.ports` | `port-hopping=` | Mihomo comma ranges are converted to Surfboard semicolon ranges and quoted. |
-| `hysteria2.hop-interval` | `port-hopping-interval=` | Preserve if present. |
-| `hysteria2.obfs = salamander` + `obfs-password` | `salamander-password=` | Other Hysteria2 obfs types are not emitted. |
 
 ## Quantumult X Profile
 

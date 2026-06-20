@@ -375,9 +375,7 @@ async def test_surfboard_nodes_companion_uses_same_access_policy(tmp_path) -> No
 
     with TestClient(app) as client:
         missing_ua = client.get(nodes_path, headers={"User-Agent": ""})
-        matching_ua = client.get(
-            nodes_path, headers={"User-Agent": "mihomo/1.19.5"}
-        )
+        matching_ua = client.get(nodes_path, headers={"User-Agent": "mihomo/1.19.5"})
 
     assert missing_ua.status_code == 403
     assert matching_ua.status_code == 200

@@ -367,9 +367,7 @@ def _prepare_surfboard_records(
             continue
         proxy_type = _string(data.get("type")).lower()
         if proxy_type not in supported_types:
-            warnings.append(
-                _skip_warning(data, f"unsupported proxy type {proxy_type}")
-            )
+            warnings.append(_skip_warning(data, f"unsupported proxy type {proxy_type}"))
             continue
         if proxy_type == "ss":
             unsupported_ss_field = _has_unsupported_sb_ss_plugin(data)
@@ -462,9 +460,7 @@ def _render_sb_trojan(data: dict[str, object]) -> str | None:
     if sni:
         segments.append(f"sni={sni}")
     if "skip-cert-verify" in data:
-        segments.append(
-            f"skip-cert-verify={_sb_bool(data.get('skip-cert-verify'))}"
-        )
+        segments.append(f"skip-cert-verify={_sb_bool(data.get('skip-cert-verify'))}")
     network = _sb_value(data.get("network")).lower()
     if network == "ws":
         segments.extend(_sb_ws_segments(data))
@@ -622,9 +618,10 @@ def _has_unrepresentable_qx_scalar(data: dict[str, object]) -> str | None:
                 ):
                     return "ws-opts.headers"
     grpc_opts = data.get("grpc-opts")
-    if isinstance(grpc_opts, dict) and _profile_scalar_issue(
-        grpc_opts.get("grpc-service-name")
-    ) is not None:
+    if (
+        isinstance(grpc_opts, dict)
+        and _profile_scalar_issue(grpc_opts.get("grpc-service-name")) is not None
+    ):
         return "grpc-opts.grpc-service-name"
     return None
 
@@ -766,7 +763,9 @@ def _render_vless_uri(data: dict[str, object]) -> str | None:
     params.update(_network_params(data))
     query = _query_string(params)
     query_part = f"?{query}" if query else ""
-    return f"vless://{quote(uuid, safe='')}@{hostport}{query_part}#{_encoded_name(data)}"
+    return (
+        f"vless://{quote(uuid, safe='')}@{hostport}{query_part}#{_encoded_name(data)}"
+    )
 
 
 def _render_vmess_uri(data: dict[str, object]) -> str | None:
@@ -1151,7 +1150,9 @@ class ProviderRenderer:
             return prefix + body
         return body
 
-    async def render(self, route: RouteConfig, records: Sequence[SourceRecord]) -> bytes:
+    async def render(
+        self, route: RouteConfig, records: Sequence[SourceRecord]
+    ) -> bytes:
         """异步渲染路由输出为 YAML 字节流。
 
         Asynchronously render route output as YAML byte stream.
@@ -1184,7 +1185,9 @@ class ProviderRouteRenderer:
         )
 
 
-def build_renderer_registry(*, yaml_sort_keys: bool = False) -> dict[str, RouteRenderer]:
+def build_renderer_registry(
+    *, yaml_sort_keys: bool = False
+) -> dict[str, RouteRenderer]:
     """Build route renderer registry keyed by route output format."""
     return {
         "provider": ProviderRouteRenderer(

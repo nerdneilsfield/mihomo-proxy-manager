@@ -70,8 +70,8 @@ def xray_route(encoding: Literal["base64", "plain"] = "base64") -> RouteConfig:
 
 def quantumult_x_route(
     *,
-    import_response: str = "redirect",
-    import_target: str = "app-scheme",
+    import_response: Literal["redirect", "plain"] = "redirect",
+    import_target: Literal["app-scheme", "universal-link"] = "app-scheme",
     resource_tag: str | None = None,
 ) -> RouteConfig:
     """Create a route for quantumult-x renderer tests."""
@@ -138,9 +138,7 @@ def surfboard_request(companion: str | None = None) -> RenderRequest:
                 },
             ),
         ],
-        companion_public_urls={
-            "nodes": "https://mpm.example.com/surfboard-nodes"
-        },
+        companion_public_urls={"nodes": "https://mpm.example.com/surfboard-nodes"},
         companion=companion,
     )
 
@@ -464,7 +462,7 @@ def test_xray_uri_renderer_escapes_userinfo_fragment_and_brackets_ipv6() -> None
                         "type": "trojan",
                         "server": "2001:db8::1",
                         "port": 443,
-                        "password": "p#%,\"/",
+                        "password": 'p#%,"/',
                     },
                 )
             ],
@@ -773,8 +771,7 @@ def test_quantumult_x_import_redirect_response() -> None:
     payload = json.loads(unquote(encoded))
     assert payload == {
         "server_remote": [
-            "https://mpm.example.com/qx, tag=MPM, update-interval=86400, "
-            "enabled=true"
+            "https://mpm.example.com/qx, tag=MPM, update-interval=86400, enabled=true"
         ]
     }
 
@@ -802,9 +799,7 @@ def test_quantumult_x_import_plain_universal_link_response() -> None:
     """Test quantumult-x universal-link import plain response."""
     response = build_renderer_registry()["quantumult-x"].render(
         RenderRequest(
-            quantumult_x_route(
-                import_response="plain", import_target="universal-link"
-            ),
+            quantumult_x_route(import_response="plain", import_target="universal-link"),
             [],
             main_public_url="https://mpm.example.com/qx",
             companion="import",
@@ -908,9 +903,7 @@ def test_surfboard_renderer_skips_unsupported_nodes() -> None:
                     },
                 )
             ],
-            companion_public_urls={
-                "nodes": "https://mpm.example.com/surfboard-nodes"
-            },
+            companion_public_urls={"nodes": "https://mpm.example.com/surfboard-nodes"},
         )
     )
 
@@ -947,9 +940,7 @@ def test_surfboard_renderer_warns_when_unknown_node_is_dropped() -> None:
                     },
                 ),
             ],
-            companion_public_urls={
-                "nodes": "https://mpm.example.com/surfboard-nodes"
-            },
+            companion_public_urls={"nodes": "https://mpm.example.com/surfboard-nodes"},
         )
     )
 
@@ -958,8 +949,7 @@ def test_surfboard_renderer_warns_when_unknown_node_is_dropped() -> None:
     assert "SS 01 = ss, example.com, 443" in text
     assert response.warnings
     assert any(
-        "unsupported proxy type unknown" in warning
-        for warning in response.warnings
+        "unsupported proxy type unknown" in warning for warning in response.warnings
     )
 
 
@@ -1177,9 +1167,7 @@ def test_surfboard_renderer_sanitizes_node_names() -> None:
                     },
                 )
             ],
-            companion_public_urls={
-                "nodes": "https://mpm.example.com/surfboard-nodes"
-            },
+            companion_public_urls={"nodes": "https://mpm.example.com/surfboard-nodes"},
         )
     )
 

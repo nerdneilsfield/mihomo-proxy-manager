@@ -390,6 +390,111 @@ def test_xray_uri_renderer_plain_trojan_query() -> None:
     assert response.media_type == "text/plain; charset=utf-8"
 
 
+def test_xray_uri_renderer_hysteria2_uri() -> None:
+    """Test xray-uri renders Hysteria2 URI scheme."""
+    response = XrayUriRenderer().render(
+        RenderRequest(
+            xray_route(encoding="plain"),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "HY2 01",
+                        "type": "hysteria2",
+                        "server": "example.com",
+                        "port": 443,
+                        "password": "secret",
+                        "sni": "real.example.com",
+                        "skip-cert-verify": True,
+                        "obfs": "salamander",
+                        "obfs-password": "obfs-secret",
+                    },
+                )
+            ],
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert text.startswith("hysteria2://secret@example.com:443/?")
+    assert "sni=real.example.com" in text
+    assert "insecure=1" in text
+    assert "obfs=salamander" in text
+    assert "obfs-password=obfs-secret" in text
+    assert text.endswith("#HY2%2001\n")
+
+
+def test_xray_uri_renderer_plain_includes_all_supported_protocols() -> None:
+    """Test xray-uri emits every renderer-supported URI protocol."""
+    response = XrayUriRenderer().render(
+        RenderRequest(
+            xray_route(encoding="plain"),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "SS 01",
+                        "type": "ss",
+                        "server": "ss.example.com",
+                        "port": 8388,
+                        "cipher": "chacha20-ietf-poly1305",
+                        "password": "secret",
+                    },
+                ),
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "Trojan 01",
+                        "type": "trojan",
+                        "server": "trojan.example.com",
+                        "port": 443,
+                        "password": "secret",
+                    },
+                ),
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "VLESS 01",
+                        "type": "vless",
+                        "server": "vless.example.com",
+                        "port": 443,
+                        "uuid": "00000000-0000-0000-0000-000000000000",
+                    },
+                ),
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "VMess 01",
+                        "type": "vmess",
+                        "server": "vmess.example.com",
+                        "port": 443,
+                        "uuid": "00000000-0000-0000-0000-000000000000",
+                        "cipher": "auto",
+                    },
+                ),
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "HY2 01",
+                        "type": "hysteria2",
+                        "server": "hy2.example.com",
+                        "port": 443,
+                        "password": "secret",
+                    },
+                ),
+            ],
+        )
+    )
+
+    lines = response.body.decode("utf-8").splitlines()
+    assert response.status_code == 200
+    assert len(lines) == 5
+    assert lines[0].startswith("ss://")
+    assert lines[1].startswith("trojan://")
+    assert lines[2].startswith("vless://")
+    assert lines[3].startswith("vmess://")
+    assert lines[4].startswith("hysteria2://")
+
+
 def test_xray_uri_renderer_rejects_shadowsocks_plugin_fields() -> None:
     """Test xray-uri skips unsupported Shadowsocks SIP002 plugin fields."""
     response = XrayUriRenderer().render(
@@ -549,6 +654,7 @@ def test_quantumult_x_renderer_outputs_server_lines() -> None:
                         "port": 443,
                         "cipher": "chacha20-ietf-poly1305",
                         "password": "password",
+                        "udp-relay": True,
                     },
                 ),
                 ProxyRecord(
@@ -561,6 +667,7 @@ def test_quantumult_x_renderer_outputs_server_lines() -> None:
                         "password": "secret",
                         "sni": "example.com",
                         "skip-cert-verify": False,
+                        "udp-relay": False,
                     },
                 ),
             ],
@@ -571,13 +678,75 @@ def test_quantumult_x_renderer_outputs_server_lines() -> None:
     assert response.media_type == "text/plain; charset=utf-8"
     assert (
         "shadowsocks=example.com:443, method=chacha20-ietf-poly1305, "
-        "password=password, tag=SS 01"
+        "password=password, udp-relay=true, tag=SS 01"
     ) in text
     assert (
         "trojan=example.com:443, password=secret, over-tls=true, "
-        "tls-host=example.com, tls-verification=true, tag=Trojan 01"
+        "tls-host=example.com, tls-verification=true, "
+        "udp-relay=false, tag=Trojan 01"
     ) in text
     assert response.status_code == 200
+
+
+def test_quantumult_x_renderer_includes_all_supported_protocols() -> None:
+    """Test Quantumult X emits every renderer-supported server protocol."""
+    response = build_renderer_registry()["quantumult-x"].render(
+        RenderRequest(
+            quantumult_x_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "SS 01",
+                        "type": "ss",
+                        "server": "ss.example.com",
+                        "port": 443,
+                        "cipher": "chacha20-ietf-poly1305",
+                        "password": "password",
+                    },
+                ),
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "VMess 01",
+                        "type": "vmess",
+                        "server": "vmess.example.com",
+                        "port": 443,
+                        "uuid": "00000000-0000-0000-0000-000000000000",
+                        "cipher": "auto",
+                    },
+                ),
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "VLESS 01",
+                        "type": "vless",
+                        "server": "vless.example.com",
+                        "port": 443,
+                        "uuid": "00000000-0000-0000-0000-000000000000",
+                    },
+                ),
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "Trojan 01",
+                        "type": "trojan",
+                        "server": "trojan.example.com",
+                        "port": 443,
+                        "password": "secret",
+                    },
+                ),
+            ],
+        )
+    )
+
+    lines = response.body.decode("utf-8").splitlines()
+    assert response.status_code == 200
+    assert len(lines) == 4
+    assert lines[0].startswith("shadowsocks=ss.example.com:443")
+    assert lines[1].startswith("vmess=vmess.example.com:443")
+    assert lines[2].startswith("vless=vless.example.com:443")
+    assert lines[3].startswith("trojan=trojan.example.com:443")
 
 
 def test_quantumult_x_renderer_sanitizes_node_tag() -> None:
@@ -723,8 +892,8 @@ def test_quantumult_x_vmess_ws_tls_uses_wss_obfs() -> None:
     assert "over-tls=true" not in text
 
 
-def test_quantumult_x_ss_tls_uses_tls_obfs() -> None:
-    """Test Shadowsocks TLS maps to Quantumult X obfs=tls."""
+def test_quantumult_x_ss_tls_uses_over_tls_obfs() -> None:
+    """Test Shadowsocks TLS maps to Quantumult X obfs=over-tls."""
     response = build_renderer_registry()["quantumult-x"].render(
         RenderRequest(
             quantumult_x_route(),
@@ -747,7 +916,70 @@ def test_quantumult_x_ss_tls_uses_tls_obfs() -> None:
     )
 
     text = response.body.decode("utf-8")
-    assert "obfs=tls" in text
+    assert "obfs=over-tls" in text
+    assert "obfs-host=example.com" in text
+
+
+def test_quantumult_x_ss_simple_obfs_uses_documented_fields() -> None:
+    """Test Shadowsocks simple-obfs maps to Quantumult X obfs fields."""
+    response = build_renderer_registry()["quantumult-x"].render(
+        RenderRequest(
+            quantumult_x_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "SS Obfs",
+                        "type": "ss",
+                        "server": "example.com",
+                        "port": 443,
+                        "cipher": "chacha20-ietf-poly1305",
+                        "password": "password",
+                        "obfs": "http",
+                        "obfs-host": "apple.com",
+                        "obfs-uri": "/resource/file",
+                    },
+                )
+            ],
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert (
+        "shadowsocks=example.com:443, method=chacha20-ietf-poly1305, "
+        "password=password, obfs=http, obfs-host=apple.com, "
+        "obfs-uri=/resource/file, tag=SS Obfs"
+    ) in text
+
+
+def test_quantumult_x_trojan_ws_uses_wss_obfs() -> None:
+    """Test Trojan WebSocket maps to Quantumult X obfs=wss."""
+    response = build_renderer_registry()["quantumult-x"].render(
+        RenderRequest(
+            quantumult_x_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "Trojan WSS",
+                        "type": "trojan",
+                        "server": "example.com",
+                        "port": 443,
+                        "password": "secret",
+                        "network": "ws",
+                        "ws-opts": {
+                            "path": "/path",
+                            "headers": {"Host": "example.com"},
+                        },
+                    },
+                )
+            ],
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert "obfs=wss" in text
+    assert "obfs-uri=/path" in text
     assert "obfs-host=example.com" in text
 
 
@@ -815,8 +1047,8 @@ def test_quantumult_x_import_plain_universal_link_response() -> None:
     assert text.endswith("\n")
 
 
-def test_quantumult_x_renderer_skips_unsupported_reality_node() -> None:
-    """Test quantumult-x rejects unsupported Reality/flow fields."""
+def test_quantumult_x_vless_reality_vision_uses_documented_fields() -> None:
+    """Test QX VLESS Reality Vision maps to documented fields."""
     response = build_renderer_registry()["quantumult-x"].render(
         RenderRequest(
             quantumult_x_route(),
@@ -829,8 +1061,133 @@ def test_quantumult_x_renderer_skips_unsupported_reality_node() -> None:
                         "server": "example.com",
                         "port": 443,
                         "uuid": "00000000-0000-0000-0000-000000000000",
-                        "reality-opts": {"public-key": REALITY_PUBLIC_KEY},
+                        "tls": True,
+                        "servername": "apple.com",
+                        "udp-relay": True,
+                        "reality-opts": {
+                            "public-key": REALITY_PUBLIC_KEY,
+                            "short-id": "0123456789abcdef",
+                        },
                         "flow": "xtls-rprx-vision",
+                    },
+                )
+            ],
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert response.status_code == 200
+    assert (
+        "vless=example.com:443, method=none, "
+        "password=00000000-0000-0000-0000-000000000000, "
+        "obfs=over-tls, obfs-host=apple.com, "
+        f"reality-base64-pubkey={REALITY_PUBLIC_KEY}, "
+        "reality-hex-shortid=0123456789abcdef, "
+        "vless-flow=xtls-rprx-vision, udp-relay=true, tag=Reality"
+    ) in text
+
+
+def test_quantumult_x_vless_reality_without_vision() -> None:
+    """Test QX VLESS Reality can render without Vision flow."""
+    response = build_renderer_registry()["quantumult-x"].render(
+        RenderRequest(
+            quantumult_x_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "Reality Only",
+                        "type": "vless",
+                        "server": "example.com",
+                        "port": 443,
+                        "uuid": "00000000-0000-0000-0000-000000000000",
+                        "tls": True,
+                        "reality-opts": {"public-key": REALITY_PUBLIC_KEY},
+                    },
+                )
+            ],
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert response.status_code == 200
+    assert f"reality-base64-pubkey={REALITY_PUBLIC_KEY}" in text
+    assert "vless-flow=" not in text
+
+
+def test_quantumult_x_vmess_and_trojan_reality_use_documented_fields() -> None:
+    """Test QX VMess and Trojan Reality fields are preserved."""
+    response = build_renderer_registry()["quantumult-x"].render(
+        RenderRequest(
+            quantumult_x_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "VMess Reality",
+                        "type": "vmess",
+                        "server": "vmess.example.com",
+                        "port": 443,
+                        "uuid": "00000000-0000-0000-0000-000000000000",
+                        "cipher": "auto",
+                        "tls": True,
+                        "reality-opts": {
+                            "public-key": REALITY_PUBLIC_KEY,
+                            "short-id": "0123456789abcdef",
+                        },
+                    },
+                ),
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "Trojan Reality",
+                        "type": "trojan",
+                        "server": "trojan.example.com",
+                        "port": 443,
+                        "password": "secret",
+                        "reality-opts": {
+                            "public-key": REALITY_PUBLIC_KEY,
+                            "short-id": "0123456789abcdef",
+                        },
+                    },
+                ),
+            ],
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert response.status_code == 200
+    assert (
+        "vmess=vmess.example.com:443, method=none, "
+        "password=00000000-0000-0000-0000-000000000000, "
+        "obfs=over-tls, "
+        f"reality-base64-pubkey={REALITY_PUBLIC_KEY}, "
+        "reality-hex-shortid=0123456789abcdef, tag=VMess Reality"
+    ) in text
+    assert (
+        "trojan=trojan.example.com:443, password=secret, over-tls=true, "
+        "tls-host=trojan.example.com, "
+        f"reality-base64-pubkey={REALITY_PUBLIC_KEY}, "
+        "reality-hex-shortid=0123456789abcdef, tag=Trojan Reality"
+    ) in text
+
+
+def test_quantumult_x_rejects_reality_without_public_key() -> None:
+    """Test QX skips malformed Reality options."""
+    response = build_renderer_registry()["quantumult-x"].render(
+        RenderRequest(
+            quantumult_x_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "Bad Reality",
+                        "type": "vless",
+                        "server": "example.com",
+                        "port": 443,
+                        "uuid": "00000000-0000-0000-0000-000000000000",
+                        "tls": True,
+                        "reality-opts": {"short-id": "0123456789abcdef"},
                     },
                 )
             ],
@@ -839,7 +1196,34 @@ def test_quantumult_x_renderer_skips_unsupported_reality_node() -> None:
 
     assert response.status_code == 422
     assert response.body == b"no supported nodes for quantumult-x output"
-    assert response.warnings
+    assert any("reality-opts.public-key" in warning for warning in response.warnings)
+
+
+def test_quantumult_x_rejects_unsupported_vless_flow() -> None:
+    """Test QX skips unsupported VLESS flow values."""
+    response = build_renderer_registry()["quantumult-x"].render(
+        RenderRequest(
+            quantumult_x_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "Bad Flow",
+                        "type": "vless",
+                        "server": "example.com",
+                        "port": 443,
+                        "uuid": "00000000-0000-0000-0000-000000000000",
+                        "tls": True,
+                        "reality-opts": {"public-key": REALITY_PUBLIC_KEY},
+                        "flow": "xtls-rprx-direct",
+                    },
+                )
+            ],
+        )
+    )
+
+    assert response.status_code == 422
+    assert response.body == b"no supported nodes for quantumult-x output"
 
 
 def test_surfboard_full_profile_contains_main_auto_proxy_groups() -> None:
@@ -1010,6 +1394,193 @@ def test_surfboard_vmess_tls_uses_sni_and_skip_cert_verify() -> None:
     assert "tls-host" not in text
 
 
+def test_surfboard_vmess_ws_tls_uses_documented_option_order() -> None:
+    """Test Surfboard VMess output follows the documented option order."""
+    response = build_renderer_registry()["surfboard"].render(
+        RenderRequest(
+            surfboard_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "VMess WS TLS",
+                        "type": "vmess",
+                        "server": "example.com",
+                        "port": 443,
+                        "uuid": "00000000-0000-0000-0000-000000000000",
+                        "cipher": "auto",
+                        "tls": True,
+                        "network": "ws",
+                        "ws-opts": {
+                            "path": "/ws",
+                            "headers": {"Host": "example.com"},
+                        },
+                        "udp-relay": True,
+                        "servername": "example.com",
+                        "skip-cert-verify": False,
+                    },
+                )
+            ],
+            companion="nodes",
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert (
+        "VMess WS TLS = vmess, example.com, 443, "
+        "username=00000000-0000-0000-0000-000000000000, "
+        "udp-relay=true, ws=true, tls=true, ws-path=/ws, "
+        "ws-headers=Host:example.com, skip-cert-verify=false, "
+        "sni=example.com, vmess-aead=true"
+    ) in text
+
+
+def test_surfboard_hysteria2_renders_supported_fields() -> None:
+    """Test Surfboard Hysteria2 renders fields supported by Surfboard."""
+    response = build_renderer_registry()["surfboard"].render(
+        RenderRequest(
+            surfboard_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "HY2 01",
+                        "type": "hysteria2",
+                        "server": "example.com",
+                        "port": 443,
+                        "password": "secret",
+                        "down": "100 Mbps",
+                        "ports": "1234,5000-6000",
+                        "hop-interval": "30",
+                        "sni": "example.com",
+                        "skip-cert-verify": True,
+                        "obfs": "salamander",
+                        "obfs-password": "obfs-secret",
+                    },
+                )
+            ],
+            companion="nodes",
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert response.status_code == 200
+    assert (
+        "HY2 01 = hysteria2, example.com, 443, password=secret, "
+        'download-bandwidth=100, port-hopping="1234;5000-6000", '
+        "port-hopping-interval=30, skip-cert-verify=true, "
+        "sni=example.com, salamander-password=obfs-secret, udp-relay=true"
+    ) in text
+
+
+def test_surfboard_full_profile_includes_all_supported_protocols() -> None:
+    """Test Surfboard profile includes every renderer-supported protocol."""
+    response = build_renderer_registry()["surfboard"].render(
+        RenderRequest(
+            surfboard_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "SS 01",
+                        "type": "ss",
+                        "server": "ss.example.com",
+                        "port": 443,
+                        "cipher": "chacha20-ietf-poly1305",
+                        "password": "password",
+                    },
+                ),
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "Trojan 01",
+                        "type": "trojan",
+                        "server": "trojan.example.com",
+                        "port": 443,
+                        "password": "secret",
+                        "sni": "trojan.example.com",
+                    },
+                ),
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "VMess 01",
+                        "type": "vmess",
+                        "server": "vmess.example.com",
+                        "port": 443,
+                        "uuid": "00000000-0000-0000-0000-000000000000",
+                        "cipher": "auto",
+                        "tls": True,
+                        "network": "ws",
+                        "ws-opts": {
+                            "path": "/ws",
+                            "headers": {"Host": "vmess.example.com"},
+                        },
+                    },
+                ),
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "HY2 01",
+                        "type": "hysteria2",
+                        "server": "hy2.example.com",
+                        "port": 443,
+                        "password": "secret",
+                    },
+                ),
+            ],
+            companion_public_urls={"nodes": "https://mpm.example.com/surfboard-nodes"},
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert response.status_code == 200
+    assert "SS 01 = ss, ss.example.com, 443" in text
+    assert "Trojan 01 = trojan, trojan.example.com, 443" in text
+    assert "VMess 01 = vmess, vmess.example.com, 443" in text
+    assert "HY2 01 = hysteria2, hy2.example.com, 443" in text
+    assert (
+        "Auto = url-test, SS 01, Trojan 01, VMess 01, HY2 01, "
+        "policy-path=https://mpm.example.com/surfboard-nodes"
+    ) in text
+    assert (
+        "Proxy = select, SS 01, Trojan 01, VMess 01, HY2 01, "
+        "policy-path=https://mpm.example.com/surfboard-nodes"
+    ) in text
+
+
+def test_surfboard_hysteria2_minimal_fields_and_udp_false() -> None:
+    """Test Surfboard Hysteria2 works without optional port hopping fields."""
+    response = build_renderer_registry()["surfboard"].render(
+        RenderRequest(
+            surfboard_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "HY2 Minimal",
+                        "type": "hysteria2",
+                        "server": "example.com",
+                        "port": 443,
+                        "password": "secret",
+                        "down-speed": 50,
+                        "udp-relay": False,
+                    },
+                )
+            ],
+            companion="nodes",
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert response.status_code == 200
+    assert (
+        "HY2 Minimal = hysteria2, example.com, 443, password=secret, "
+        "download-bandwidth=50, udp-relay=false"
+    ) in text
+    assert "port-hopping" not in text
+
+
 def test_surfboard_trojan_ws_maps_path_and_multi_headers() -> None:
     """Test Surfboard Trojan WS maps path and all headers."""
     response = build_renderer_registry()["surfboard"].render(
@@ -1024,6 +1595,9 @@ def test_surfboard_trojan_ws_maps_path_and_multi_headers() -> None:
                         "server": "example.com",
                         "port": 443,
                         "password": "secret",
+                        "udp-relay": False,
+                        "skip-cert-verify": True,
+                        "sni": "example.com",
                         "network": "ws",
                         "ws-opts": {
                             "path": "/ws",
@@ -1040,9 +1614,11 @@ def test_surfboard_trojan_ws_maps_path_and_multi_headers() -> None:
     )
 
     text = response.body.decode("utf-8")
-    assert "ws=true" in text
-    assert "ws-path=/ws" in text
-    assert "ws-headers=Host:example.com|X-Test:1" in text
+    assert (
+        "Trojan WS = trojan, example.com, 443, password=secret, "
+        "udp-relay=false, skip-cert-verify=true, sni=example.com, "
+        "ws=true, ws-path=/ws, ws-headers=Host:example.com|X-Test:1"
+    ) in text
 
 
 def test_surfboard_ss_obfs_maps_supported_fields() -> None:
@@ -1060,6 +1636,7 @@ def test_surfboard_ss_obfs_maps_supported_fields() -> None:
                         "port": 443,
                         "cipher": "chacha20-ietf-poly1305",
                         "password": "password",
+                        "udp-relay": False,
                         "obfs": "http",
                         "obfs-host": "example.com",
                         "obfs-uri": "/obfs",
@@ -1071,9 +1648,11 @@ def test_surfboard_ss_obfs_maps_supported_fields() -> None:
     )
 
     text = response.body.decode("utf-8")
-    assert "obfs=http" in text
-    assert "obfs-host=example.com" in text
-    assert "obfs-uri=/obfs" in text
+    assert (
+        "SS Obfs = ss, example.com, 443, "
+        "encrypt-method=chacha20-ietf-poly1305, password=password, "
+        "udp-relay=false, obfs=http, obfs-host=example.com, obfs-uri=/obfs"
+    ) in text
 
 
 def test_surfboard_ss_plugin_unsupported_fails_when_only_node() -> None:

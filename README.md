@@ -353,7 +353,7 @@ format = "surfboard"
 test_url = "http://www.gstatic.com/generate_204"
 ```
 
-`xray-uri` 可直接给 v2rayN 等客户端订阅，默认返回 base64 URI payload。`quantumult-x` 主路由返回 server lines，并额外注册 `-import` 一键导入端点。`surfboard` 主路由返回最小完整 profile，并额外注册 `-nodes` 给 `policy-path` 使用。
+`xray-uri` 可直接给 v2rayN 等客户端订阅，默认返回 base64 URI payload。`quantumult-x` 主路由返回 server lines，并额外注册 `-import` 一键导入端点。`surfboard` 主路由返回最小完整 profile，并额外注册 `-nodes` 给 `policy-path` 使用；当前支持 `ss`、`trojan`、`vmess`、`hysteria2`，Surfboard 未文档化支持的 `vless` 会被跳过。
 
 ### HTTP Action 插件
 

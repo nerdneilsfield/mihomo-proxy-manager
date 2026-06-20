@@ -302,6 +302,13 @@ def _sb_ws_segments(data: dict[str, object]) -> list[str]:
     return segments
 
 
+def _sb_udp_relay_segment(data: dict[str, object]) -> str | None:
+    """Build Surfboard udp-relay segment when source explicitly sets UDP."""
+    if "udp-relay" not in data and "udp" not in data:
+        return None
+    return f"udp-relay={_sb_bool(data.get('udp-relay', data.get('udp')))}"
+
+
 def _has_unsupported_sb_ss_plugin(data: dict[str, object]) -> str | None:
     """Return unsupported Shadowsocks plugin field for Surfboard."""
     for field_name in ("plugin", "plugin-opts"):
@@ -324,6 +331,10 @@ def _has_unrepresentable_sb_scalar(data: dict[str, object]) -> str | None:
         "obfs",
         "obfs-host",
         "obfs-uri",
+        "obfs-password",
+        "hop-interval",
+        "down",
+        "down-speed",
         "ws-path",
     )
     for field_name in scalar_fields:
@@ -353,7 +364,7 @@ def _prepare_surfboard_records(
     )
     normalized_records: list[ProxyRecord] = []
     warnings: list[str] = []
-    supported_types = {"ss", "trojan", "vmess"}
+    supported_types = {"ss", "trojan", "vmess", "hysteria2"}
     for record in transformed:
         data = dict(record.data)
         critical_field = _has_security_critical_field(data)
@@ -413,6 +424,9 @@ def _render_sb_ss(data: dict[str, object]) -> str | None:
     if segments is None or not method or not password:
         return None
     segments.extend([f"encrypt-method={method}", f"password={password}"])
+    udp_relay = _sb_udp_relay_segment(data)
+    if udp_relay:
+        segments.append(udp_relay)
     obfs = _sb_value(data.get("obfs"))
     if obfs:
         segments.append(f"obfs={obfs}")
@@ -432,20 +446,91 @@ def _render_sb_vmess(data: dict[str, object]) -> str | None:
     if segments is None or not uuid:
         return None
     segments.append(f"username={uuid}")
-    if _boolish(data.get("tls")):
+    udp_relay = _sb_udp_relay_segment(data)
+    if udp_relay:
+        segments.append(udp_relay)
+    network = _sb_value(data.get("network")).lower()
+    if network == "ws":
+        segments.append("ws=true")
+    elif network and network != "tcp":
+        return None
+    tls_enabled = _boolish(data.get("tls"))
+    if tls_enabled:
         segments.append("tls=true")
-        tls_host = _sb_value(data.get("servername") or data.get("sni"))
-        if tls_host:
-            segments.append(f"sni={tls_host}")
+    if network == "ws":
+        ws_path = _sb_ws_path(data)
+        if ws_path:
+            segments.append(f"ws-path={ws_path}")
+        ws_headers = _sb_ws_headers(data)
+        if ws_headers:
+            segments.append(f"ws-headers={ws_headers}")
+    if tls_enabled:
         if "skip-cert-verify" in data:
             segments.append(
                 f"skip-cert-verify={_sb_bool(data.get('skip-cert-verify'))}"
             )
-    network = _sb_value(data.get("network")).lower()
-    if network == "ws":
-        segments.extend(_sb_ws_segments(data))
-    elif network and network != "tcp":
+        tls_host = _sb_value(data.get("servername") or data.get("sni"))
+        if tls_host:
+            segments.append(f"sni={tls_host}")
+    alter_id = _string(data.get("alterId"))
+    vmess_aead = "false" if alter_id and alter_id != "0" else "true"
+    segments.append(f"vmess-aead={vmess_aead}")
+    return ", ".join(segments)
+
+
+def _sb_hysteria2_bandwidth(value: object) -> str:
+    """Render Hysteria2 bandwidth as Mbps for Surfboard."""
+    text = _string(value).strip()
+    if not text:
+        return ""
+    match = re.match(r"^\s*(\d+(?:\.\d+)?)\s*([kmgt]?bps|[kmgt]?b)?\s*$", text, re.I)
+    if match is None:
+        return _sb_value(text)
+    amount: float = float(match.group(1))
+    unit = (match.group(2) or "mbps").lower()
+    if unit.startswith("g"):
+        amount *= 1000
+    elif unit.startswith("k"):
+        amount /= 1000
+    elif unit.startswith("t"):
+        amount *= 1000000
+    rounded = int(amount)
+    return str(rounded) if amount == rounded else f"{amount:g}"
+
+
+def _sb_hysteria2_ports(value: object) -> str:
+    """Render Mihomo Hysteria2 comma ranges as Surfboard port hopping."""
+    ranges = [_sb_value(part) for part in _string(value).split(",") if _sb_value(part)]
+    return ";".join(ranges)
+
+
+def _render_sb_hysteria2(data: dict[str, object]) -> str | None:
+    """Render Hysteria2 proxy as a Surfboard proxy line."""
+    segments = _sb_base_segments(data, "hysteria2")
+    password = _sb_value(data.get("password"))
+    if segments is None or not password:
         return None
+    segments.append(f"password={password}")
+    bandwidth = _sb_hysteria2_bandwidth(data.get("down") or data.get("down-speed"))
+    if bandwidth:
+        segments.append(f"download-bandwidth={bandwidth}")
+    ports = _sb_hysteria2_ports(data.get("ports"))
+    if ports:
+        segments.append(f'port-hopping="{ports}"')
+    hop_interval = _sb_value(data.get("hop-interval"))
+    if hop_interval:
+        segments.append(f"port-hopping-interval={hop_interval}")
+    if "skip-cert-verify" in data:
+        segments.append(f"skip-cert-verify={_sb_bool(data.get('skip-cert-verify'))}")
+    sni = _sb_value(data.get("sni") or data.get("servername"))
+    if sni:
+        segments.append(f"sni={sni}")
+    if _sb_value(data.get("obfs")).lower() == "salamander":
+        obfs_password = _sb_value(data.get("obfs-password"))
+        if obfs_password:
+            segments.append(f"salamander-password={obfs_password}")
+    udp_value = data.get("udp-relay", data.get("udp", True))
+    segments.append(f"udp-relay={_sb_bool(udp_value)}")
     return ", ".join(segments)
 
 
@@ -456,11 +541,14 @@ def _render_sb_trojan(data: dict[str, object]) -> str | None:
     if segments is None or not password:
         return None
     segments.append(f"password={password}")
+    udp_relay = _sb_udp_relay_segment(data)
+    if udp_relay:
+        segments.append(udp_relay)
+    if "skip-cert-verify" in data:
+        segments.append(f"skip-cert-verify={_sb_bool(data.get('skip-cert-verify'))}")
     sni = _sb_value(data.get("sni") or data.get("servername"))
     if sni:
         segments.append(f"sni={sni}")
-    if "skip-cert-verify" in data:
-        segments.append(f"skip-cert-verify={_sb_bool(data.get('skip-cert-verify'))}")
     network = _sb_value(data.get("network")).lower()
     if network == "ws":
         segments.extend(_sb_ws_segments(data))
@@ -485,6 +573,50 @@ def _qx_tag(data: dict[str, object]) -> str:
     return f"tag={_qx_clean_label(data.get('name'))}"
 
 
+def _qx_udp_relay_segment(data: dict[str, object]) -> str | None:
+    """Build Quantumult X udp-relay segment when source explicitly sets UDP."""
+    if "udp-relay" not in data and "udp" not in data:
+        return None
+    return f"udp-relay={_qx_value(_sb_bool(data.get('udp-relay', data.get('udp'))))}"
+
+
+def _qx_reality_opts(data: dict[str, object]) -> dict[str, object] | None:
+    """Return Reality options when source provides a mapping."""
+    reality_opts = data.get("reality-opts")
+    if isinstance(reality_opts, dict):
+        return cast(dict[str, object], reality_opts)
+    return None
+
+
+def _qx_has_reality(data: dict[str, object]) -> bool:
+    """Return whether the proxy carries QX-renderable Reality options."""
+    reality_opts = _qx_reality_opts(data)
+    return bool(reality_opts and _string(reality_opts.get("public-key")))
+
+
+def _qx_reality_segments(data: dict[str, object]) -> list[str]:
+    """Build Quantumult X Reality parameter segments."""
+    reality_opts = _qx_reality_opts(data)
+    if not reality_opts:
+        return []
+    public_key = _string(reality_opts.get("public-key"))
+    if not public_key:
+        return []
+    segments = [f"reality-base64-pubkey={_qx_value(public_key)}"]
+    short_id = _string(reality_opts.get("short-id"))
+    if short_id:
+        segments.append(f"reality-hex-shortid={_qx_value(short_id)}")
+    return segments
+
+
+def _qx_flow_segment(data: dict[str, object], proxy_type: str) -> str | None:
+    """Build Quantumult X VLESS flow segment."""
+    flow = _string(data.get("flow"))
+    if flow == "xtls-rprx-vision" and proxy_type == "vless":
+        return "vless-flow=xtls-rprx-vision"
+    return None
+
+
 def _qx_ws_segments(data: dict[str, object], obfs: str) -> list[str]:
     """Build Quantumult X websocket obfs segments."""
     segments = [f"obfs={obfs}"]
@@ -503,15 +635,33 @@ def _qx_ws_segments(data: dict[str, object], obfs: str) -> list[str]:
 
 def _qx_ss_obfs_segments(data: dict[str, object]) -> list[str] | None:
     """Build Quantumult X Shadowsocks obfs segments."""
+    explicit_obfs = _string(data.get("obfs"))
+    if explicit_obfs:
+        segments = [f"obfs={_qx_value(explicit_obfs)}"]
+        obfs_host = _string(
+            data.get("obfs-host") or data.get("servername") or data.get("sni")
+        )
+        if obfs_host:
+            segments.append(f"obfs-host={_qx_value(obfs_host)}")
+        obfs_uri = _string(data.get("obfs-uri"))
+        if obfs_uri:
+            segments.append(f"obfs-uri={_qx_value(obfs_uri)}")
+        if explicit_obfs == "over-tls" and "skip-cert-verify" in data:
+            verification = "false" if _boolish(data.get("skip-cert-verify")) else "true"
+            segments.append(f"tls-verification={verification}")
+        return segments
     network = _string(data.get("network"))
-    tls_enabled = _boolish(data.get("tls"))
+    tls_enabled = _boolish(data.get("tls")) or _qx_has_reality(data)
     if not network or network == "tcp":
         if not tls_enabled:
             return []
-        segments = ["obfs=tls"]
+        segments = ["obfs=over-tls"]
         tls_host = _string(data.get("servername") or data.get("sni"))
         if tls_host:
             segments.append(f"obfs-host={_qx_value(tls_host)}")
+        if "skip-cert-verify" in data:
+            verification = "false" if _boolish(data.get("skip-cert-verify")) else "true"
+            segments.append(f"tls-verification={verification}")
         return segments
     if network == "ws":
         return _qx_ws_segments(data, "wss" if tls_enabled else "ws")
@@ -521,7 +671,7 @@ def _qx_ss_obfs_segments(data: dict[str, object]) -> list[str] | None:
 def _qx_vmess_vless_obfs_segments(data: dict[str, object]) -> list[str] | None:
     """Build Quantumult X VMess/VLESS obfs segments."""
     network = _string(data.get("network"))
-    tls_enabled = _boolish(data.get("tls"))
+    tls_enabled = _boolish(data.get("tls")) or _qx_has_reality(data)
     if not network or network == "tcp":
         if not tls_enabled:
             return []
@@ -549,7 +699,7 @@ def _qx_trojan_transport_segments(data: dict[str, object]) -> list[str] | None:
     if not network or network == "tcp":
         return []
     if network == "ws":
-        return _qx_ws_segments(data, "ws")
+        return _qx_ws_segments(data, "wss")
     if network == "grpc":
         segments = ["obfs=grpc"]
         grpc_opts = data.get("grpc-opts")
@@ -578,13 +728,50 @@ def _has_unsupported_qx_ss_plugin(data: dict[str, object]) -> str | None:
     for field_name in (
         "plugin",
         "plugin-opts",
-        "obfs",
-        "obfs-host",
-        "obfs-uri",
         "obfs-opts",
     ):
         if field_name in data and data[field_name] not in (None, "", False):
             return field_name
+    return None
+
+
+def _qx_security_issue(data: dict[str, object], proxy_type: str) -> str | None:
+    """Return a security-critical QX field that cannot be rendered safely."""
+    for field_name in (
+        "ech-opts",
+        "fingerprint",
+        "certificate",
+        "certificate-pinning",
+        "pinned-cert",
+        "fingerprint-sha256",
+    ):
+        if field_name in data and data[field_name] not in (None, "", False):
+            return f"unsupported security-critical field {field_name}"
+    reality_value = data.get("reality-opts")
+    if reality_value not in (None, "", False):
+        if not isinstance(reality_value, dict):
+            return "unsupported security-critical field reality-opts"
+        if not _string(reality_value.get("public-key")):
+            return "unsupported security-critical field reality-opts.public-key"
+        explicit_obfs = _string(data.get("obfs"))
+        if (
+            proxy_type == "ss"
+            and explicit_obfs
+            and explicit_obfs
+            not in {
+                "over-tls",
+                "wss",
+            }
+        ):
+            return f"unsupported Reality obfs {explicit_obfs}"
+        if _string(data.get("network")) == "grpc":
+            return "unsupported Reality transport grpc"
+    flow = _string(data.get("flow"))
+    if flow:
+        if proxy_type != "vless":
+            return f"unsupported flow for {proxy_type}"
+        if flow != "xtls-rprx-vision":
+            return f"unsupported flow {flow}"
     return None
 
 
@@ -601,10 +788,19 @@ def _has_unrepresentable_qx_scalar(data: dict[str, object]) -> str | None:
         "uuid",
         "sni",
         "servername",
+        "obfs",
+        "obfs-host",
+        "obfs-uri",
+        "flow",
     )
     for field_name in scalar_fields:
         if field_name in data and _profile_scalar_issue(data[field_name]) is not None:
             return field_name
+    reality_opts = _qx_reality_opts(data)
+    if reality_opts is not None:
+        for field_name in ("public-key", "short-id"):
+            if _profile_scalar_issue(reality_opts.get(field_name)) is not None:
+                return f"reality-opts.{field_name}"
     ws_opts = data.get("ws-opts")
     if isinstance(ws_opts, dict):
         if _profile_scalar_issue(ws_opts.get("path")) is not None:
@@ -642,6 +838,10 @@ def _render_qx_ss(data: dict[str, object]) -> str | None:
         f"password={_qx_value(password)}",
     ]
     segments.extend(obfs_segments)
+    segments.extend(_qx_reality_segments(data))
+    udp_relay = _qx_udp_relay_segment(data)
+    if udp_relay:
+        segments.append(udp_relay)
     segments.append(_qx_tag(data))
     return ", ".join(segments)
 
@@ -663,6 +863,10 @@ def _render_qx_trojan(data: dict[str, object]) -> str | None:
     if transport is None:
         return None
     segments.extend(transport)
+    segments.extend(_qx_reality_segments(data))
+    udp_relay = _qx_udp_relay_segment(data)
+    if udp_relay:
+        segments.append(udp_relay)
     segments.append(_qx_tag(data))
     return ", ".join(segments)
 
@@ -682,6 +886,13 @@ def _render_qx_vless(data: dict[str, object]) -> str | None:
         f"password={_qx_value(uuid)}",
     ]
     segments.extend(transport)
+    segments.extend(_qx_reality_segments(data))
+    flow = _qx_flow_segment(data, "vless")
+    if flow:
+        segments.append(flow)
+    udp_relay = _qx_udp_relay_segment(data)
+    if udp_relay:
+        segments.append(udp_relay)
     segments.append(_qx_tag(data))
     return ", ".join(segments)
 
@@ -695,12 +906,22 @@ def _render_qx_vmess(data: dict[str, object]) -> str | None:
     transport = _qx_vmess_vless_obfs_segments(data)
     if transport is None:
         return None
+    method = _string(data.get("cipher") or data.get("method") or "none")
+    if method == "auto":
+        method = "none"
     segments = [
         f"vmess={hostport}",
-        "method=none",
+        f"method={_qx_value(method)}",
         f"password={_qx_value(uuid)}",
     ]
     segments.extend(transport)
+    segments.extend(_qx_reality_segments(data))
+    alter_id = _string(data.get("alterId") or data.get("alter-id"))
+    if alter_id and alter_id != "0":
+        segments.append("aead=false")
+    udp_relay = _qx_udp_relay_segment(data)
+    if udp_relay:
+        segments.append(udp_relay)
     segments.append(_qx_tag(data))
     return ", ".join(segments)
 
@@ -743,6 +964,36 @@ def _render_trojan_uri(data: dict[str, object]) -> str | None:
     query_part = f"?{query}" if query else ""
     return (
         f"trojan://{quote(password, safe='')}@{hostport}"
+        f"{query_part}#{_encoded_name(data)}"
+    )
+
+
+def _render_hysteria2_uri(data: dict[str, object]) -> str | None:
+    """Render Hysteria2 proxy as Hysteria2 URI scheme."""
+    host = _string(data.get("server"))
+    port = _string(data.get("ports") or data.get("port"))
+    password = _string(data.get("password") or data.get("auth") or data.get("auth-str"))
+    if not host or not password:
+        return None
+    authority = _uri_host(host)
+    if port:
+        authority = f"{authority}:{port}"
+    params: dict[str, str] = {}
+    sni = _string(data.get("sni") or data.get("servername"))
+    if sni:
+        params["sni"] = sni
+    if _boolish(data.get("skip-cert-verify")):
+        params["insecure"] = "1"
+    obfs = _string(data.get("obfs"))
+    if obfs:
+        params["obfs"] = obfs
+    obfs_password = _string(data.get("obfs-password"))
+    if obfs_password:
+        params["obfs-password"] = obfs_password
+    query = _query_string(params)
+    query_part = f"?{query}" if query else ""
+    return (
+        f"hysteria2://{quote(password, safe='')}@{authority}/"
         f"{query_part}#{_encoded_name(data)}"
     )
 
@@ -817,6 +1068,7 @@ class XrayUriRenderer:
         warnings: list[str] = []
         uris: list[str] = []
         renderers = {
+            "hysteria2": _render_hysteria2_uri,
             "ss": _render_ss_uri,
             "trojan": _render_trojan_uri,
             "vless": _render_vless_uri,
@@ -893,6 +1145,7 @@ class SurfboardRenderer:
         names: list[str] = []
         renderers = {
             "ss": _render_sb_ss,
+            "hysteria2": _render_sb_hysteria2,
             "trojan": _render_sb_trojan,
             "vmess": _render_sb_vmess,
         }
@@ -1003,16 +1256,11 @@ class QuantumultXRenderer:
         }
 
         for proxy in proxies:
-            critical_field = _has_security_critical_field(proxy)
-            if critical_field is not None:
-                warnings.append(
-                    _skip_warning(
-                        proxy,
-                        f"unsupported security-critical field {critical_field}",
-                    )
-                )
-                continue
             proxy_type = _string(proxy.get("type")).lower()
+            security_issue = _qx_security_issue(proxy, proxy_type)
+            if security_issue is not None:
+                warnings.append(_skip_warning(proxy, security_issue))
+                continue
             if proxy_type == "ss":
                 unsupported_ss_field = _has_unsupported_qx_ss_plugin(proxy)
                 if unsupported_ss_field is not None:

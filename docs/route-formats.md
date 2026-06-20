@@ -183,11 +183,12 @@ vmess://<base64-json>
 vless://00000000-0000-0000-0000-000000000000@example.com:443?encryption=none&security=tls&sni=example.com&type=ws&host=example.com&path=%2Fws#VLESS%2001
 trojan://password@example.com:443?sni=example.com&type=ws&host=example.com&path=%2Fws#Trojan%2001
 ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTpwYXNzd29yZA@example.com:443#SS%2001
+hysteria2://password@example.com:443/?sni=example.com&insecure=1#HY2%2001
 ```
 
 `encoding = "base64"` wraps the whole text payload after joining lines with `\n`. Do not base64 each URI separately.
 
-Phase-one supported protocols are `ss`, `vmess`, `vless`, and `trojan`. Unsupported protocols, Shadowsocks plugin fields, and unsupported security-critical fields are skipped with route render warnings; if every node is skipped, the route returns HTTP 422 with `no supported nodes for xray-uri output`.
+Supported protocols are `ss`, `vmess`, `vless`, `trojan`, and `hysteria2`. Unsupported protocols, Shadowsocks plugin fields, and unsupported security-critical fields are skipped with route render warnings; if every node is skipped, the route returns HTTP 422 with `no supported nodes for xray-uri output`.
 
 ### URI Mapping
 
@@ -197,7 +198,7 @@ Phase-one supported protocols are `ss`, `vmess`, `vless`, and `trojan`. Unsuppor
 | `vmess` | `uuid`, `server`, `port` | `vmess://base64(json)` | JSON carries `v`, `ps`, `add`, `port`, `id`, `aid`, `net`, `type`, `host`, `path`, `tls`, `sni`, and optional `fp`。 |
 | `vless` | `uuid`, `server`, `port`, `encryption=none` | `vless://uuid@host:port?...#name` | Implemented query params include `encryption=none`, `security=tls`, `sni`, `fp`, `type`, `path`, `host`, and `serviceName`; `flow` and Reality are skipped. |
 | `trojan` | `password`, `server`, `port` | `trojan://password@host:port?...#name` | Implemented query params include `sni`, `allowInsecure`, `fp`, `type`, `path`, `host`, and `serviceName`. |
-| `hysteria2` | future | `hysteria2://password@host:port?...#name` | Not implemented for `xray-uri` phase one; URI field names vary across clients. |
+| `hysteria2` | `password`, `server`, optional `port`/`ports` | `hysteria2://password@host:port/?...#name` | Implemented query params include `sni`, `insecure=1`, `obfs`, and `obfs-password`; bandwidth fields are intentionally not shared by URI per Hysteria2 docs. |
 
 Shared URI rules:
 
@@ -206,6 +207,7 @@ Shared URI rules:
 - `uuid` or `password` -> URL userinfo; percent-encode reserved characters.
 - `network = ws` -> `type=ws`, `path`, `host`.
 - TLS fields -> VLESS uses `security=tls`; VMess JSON uses `tls`; SNI and client fingerprint map where supported by the implemented renderer.
+- Hysteria2 `ports` can render the URI authority port-hopping form.
 - Reality, ECH, certificate pinning-like fields, and VLESS `flow` are skipped until exact mapping is implemented.
 
 ### Future `xray-json` Output
@@ -452,13 +454,14 @@ Trojan 01 = trojan, example.com, 443, password=password, skip-cert-verify=false,
 
 [Proxy]
 SS 01 = ss, example.com, 443, encrypt-method=chacha20-ietf-poly1305, password=password
-VMess 01 = vmess, example.com, 443, username=00000000-0000-0000-0000-000000000000, ws=true, tls=true, ws-path=/ws, ws-headers=Host:example.com, sni=example.com
-Trojan 01 = trojan, example.com, 443, password=password, skip-cert-verify=false, sni=example.com
+VMess 01 = vmess, example.com, 443, username=00000000-0000-0000-0000-000000000000, udp-relay=false, ws=true, tls=true, ws-path=/ws, ws-headers=Host:example.com, sni=example.com, vmess-aead=true
+Trojan 01 = trojan, example.com, 443, password=password, udp-relay=false, skip-cert-verify=false, sni=example.com
+HY2 01 = hysteria2, example.com, 443, password=password, download-bandwidth=100, port-hopping="1234;5000-6000", port-hopping-interval=30, skip-cert-verify=false, sni=example.com, salamander-password=obfs-password, udp-relay=true
 
 [Proxy Group]
 Main = select, Auto, Proxy, DIRECT
-Auto = url-test, SS 01, VMess 01, Trojan 01, policy-path=https://mpm.example.com/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml-nodes, policy-regex-filter=.*, url=http://www.gstatic.com/generate_204, interval=600, tolerance=100, timeout=5
-Proxy = select, SS 01, VMess 01, Trojan 01, policy-path=https://mpm.example.com/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml-nodes, policy-regex-filter=.*
+Auto = url-test, SS 01, VMess 01, Trojan 01, HY2 01, policy-path=https://mpm.example.com/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml-nodes, policy-regex-filter=.*, url=http://www.gstatic.com/generate_204, interval=600, tolerance=100, timeout=5
+Proxy = select, SS 01, VMess 01, Trojan 01, HY2 01, policy-path=https://mpm.example.com/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml-nodes, policy-regex-filter=.*
 
 [Rule]
 FINAL,Main
@@ -466,7 +469,7 @@ FINAL,Main
 
 The main group is always `Main = select, Auto, Proxy, DIRECT`; the rule tail is `FINAL,Main`. The nodes companion uses the same route access policy as the main route.
 
-Phase-one supported protocols are `ss`, `vmess`, and `trojan`. `vless`, `hysteria2`, and other unsupported protocols are skipped with route render warnings; if every node is skipped, the route returns HTTP 422 with `no supported nodes for surfboard output`.
+Supported protocols are `ss`, `vmess`, `trojan`, and `hysteria2`. Surfboard's documented protocol list does not include VLESS, so `vless` nodes are skipped with route render warnings. Nodes using unsupported security-critical fields such as `reality-opts`, `ech-opts`, `flow`, or client TLS `fingerprint` are also skipped; if every node is skipped, the route returns HTTP 422 with `no supported nodes for surfboard output`.
 
 ### Field Mapping Notes
 
@@ -474,13 +477,18 @@ Phase-one supported protocols are `ss`, `vmess`, and `trojan`. `vless`, `hysteri
 | --- | --- | --- |
 | `name` | left side before `=` | Escape commas and line breaks; avoid duplicate names. |
 | `ss.cipher` | `encrypt-method=` | Shadowsocks only. |
-| `uuid` | `username=` | VMess. VLESS is skipped in phase one. |
+| `uuid` | `username=` | VMess. VLESS is skipped because Surfboard does not document VLESS support. |
 | `password` | `password=` | SS/Trojan. |
+| `udp` / `udp-relay` | `udp-relay=` | Emitted for SS, VMess, Trojan, and Hysteria2 when present; Hysteria2 defaults to `true` per Surfboard. |
 | `network = ws` | `ws=true`, `ws-path=`, `ws-headers=` | `ws-headers` uses `Header:value` pairs; multiple headers use `|` in examples. |
 | TLS enabled | `tls=true` or protocol-specific TLS defaults | VMess uses `tls=true`; Trojan is TLS-based. |
 | `sni` | `sni=` | Preserve if present. |
 | `skip-cert-verify` | `skip-cert-verify=` | Boolean lower-case. |
-| Hysteria2 bandwidth | future | Hysteria2 is skipped in phase one; validate exact keys before outputting. |
+| `alterId` | `vmess-aead=` | VMess uses `true` when absent or `0`, `false` for non-zero legacy nodes. |
+| `hysteria2.down` / `down-speed` | `download-bandwidth=` | Converted to Mbps where possible, for example `100 Mbps` -> `100`. |
+| `hysteria2.ports` | `port-hopping=` | Mihomo comma ranges are converted to Surfboard semicolon ranges and quoted. |
+| `hysteria2.hop-interval` | `port-hopping-interval=` | Preserve if present. |
+| `hysteria2.obfs = salamander` + `obfs-password` | `salamander-password=` | Other Hysteria2 obfs types are not emitted. |
 
 ## Quantumult X Profile
 
@@ -535,15 +543,15 @@ The route itself returns server definitions, not the wrapper above.
 ### Main Route Server Lines
 
 ```ini
-shadowsocks=example.com:443, method=chacha20-ietf-poly1305, password=password, tag=SS 01
+shadowsocks=example.com:443, method=chacha20-ietf-poly1305, password=password, udp-relay=true, tag=SS 01
 vmess=example.com:443, method=none, password=00000000-0000-0000-0000-000000000000, obfs=wss, obfs-host=example.com, obfs-uri=/ws, tag=VMess 01
 vless=example.com:443, method=none, password=00000000-0000-0000-0000-000000000000, obfs=wss, obfs-host=example.com, obfs-uri=/ws, tag=VLESS 01
-trojan=example.com:443, password=password, over-tls=true, tls-host=example.com, tls-verification=true, tag=Trojan 01
+trojan=example.com:443, password=password, over-tls=true, tls-host=example.com, tls-verification=true, udp-relay=false, tag=Trojan 01
 ```
 
-Unsupported security-critical fields and unsupported Shadowsocks plugin/obfs fields are skipped with route render warnings; if every node is skipped, the route returns HTTP 422 with `no supported nodes for quantumult-x output`.
+Supported protocols are `shadowsocks`, `vmess`, `vless`, and `trojan`. QX Reality fields are supported when the source carries `reality-opts.public-key`; unsupported security-critical fields and unsupported Shadowsocks plugin fields are skipped with route render warnings; if every node is skipped, the route returns HTTP 422 with `no supported nodes for quantumult-x output`.
 
-Future Reality and Vision mapping should use QX-specific params like these after source-field support is validated:
+Reality and Vision mapping uses QX-specific params:
 
 ```ini
 vless=example.com:443, method=none, password=00000000-0000-0000-0000-000000000000, obfs=over-tls, obfs-host=apple.com, reality-base64-pubkey=base64pubkey, reality-hex-shortid=0123456789abcdef, vless-flow=xtls-rprx-vision, tag=VLESS Reality
@@ -559,12 +567,15 @@ vless=example.com:443, method=none, password=00000000-0000-0000-0000-00000000000
 | `uuid` | `password=` for VMess/VLESS | QX uses `password` key for UUID-like IDs. |
 | `vless.method` | `method=none` | Required in sample. |
 | `vmess.cipher` | `method=none/aes-128-gcm/chacha20-poly1305` | `aead=false` only for legacy VMess. |
-| TLS over TCP | `obfs=over-tls` or `over-tls=true` | Protocol-dependent. |
+| `udp` / `udp-relay` | `udp-relay=` | Emitted when source explicitly sets UDP relay. |
+| SS simple obfs | `obfs=http/tls`, `obfs-host=`, `obfs-uri=` | Direct Mihomo `obfs*` fields map to QX fields. |
+| TLS over TCP | `obfs=over-tls` or `over-tls=true` | SS/VMess/VLESS use `obfs=over-tls`; Trojan uses `over-tls=true`. |
 | WebSocket TLS | `obfs=wss`, `obfs-host=`, `obfs-uri=` | `obfs-host` is also TLS host for `wss`. |
 | WebSocket cleartext | `obfs=ws`, `obfs-host=`, `obfs-uri=` | No `over-tls`. |
 | `skip-cert-verify` | `tls-verification=false` | Inverted boolean. |
-| Reality | `reality-base64-pubkey`, `reality-hex-shortid` | Future; add only when source has exact fields. |
-| VLESS flow | `vless-flow=` | Future; example: `xtls-rprx-vision`. |
+| `reality-opts.public-key` | `reality-base64-pubkey=` | Supported for QX over-tls/wss capable protocols. |
+| `reality-opts.short-id` | `reality-hex-shortid=` | Optional. |
+| `flow = "xtls-rprx-vision"` | `vless-flow=xtls-rprx-vision` | VLESS only; other flow values are skipped. |
 
 Do not include `[filter_local]`, `[rewrite_local]`, scripts, or MITM in route output. Those are user policy, not node serialization.
 
@@ -699,14 +710,14 @@ Renderer split:
 | `cipher` | `cipher` | SS userinfo / VMess `scy` | protocol-specific | `method` | `encrypt-method` | `method` | encryption method |
 | `uuid` | `uuid` | userinfo / VMess JSON `id` | `settings.id` | `uuid` | `username` for VMess | `password` for VMess/VLESS | quoted UUID for VMess |
 | `password` | `password` | userinfo | protocol-specific | `password` | `password` | `password` | quoted/positional password |
-| `alterId` | `alterId` | VMess JSON `aid` | VMess settings | `alter_id` | future legacy AEAD flag | `aead=false` for legacy | not documented in fetched example |
+| `alterId` | `alterId` | VMess JSON `aid` | VMess settings | `alter_id` | `vmess-aead` legacy flag | `aead=false` for legacy | not documented in fetched example |
 | `network = ws` | `network`, `ws-opts` | `type=ws`, `path`, `host` | `streamSettings.wsSettings` | `transport.type = ws` | `ws=true`, `ws-path`, `ws-headers` | `obfs=ws/wss`, `obfs-uri`, `obfs-host` | `transport:ws`, `path`, `host` |
 | TLS enabled | `tls` | VLESS `security=tls`; VMess JSON `tls`; Trojan keeps TLS implicit unless query params are present | `streamSettings.security` | `tls.enabled` | `tls=true` / protocol default | `over-tls=true` or `obfs=wss` | `over-tls:true` |
 | `sni` / `servername` | `sni` / `servername` | `sni` | TLS server name | `tls.server_name` | `sni` | `tls-host` / `obfs-host` | `tls-name` |
 | `skip-cert-verify` | `skip-cert-verify` | `allowInsecure` / `insecure` | `allowInsecure` | `tls.insecure` | `skip-cert-verify` | `tls-verification=false` | `skip-cert-verify:true` |
-| Reality public key | `reality-opts.public-key` | skipped | Reality settings | target-version-specific TLS Reality | not validated | `reality-base64-pubkey` future | not validated |
-| Reality short id | `reality-opts.short-id` | skipped | Reality settings | target-version-specific TLS Reality | not validated | `reality-hex-shortid` future | not validated |
-| VLESS flow | `flow` | skipped | `settings.flow` | `flow` | not validated | `vless-flow` future | not validated |
+| Reality public key | `reality-opts.public-key` | skipped | Reality settings | target-version-specific TLS Reality | not validated | `reality-base64-pubkey` | not validated |
+| Reality short id | `reality-opts.short-id` | skipped | Reality settings | target-version-specific TLS Reality | not validated | `reality-hex-shortid` | not validated |
+| VLESS flow | `flow` | skipped | `settings.flow` | `flow` | not validated | `vless-flow` for `xtls-rprx-vision` | not validated |
 
 ## Implementation Checklist
 

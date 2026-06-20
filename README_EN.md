@@ -353,7 +353,7 @@ format = "surfboard"
 test_url = "http://www.gstatic.com/generate_204"
 ```
 
-`xray-uri` is directly subscribable by v2rayN-style clients and returns a base64 URI payload by default. `quantumult-x` returns server lines on the main route and registers a `-import` one-click import endpoint. `surfboard` returns a minimal full profile on the main route and registers `-nodes` for `policy-path`.
+`xray-uri` is directly subscribable by v2rayN-style clients and returns a base64 URI payload by default. `quantumult-x` returns server lines on the main route and registers a `-import` one-click import endpoint. `surfboard` returns a minimal full profile on the main route and registers `-nodes` for `policy-path`; it currently supports `ss`, `trojan`, `vmess`, and `hysteria2`, while undocumented Surfboard protocols such as `vless` are skipped.
 
 ### HTTP Action plugin
 

@@ -5,6 +5,7 @@ YAML renderer tests including renaming, deduplication, and meta comments.
 
 import base64
 import json
+from typing import Literal
 from urllib.parse import unquote
 
 import yaml
@@ -54,7 +55,7 @@ def route(
     )
 
 
-def xray_route(encoding: str = "base64") -> RouteConfig:
+def xray_route(encoding: Literal["base64", "plain"] = "base64") -> RouteConfig:
     """Create a route for xray-uri renderer tests."""
     return RouteConfig(
         name="xray",

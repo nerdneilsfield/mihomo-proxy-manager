@@ -135,6 +135,7 @@ timezone = "Asia/Shanghai"
 health_path = "/healthz"
 status_path = "/s/X6HfeBRQz6xqk9S4dTV7gQwL2nP8aYcM"
 route_refresh_wait = "10s"
+public_base_url = "https://mpm.example.com"
 
 [cache]
 dir = "data/cache"
@@ -230,6 +231,7 @@ exclude = "倍率|测试"
 | `server.health_path` | liveness 检查路径，只表示服务进程还活着。 |
 | `server.status_path` | 状态页面路径，建议使用随机路径，不要公开给客户端。根路径返回 HTML 面板，`{status_path}/api` 返回 JSON API。 |
 | `server.route_refresh_wait` | route 请求发现缓存缺失时，最多等待刷新完成的时间。 |
+| `server.public_base_url` | 公网访问根 URL。Surfboard 和 Quantumult X import companion 需要它生成稳定的绝对订阅地址。 |
 | `cache.dir` | source JSON 缓存目录。缓存里包含代理节点信息，应保护目录权限。 |
 | `cache.max_stale` | 缓存最长可用时间，超过后 route 会把该 source 视为不可用。 |
 | `http.max_response_size` | 上游订阅响应大小上限，避免异常响应占用过多内存。 |
@@ -258,7 +260,7 @@ proxies:
     port: 443
 ```
 
-完整可运行模板见 [examples/config.toml](examples/config.toml)，里面包含两个订阅源、插件、两个 provider 路由、文件日志和 Docker 运行所需目录。
+完整可运行模板见 [examples/config.toml](examples/config.toml)，里面包含两个订阅源、插件、provider 路由、v2rayN / Quantumult X / Surfboard 直连订阅路由、文件日志和 Docker 运行所需目录。
 
 <details>
 <summary>功能用法速查</summary>
@@ -331,6 +333,27 @@ include_meta_comments = true
 ```
 
 开启后，输出 YAML 顶部会包含生成时间、路由名、source 数量和节点数量。不会写入上游 URL、header、token 或隐藏路径。
+
+### 直接订阅输出
+
+```toml
+[server]
+public_base_url = "https://mpm.example.com"
+
+[routes.v2rayn.output]
+format = "xray-uri"
+encoding = "base64" # base64 | plain
+
+[routes.qx.output]
+format = "quantumult-x"
+resource_tag = "MPM"
+
+[routes.surfboard.output]
+format = "surfboard"
+test_url = "http://www.gstatic.com/generate_204"
+```
+
+`xray-uri` 可直接给 v2rayN 等客户端订阅，默认返回 base64 URI payload。`quantumult-x` 主路由返回 server lines，并额外注册 `-import` 一键导入端点。`surfboard` 主路由返回最小完整 profile，并额外注册 `-nodes` 给 `policy-path` 使用。
 
 ### HTTP Action 插件
 

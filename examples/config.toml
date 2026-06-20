@@ -10,6 +10,7 @@ timezone = "Asia/Shanghai"
 health_path = "/healthz"
 status_path = "/s/X6HfeBRQz6xqk9S4dTV7gQwL2nP8aYcM"
 route_refresh_wait = "10s"
+public_base_url = "https://mpm.example.com"
 
 [cache]
 dir = "data/cache"
@@ -171,3 +172,42 @@ prefix = "[gateway] "
 [routes.gateway.filter]
 include = "香港|日本|新加坡|HK|JP|SG"
 exclude_types = ["http"]
+
+# Direct subscription for v2rayN/Xray-compatible clients.
+# Default encoding is base64; set encoding = "plain" for debugging.
+[routes.v2rayn]
+path = "/p/V2RayN7vQpWv42xZ9HTmKc7YbNf3aLsGj.yaml"
+sources = ["airport_a", "airport_b"]
+require_all_sources = false
+
+[routes.v2rayn.output]
+format = "xray-uri"
+encoding = "base64"
+
+# Direct import for Quantumult X.
+# Main route returns server lines; "-import" opens the one-click import URL.
+[routes.qx]
+path = "/p/QX7MZ8vQpWv42xZ9HTmKc7YbNf3aLsGj.yaml"
+sources = ["airport_a", "airport_b"]
+require_all_sources = false
+
+[routes.qx.output]
+format = "quantumult-x"
+resource_tag = "MPM"
+import_link = true
+import_response = "redirect"
+import_target = "app-scheme"
+
+# Direct import for Surfboard.
+# Main route returns a minimal full profile; "-nodes" returns proxy lines for policy-path.
+[routes.surfboard]
+path = "/p/SurfBd7vQpWv42xZ9HTmKc7YbNf3aLsGj.yaml"
+sources = ["airport_a", "airport_b"]
+require_all_sources = false
+
+[routes.surfboard.output]
+format = "surfboard"
+test_url = "http://www.gstatic.com/generate_204"
+test_interval = 600
+test_timeout = 5
+test_tolerance = 100

@@ -135,6 +135,7 @@ timezone = "Asia/Shanghai"
 health_path = "/healthz"
 status_path = "/s/X6HfeBRQz6xqk9S4dTV7gQwL2nP8aYcM"
 route_refresh_wait = "10s"
+public_base_url = "https://mpm.example.com"
 
 [cache]
 dir = "data/cache"
@@ -230,6 +231,7 @@ exclude = "倍率|测试"
 | `server.health_path` | Liveness path. It only means the process is alive. |
 | `server.status_path` | Status path. Use a random path and avoid exposing it to clients. The root path returns an HTML dashboard; `{status_path}/api` returns the JSON API. |
 | `server.route_refresh_wait` | How long a route request waits when a required cache is missing. |
+| `server.public_base_url` | Public base URL. Surfboard and Quantumult X import companions use it to generate stable absolute subscription URLs. |
 | `cache.dir` | Directory for source JSON cache files. Cache files contain proxy data. |
 | `cache.max_stale` | Maximum age for cache entries. Older entries are treated as unavailable. |
 | `http.max_response_size` | Maximum upstream response size. |
@@ -258,7 +260,7 @@ proxies:
     port: 443
 ```
 
-See [examples/config.toml](examples/config.toml) for a complete runnable template with two sources, a plugin, two provider routes, file logging, and Docker-friendly runtime paths.
+See [examples/config.toml](examples/config.toml) for a complete runnable template with two sources, a plugin, provider routes, v2rayN / Quantumult X / Surfboard direct subscription routes, file logging, and Docker-friendly runtime paths.
 
 <details>
 <summary>Feature usage quick reference</summary>
@@ -331,6 +333,27 @@ include_meta_comments = true
 ```
 
 When enabled, the YAML output includes generation time, route name, source count, and node count. It does not include upstream URLs, headers, tokens, or hidden paths.
+
+### Direct Subscription Outputs
+
+```toml
+[server]
+public_base_url = "https://mpm.example.com"
+
+[routes.v2rayn.output]
+format = "xray-uri"
+encoding = "base64" # base64 | plain
+
+[routes.qx.output]
+format = "quantumult-x"
+resource_tag = "MPM"
+
+[routes.surfboard.output]
+format = "surfboard"
+test_url = "http://www.gstatic.com/generate_204"
+```
+
+`xray-uri` is directly subscribable by v2rayN-style clients and returns a base64 URI payload by default. `quantumult-x` returns server lines on the main route and registers a `-import` one-click import endpoint. `surfboard` returns a minimal full profile on the main route and registers `-nodes` for `policy-path`.
 
 ### HTTP Action plugin
 

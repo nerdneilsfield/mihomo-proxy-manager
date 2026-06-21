@@ -31,6 +31,22 @@ rotation = "10 MB"
 retention = "14 days"
 compression = "gz"
 
+# Access audit stores personal data in SQLite: client IP, user agent, request
+# path, timestamp, selected sanitized headers, status, response size, and
+# duration. The default SQLite retention is 30d.
+# Disable access audit logging with [access_log] enabled = false.
+# mpm check may create configured directories, but it does not create the
+# SQLite DB file or human-readable access log file.
+#
+# Trusted proxies trade spoofing risk for real client IP detection. For
+# private/LAN exposure, replace broad example ranges with exact reverse proxy
+# CIDRs, such as "192.168.1.10/32", "10.0.0.10/32", or "fd00::10/128".
+# If x-forwarded-for is enabled, the reverse proxy must overwrite/sanitize it;
+# otherwise remove "x-forwarded-for" from real_ip_headers.
+#
+# Status endpoint privacy: aggregate stats only, no full headers_json; keep
+# status_path high entropy and non-public. IP masking is enabled and recent
+# requests are hidden by default.
 [access_log]
 enabled = true
 db_path = "data/access/access.sqlite3"
@@ -38,6 +54,7 @@ retention = "30d"
 trusted_proxies = ["127.0.0.1/32", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
 real_ip_headers = ["cf-connecting-ip", "true-client-ip", "x-forwarded-for", "x-real-ip"]
 
+# Separate human-readable access log, independent from SQLite audit storage.
 [access_log.file]
 enabled = true
 path = "logs/access.log"

@@ -1034,7 +1034,9 @@ def _render_qx_vmess(data: dict[str, object]) -> str | None:
     return ", ".join(segments)
 
 
-def _qx_http_socks5_tls_segments(data: dict[str, object], default_host: str) -> list[str]:
+def _qx_http_socks5_tls_segments(
+    data: dict[str, object], default_host: str
+) -> list[str]:
     """Build Quantumult X HTTP/SOCKS5 TLS segments when over-tls is enabled."""
     segments: list[str] = ["over-tls=true"]
     tls_host = _string(data.get("servername") or data.get("sni") or default_host)

@@ -479,6 +479,11 @@ format = "surfboard"
 SS 01 = ss, example.com, 443, encrypt-method=chacha20-ietf-poly1305, password=password
 VMess 01 = vmess, example.com, 443, username=00000000-0000-0000-0000-000000000000, ws=true, tls=true, ws-path=/ws, ws-headers=Host:example.com, sni=example.com
 Trojan 01 = trojan, example.com, 443, password=password, skip-cert-verify=false, sni=example.com
+HY2 01 = hysteria2, example.com, 443, password=secret, download-bandwidth=100 Mbps, sni=example.com
+Snell 01 = snell, example.com, 443, psk=psk-secret, version=4
+AnyTLS 01 = anytls, example.com, 443, anytls-secret, sni=example.com
+HTTP 01 = http, example.com, 8080, user, pass
+SOCKS 01 = socks5, example.com, 1080, user, pass
 ```
 
 ### Main Route Full Profile
@@ -502,7 +507,7 @@ FINAL,Main
 
 The main group is always `Main = select, Auto, Proxy, DIRECT`; the rule tail is `FINAL,Main`. The nodes companion uses the same route access policy as the main route.
 
-Client-compatible protocols are `ss`, `vmess`, and `trojan`. Although Surfboard documentation lists Hysteria2, some Surfboard client decoders reject `hysteria2` profile lines; `hysteria2` is therefore skipped automatically for import safety. Surfboard's documented protocol list does not include VLESS, so `vless` nodes are also skipped with route render warnings. Nodes using unsupported security-critical fields such as `reality-opts`, `ech-opts`, `flow`, or client TLS `fingerprint` are skipped; if every node is skipped, the route returns HTTP 422 with `no supported nodes for surfboard output`.
+Client-compatible protocols are `ss`, `vmess`, `trojan`, `hysteria2`, `snell`, `anytls`, `http`, and `socks5`. VLESS is skipped because Surfboard does not document VLESS support. WireGuard is deferred because it requires a multi-section `[WireGuard Section]` configuration block that cannot be rendered as a single proxy line. Nodes using unsupported security-critical fields such as `reality-opts`, `ech-opts`, `flow`, or client TLS `fingerprint` are skipped; if every node is skipped, the route returns HTTP 422 with `no supported nodes for surfboard output`.
 
 ### Field Mapping Notes
 
@@ -511,13 +516,22 @@ Client-compatible protocols are `ss`, `vmess`, and `trojan`. Although Surfboard 
 | `name` | left side before `=` | Escape commas and line breaks; avoid duplicate names. |
 | `ss.cipher` | `encrypt-method=` | Shadowsocks only. |
 | `uuid` | `username=` | VMess. VLESS is skipped because Surfboard does not document VLESS support. |
-| `password` | `password=` | SS/Trojan. |
-| `udp` / `udp-relay` | `udp-relay=` | Emitted for SS, VMess, and Trojan when present. |
+| `password` | `password=` or positional | SS/Trojan/Hysteria2 use `password=`; AnyTLS/HTTP/SOCKS5 use positional value after port. |
+| `udp` / `udp-relay` | `udp-relay=` | Emitted for SS, VMess, Trojan, Hysteria2, and Snell when present. |
 | `network = ws` | `ws=true`, `ws-path=`, `ws-headers=` | `ws-headers` uses `Header:value` pairs; multiple headers use `|` in examples. |
-| TLS enabled | `tls=true` or protocol-specific TLS defaults | VMess uses `tls=true`; Trojan is TLS-based. |
+| TLS enabled | `tls=true` or protocol-specific TLS defaults | VMess uses `tls=true`; Trojan is TLS-based. HTTP becomes `https`; SOCKS5 becomes `socks5-tls`. |
 | `sni` | `sni=` | Preserve if present. |
 | `skip-cert-verify` | `skip-cert-verify=` | Boolean lower-case. |
 | `alterId` | `vmess-aead=` | VMess uses `true` when absent or `0`, `false` for non-zero legacy nodes. |
+| `down` / `down-speed` | `download-bandwidth=` | Hysteria2 only. |
+| `ports` | `port-hopping=` | Hysteria2 only. Comma separators are converted to `;` for Surfboard. |
+| `hop-interval` | `port-hopping-interval=` | Hysteria2 only. |
+| `obfs` = `salamander` + `obfs-password` | `salamander-password=` | Hysteria2 obfuscation. |
+| `psk` | `psk=` | Snell only. |
+| `version` | `version=` | Snell only. |
+| `obfs-opts` | `obfs=`, `obfs-host=`, `obfs-uri=` | Snell obfuscation; maps `mode`/`host`/`uri` keys. |
+| `username` | positional after port | HTTP/SOCKS5 only. |
+| `reuse` | `reuse=` | AnyTLS only. |
 
 ## Quantumult X Profile
 
@@ -739,12 +753,16 @@ Renderer split:
 | `port` | `port` | port | `settings.port` | `server_port` | positional port | `host:port` | positional port |
 | `cipher` | `cipher` | SS userinfo / VMess `scy` | protocol-specific | `method` | `encrypt-method` | `method` | encryption method |
 | `uuid` | `uuid` | userinfo / VMess JSON `id` | `settings.id` | `uuid` | `username` for VMess | `password` for VMess/VLESS | quoted UUID for VMess |
-| `password` | `password` | userinfo | protocol-specific | `password` | `password` | `password` | quoted/positional password |
+| `password` | `password` | userinfo | protocol-specific | `password` | `password=` or positional (SS/Trojan/HY2/Snell vs AnyTLS/HTTP/SOCKS5) | `password` | quoted/positional password |
 | `alterId` | `alterId` | VMess JSON `aid` | VMess settings | `alter_id` | `vmess-aead` legacy flag | `aead=false` for legacy | not documented in fetched example |
 | `network = ws` | `network`, `ws-opts` | `type=ws`, `path`, `host` | `streamSettings.wsSettings` | `transport.type = ws` | `ws=true`, `ws-path`, `ws-headers` | `obfs=ws/wss`, `obfs-uri`, `obfs-host` | `transport:ws`, `path`, `host` |
-| TLS enabled | `tls` | VLESS `security=tls`; VMess JSON `tls`; Trojan keeps TLS implicit unless query params are present | `streamSettings.security` | `tls.enabled` | `tls=true` / protocol default | `over-tls=true` or `obfs=wss` | `over-tls:true` |
+| TLS enabled | `tls` | VLESS `security=tls`; VMess JSON `tls`; Trojan keeps TLS implicit unless query params are present | `streamSettings.security` | `tls.enabled` | `tls=true` / protocol default / `http`→`https` / `socks5`→`socks5-tls` | `over-tls=true` or `obfs=wss` | `over-tls:true` |
 | `sni` / `servername` | `sni` / `servername` | `sni` | TLS server name | `tls.server_name` | `sni` | `tls-host` / `obfs-host` | `tls-name` |
 | `skip-cert-verify` | `skip-cert-verify` | `allowInsecure` / `insecure` | `allowInsecure` | `tls.insecure` | `skip-cert-verify` | `tls-verification=false` | `skip-cert-verify:true` |
+| `down` / `down-speed` | `down` / `down-speed` | — | — | — | `download-bandwidth` (HY2) | — | — |
+| `ports` | `ports` | — | — | — | `port-hopping` (HY2, `,`→`;`) | — | — |
+| `psk` | `psk` | — | — | — | `psk` (Snell) | — | — |
+| `username` (HTTP/SOCKS5) | `username` | — | — | — | positional (HTTP/SOCKS5) | — | — |
 | Reality public key | `reality-opts.public-key` | skipped | Reality settings | target-version-specific TLS Reality | not validated | `reality-base64-pubkey` | not validated |
 | Reality short id | `reality-opts.short-id` | skipped | Reality settings | target-version-specific TLS Reality | not validated | `reality-hex-shortid` | not validated |
 | VLESS flow | `flow` | skipped | `settings.flow` | `flow` | not validated | `vless-flow` for `xtls-rprx-vision` | not validated |
@@ -784,6 +802,11 @@ Before adding any renderer:
 - sing-box Hysteria2 outbound: https://sing-box.sagernet.org/configuration/outbound/hysteria2/
 - Surfboard profile overview: https://getsurfboard.com/docs/profile-format/overview/
 - Surfboard VMess format: https://getsurfboard.com/docs/profile-format/proxy/external-proxy/vmess/
+- Surfboard Hysteria2 format: https://getsurfboard.com/docs/profile-format/proxy/external-proxy/hysteria2/
+- Surfboard Snell format: https://getsurfboard.com/docs/profile-format/proxy/external-proxy/snell/
+- Surfboard AnyTLS format: https://getsurfboard.com/docs/profile-format/proxy/external-proxy/anytls/
+- Surfboard HTTP format: https://getsurfboard.com/docs/profile-format/proxy/external-proxy/http/
+- Surfboard SOCKS5 format: https://getsurfboard.com/docs/profile-format/proxy/external-proxy/socks5/
 - Quantumult X sample config: https://github.com/crossutility/Quantumult-X/blob/master/sample.conf
 - Loon proxy examples: https://github.com/TiyNa/LoonManual/blob/main/Plus_EN/Proxy_EN.md
 - Loon remote proxy group notes: https://github.com/TiyNa/LoonManual/blob/main/Plus_EN/Remote_Proxy_in_Proxy_Group_EN.md

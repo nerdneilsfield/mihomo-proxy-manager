@@ -5,6 +5,8 @@ from datetime import timedelta
 from ipaddress import ip_network
 from pathlib import Path
 
+from loguru import logger
+from sqlalchemy import event as sqlalchemy_event
 from sqlalchemy import text
 
 from mihomo_proxy_manager.access_audit import (
@@ -112,13 +114,16 @@ def test_sanitize_headers_redacts_secrets_and_truncates() -> None:
     headers = {
         "Authorization": "Bearer abc123",
         "Cookie": "session=secret",
-        "X-Trace": "token=abc123",
+        "X-Trace": "id=abc123",
+        "X-Trace-Long": "abc123-" + ("A" * 20),
         "User-Agent": "A" * 20,
     }
     sanitized = sanitize_headers(headers, max_value_length=8, extra_secrets=["abc123"])
     assert sanitized["authorization"] == "***"
     assert sanitized["cookie"] == "***"
-    assert sanitized["x-trace"] == "token=***"
+    assert sanitized["x-trace"] == "id=***"
+    assert sanitized["x-trace-long"] == "***-A..."
+    assert len(sanitized["x-trace-long"]) == 8
     assert sanitized["user-agent"] == "AAAAA..."
 
 
@@ -200,6 +205,72 @@ def test_store_records_event_and_returns_stats(tmp_path: Path) -> None:
     assert stats.recent is not None
     assert stats.recent[0]["path"] == "/p/token-import"
     assert "headers_json" not in stats.recent[0]
+
+
+def test_store_handles_special_characters_in_db_path(tmp_path: Path) -> None:
+    config = access_config(tmp_path, db_path=tmp_path / "audit ? #.sqlite3")
+    store = SQLiteAccessAuditStore(config)
+    try:
+        store.record(event())
+        stats = store.stats(now_ms=1_790_000_002_000)
+    finally:
+        store.dispose()
+    assert stats.total_events == 1
+    assert config.db_path.exists()
+
+
+def test_store_stats_limits_header_payload_query(tmp_path: Path) -> None:
+    config = access_config(
+        tmp_path,
+        headers=AccessLogHeadersConfig(
+            stats_allowlist=("host",),
+            stats_max_rows=1,
+        ),
+        status=AccessLogStatusConfig(top_limit=5),
+    )
+    store = SQLiteAccessAuditStore(config)
+    try:
+        store.record(event(visited_at=1_790_000_000_000, headers={"host": "a.test"}))
+        store.record(event(visited_at=1_790_000_001_000, headers={"host": "b.test"}))
+
+        def reject_unbounded_headers_query(
+            conn,
+            cursor,
+            statement,
+            parameters,
+            context,
+            executemany,
+        ) -> None:
+            normalized = " ".join(statement.lower().split())
+            if (
+                "select" in normalized
+                and "headers_json" in normalized
+                and "from access_events" in normalized
+                and "limit" not in normalized
+            ):
+                raise AssertionError(
+                    "stats must not select headers_json without stats_max_rows limit"
+                )
+
+        sqlalchemy_event.listen(
+            store.engine, "before_cursor_execute", reject_unbounded_headers_query
+        )
+        try:
+            stats = store.stats(now_ms=1_790_000_002_000)
+        finally:
+            sqlalchemy_event.remove(
+                store.engine, "before_cursor_execute", reject_unbounded_headers_query
+            )
+    finally:
+        store.dispose()
+    assert stats.top_headers == [
+        {
+            "header": "host",
+            "value": "b.test",
+            "count": 1,
+            "last_seen": 1_790_000_001_000,
+        }
+    ]
 
 
 def test_store_cleanup_uses_epoch_ms_cutoff(tmp_path: Path) -> None:
@@ -293,14 +364,31 @@ def test_store_sets_wal_and_busy_timeout(tmp_path: Path) -> None:
     assert int(timeout) == 5000
 
 
-def test_record_and_cleanup_log_failures_without_raising(tmp_path: Path) -> None:
+def test_record_and_cleanup_log_failures_without_raising(
+    tmp_path: Path, monkeypatch
+) -> None:
     store = SQLiteAccessAuditStore(access_config(tmp_path))
+    messages: list[str] = []
+    handler_id = logger.add(
+        lambda message: messages.append(str(message)), level="WARNING"
+    )
+
+    def fail_record_begin():
+        raise RuntimeError("record boom")
+
+    def fail_cleanup_begin():
+        raise RuntimeError("cleanup boom")
+
     try:
-        store.dispose()
+        monkeypatch.setattr(store.engine, "begin", fail_record_begin)
         store.record(event())
+        monkeypatch.setattr(store.engine, "begin", fail_cleanup_begin)
         store.cleanup(now_ms=1_790_000_000_000)
     finally:
+        logger.remove(handler_id)
         store.dispose()
+    assert any("access audit record failed" in message for message in messages)
+    assert any("access audit cleanup failed" in message for message in messages)
 
 
 def test_referer_allowlist_displays_origin_only(tmp_path: Path) -> None:

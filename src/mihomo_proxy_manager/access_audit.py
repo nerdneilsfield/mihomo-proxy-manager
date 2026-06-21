@@ -22,10 +22,12 @@ from sqlalchemy import (
     Text,
     create_engine,
     delete,
+    func,
     insert,
     select,
     text,
 )
+from sqlalchemy.engine import URL
 
 from .models import AccessLogConfig, IPNetwork
 from .security import redact_secret
@@ -191,7 +193,7 @@ def sanitize_headers(
             sanitized[name] = "***"
             continue
         value = redact_secret(str(raw_value), extra_secrets=extra_secrets)
-        if "***" not in value and len(value) > max_value_length:
+        if len(value) > max_value_length:
             value = value[: max(0, max_value_length - 3)] + "..."
         sanitized[name] = value
     return sanitized
@@ -247,7 +249,7 @@ class SQLiteAccessAuditStore:
         self.db_path = config.db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.engine = create_engine(
-            f"sqlite:///{self.db_path}",
+            URL.create("sqlite", database=str(self.db_path)),
             connect_args={"timeout": 5},
             future=True,
         )
@@ -317,29 +319,124 @@ class SQLiteAccessAuditStore:
         }
 
         with self.engine.connect() as connection:
-            rows = [
+            total_events, since = connection.execute(
+                select(
+                    func.count(access_events.c.id),
+                    func.min(access_events.c.visited_at),
+                ).where(retained)
+            ).one()
+            top_ip_rows = [
                 _row_mapping(row)
                 for row in connection.execute(
-                    select(access_events)
+                    select(
+                        access_events.c.real_ip,
+                        func.count(access_events.c.id).label("count"),
+                        func.max(access_events.c.visited_at).label("last_seen"),
+                    )
+                    .where(retained, access_events.c.real_ip.is_not(None))
+                    .group_by(access_events.c.real_ip)
+                    .order_by(
+                        text("count DESC"),
+                        text("last_seen DESC"),
+                        access_events.c.real_ip.asc(),
+                    )
+                    .limit(limit)
+                )
+            ]
+            top_user_agent_rows = [
+                _row_mapping(row)
+                for row in connection.execute(
+                    select(
+                        access_events.c.user_agent,
+                        func.count(access_events.c.id).label("count"),
+                        func.max(access_events.c.visited_at).label("last_seen"),
+                    )
+                    .where(retained, access_events.c.user_agent.is_not(None))
+                    .group_by(access_events.c.user_agent)
+                    .order_by(
+                        text("count DESC"),
+                        text("last_seen DESC"),
+                        access_events.c.user_agent.asc(),
+                    )
+                    .limit(limit)
+                )
+            ]
+            top_path_rows = [
+                _row_mapping(row)
+                for row in connection.execute(
+                    select(
+                        access_events.c.path,
+                        access_events.c.route_name,
+                        func.count(access_events.c.id).label("count"),
+                        func.max(access_events.c.visited_at).label("last_seen"),
+                    )
                     .where(retained)
-                    .order_by(access_events.c.visited_at.desc(), access_events.c.id.desc())
+                    .group_by(access_events.c.path, access_events.c.route_name)
+                    .order_by(
+                        text("count DESC"),
+                        text("last_seen DESC"),
+                        access_events.c.path.asc(),
+                        access_events.c.route_name.asc(),
+                    )
+                    .limit(limit)
+                )
+            ]
+            recent_rows = (
+                [
+                    _row_mapping(row)
+                    for row in connection.execute(
+                        select(
+                            access_events.c.visited_at,
+                            access_events.c.route_name,
+                            access_events.c.path,
+                            access_events.c.companion,
+                            access_events.c.method,
+                            access_events.c.status_code,
+                            access_events.c.real_ip,
+                            access_events.c.ip_source,
+                            access_events.c.user_agent,
+                            access_events.c.target_format,
+                            access_events.c.response_bytes,
+                            access_events.c.duration_ms,
+                        )
+                        .where(retained)
+                        .order_by(
+                            access_events.c.visited_at.desc(),
+                            access_events.c.id.desc(),
+                        )
+                        .limit(self.config.status.recent_limit)
+                    )
+                ]
+                if self.config.status.include_recent
+                else []
+            )
+            header_rows = [
+                _row_mapping(row)
+                for row in connection.execute(
+                    select(access_events.c.visited_at, access_events.c.headers_json)
+                    .where(retained)
+                    .order_by(
+                        access_events.c.visited_at.desc(),
+                        access_events.c.id.desc(),
+                    )
+                    .limit(self.config.headers.stats_max_rows)
                 )
             ]
 
-        total_events = len(rows)
-        since = min((int(row["visited_at"]) for row in rows), default=None)
         return AccessStats(
             enabled=True,
             stats_enabled=True,
             retention_seconds=retention_seconds,
             privacy=privacy,
-            total_events=total_events,
-            since=since,
-            top_ips=self._top_ips(rows, limit),
-            top_user_agents=self._top_user_agents(rows, limit),
-            top_headers=self._top_headers(rows, limit),
-            top_paths=self._top_paths(rows, limit),
-            recent=self._recent(rows) if self.config.status.include_recent else None,
+            total_events=int(total_events),
+            since=int(since) if since is not None else None,
+            top_ips=self._top_ips(top_ip_rows, limit),
+            top_user_agents=self._top_user_agents(top_user_agent_rows, limit),
+            top_headers=self._top_headers(header_rows, limit),
+            top_paths=self._top_paths(top_path_rows, limit),
+            recent=(
+                self._recent(recent_rows) if self.config.status.include_recent else None
+            ),
         )
 
     def dispose(self) -> None:
@@ -357,10 +454,10 @@ class SQLiteAccessAuditStore:
             key = (real_ip,)
             item = items.setdefault(
                 key,
-                {"real_ip": real_ip, "count": 0, "last_seen": int(row["visited_at"])},
+                {"real_ip": real_ip, "count": 0, "last_seen": int(row["last_seen"])},
             )
-            item["count"] += 1
-            item["last_seen"] = max(item["last_seen"], int(row["visited_at"]))
+            item["count"] += int(row["count"])
+            item["last_seen"] = max(item["last_seen"], int(row["last_seen"]))
         return _sort_counted(items)[:limit]
 
     def _top_user_agents(
@@ -377,11 +474,11 @@ class SQLiteAccessAuditStore:
                 {
                     "user_agent": user_agent,
                     "count": 0,
-                    "last_seen": int(row["visited_at"]),
+                    "last_seen": int(row["last_seen"]),
                 },
             )
-            item["count"] += 1
-            item["last_seen"] = max(item["last_seen"], int(row["visited_at"]))
+            item["count"] += int(row["count"])
+            item["last_seen"] = max(item["last_seen"], int(row["last_seen"]))
         return _sort_counted(items)[:limit]
 
     def _top_headers(
@@ -430,12 +527,10 @@ class SQLiteAccessAuditStore:
                     "path": row["path"],
                     "route_name": row["route_name"],
                     "count": 0,
-                    "last_seen": int(row["visited_at"]),
+                    "last_seen": int(row["last_seen"]),
                 }
-            items[key]["count"] += 1
-            items[key]["last_seen"] = max(
-                items[key]["last_seen"], int(row["visited_at"])
-            )
+            items[key]["count"] += int(row["count"])
+            items[key]["last_seen"] = max(items[key]["last_seen"], int(row["last_seen"]))
         return _sort_counted(items)[:limit]
 
     def _recent(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

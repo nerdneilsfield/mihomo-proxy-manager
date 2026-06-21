@@ -542,20 +542,20 @@ class LoadedConfig(AppConfig):
                     f"route {route.name!r} output format is unsupported: {route.output.format!r}"
                 )
                 continue
+            if route.output.auto_default not in {
+                "provider",
+                "surfboard",
+                "quantumult-x",
+                "xray-uri",
+            }:
+                errors.append(
+                    f"route {route.name!r} auto_default is unsupported: "
+                    f"{route.output.auto_default!r}"
+                )
             if route.output.format == "auto":
                 if route.output.mode != "default":
                     errors.append(
                         f"route {route.name!r} auto output mode must be default"
-                    )
-                if route.output.auto_default not in {
-                    "provider",
-                    "surfboard",
-                    "quantumult-x",
-                    "xray-uri",
-                }:
-                    errors.append(
-                        f"route {route.name!r} auto_default is unsupported: "
-                        f"{route.output.auto_default!r}"
                     )
                 if route.output.import_response not in {"redirect", "plain"}:
                     errors.append(

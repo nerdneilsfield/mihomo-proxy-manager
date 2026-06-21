@@ -7,6 +7,8 @@ from typing import Mapping, Sequence
 
 SELECTOR_KEYS = ("target", "format", "flag", "client")
 IMPLEMENTED_FORMATS = {"provider", "surfboard", "quantumult-x", "xray-uri"}
+# Future aliases are explicit parse results, not implemented outputs. Callers that
+# dispatch renderers must reject formats outside IMPLEMENTED_FORMATS.
 FUTURE_FORMATS = {"sing-box", "loon"}
 COMPANION_TARGETS = {"nodes": "surfboard", "import": "quantumult-x"}
 

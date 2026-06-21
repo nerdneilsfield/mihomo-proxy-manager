@@ -266,6 +266,14 @@ def test_route_output_validation_rejects_invalid_values(
             'format = "auto"\nauto_default = "sing-box"',
             "auto_default is unsupported",
         ),
+        (
+            'format = "provider"\nauto_default = "auto"',
+            "auto_default is unsupported",
+        ),
+        (
+            'format = "provider"\nauto_default = "sing-box"',
+            "auto_default is unsupported",
+        ),
         ('format = "auto"\nmode = "full-profile"', "auto output mode must be default"),
         (
             'format = "auto"\nmode = "server-remote"',

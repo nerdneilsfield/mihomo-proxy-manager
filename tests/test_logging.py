@@ -5,11 +5,18 @@ Logging redaction and secret value collection tests.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from loguru import logger
+
+from mihomo_proxy_manager.access_audit import AccessEvent, format_access_log_line
 from mihomo_proxy_manager.logging import _collect_secret_values, _redact_record
+from mihomo_proxy_manager.logging import configure_logging
 from mihomo_proxy_manager.models import (
+    AccessLogFileConfig,
     AppConfig,
     CacheConfig,
     FetchConfig,
@@ -154,3 +161,100 @@ def test_collect_secret_values_includes_plugin_body(tmp_path) -> None:
     secrets = _collect_secret_values(config)
 
     assert body in secrets
+
+
+def test_access_log_sink_is_separate(tmp_path: Path) -> None:
+    normal_path = tmp_path / "normal.log"
+    access_path = tmp_path / "access.log"
+    app_config = _minimal_config(tmp_path)
+    config = replace(
+        app_config,
+        logging_file=replace(
+            app_config.logging_file,
+            enabled=True,
+            path=normal_path,
+        ),
+        access_log=replace(
+            app_config.access_log,
+            enabled=True,
+            file=AccessLogFileConfig(enabled=True, path=access_path),
+        ),
+    )
+    configure_logging(config)
+
+    logger.info("normal message")
+    logger.bind(access_log=True).info("access message")
+    logger.complete()
+
+    normal_contents = normal_path.read_text(encoding="utf-8")
+    access_contents = access_path.read_text(encoding="utf-8")
+    assert "normal message" in normal_contents
+    assert "access message" not in normal_contents
+    assert "access message" in access_contents
+    assert "normal message" not in access_contents
+    assert access_contents.strip() == "access message"
+
+
+def test_access_log_disabled_creates_no_access_file(tmp_path: Path) -> None:
+    access_path = tmp_path / "access.log"
+    app_config = _minimal_config(tmp_path)
+    config = replace(
+        app_config,
+        access_log=replace(
+            app_config.access_log,
+            enabled=False,
+            file=AccessLogFileConfig(enabled=True, path=access_path),
+        ),
+    )
+    configure_logging(config)
+
+    logger.bind(access_log=True).info("access message")
+    logger.complete()
+
+    assert not access_path.exists()
+
+
+def test_access_log_record_keeps_route_path(tmp_path: Path) -> None:
+    access_path = tmp_path / "access.log"
+    app_config = _minimal_config(tmp_path)
+    config = replace(
+        app_config,
+        server=replace(app_config.server, status_path="/s/sensitive-status"),
+        access_log=replace(
+            app_config.access_log,
+            enabled=True,
+            file=AccessLogFileConfig(enabled=True, path=access_path),
+        ),
+    )
+    route = config.routes["phone"]
+    configure_logging(config)
+
+    logger.bind(access_log=True).info(
+        "source={} status_path={} {}",
+        config.sources["airport_a"].url,
+        config.server.status_path,
+        format_access_log_line(
+            AccessEvent(
+                visited_at=1_790_000_000_000,
+                route_name=route.name,
+                path=route.path,
+                companion=None,
+                method="GET",
+                status_code=200,
+                real_ip="203.0.113.10",
+                ip_source="client-host",
+                user_agent="Surfboard/2.24",
+                headers={"host": "mpm.example.com", "user-agent": "Surfboard/2.24"},
+                target_format="surfboard",
+                response_bytes=1234,
+                duration_ms=18,
+            )
+        ),
+    )
+    logger.complete()
+
+    contents = access_path.read_text(encoding="utf-8")
+    assert f"path={route.path}" in contents
+    assert " method=GET path=*** " not in contents
+    assert config.sources["airport_a"].url not in contents
+    assert config.server.status_path not in contents

@@ -7,23 +7,35 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from typing import Any, Protocol, TypeGuard
+from typing import Any, Literal, Protocol, TypeGuard, cast
 from zoneinfo import ZoneInfo
 
 from croniter import croniter
 from loguru import logger
 from starlette.applications import Starlette
+from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route
 
 from .access import sanitize_user_agent, user_agent_allowed
 from .cache import SourceCacheStore
 from .logging import _collect_secret_values
-from .models import AppConfig, ProxyRecord, SourceCache, SourceConfig
+from .models import AppConfig, ProxyRecord, RouteConfig, SourceCache, SourceConfig
 from .render import RenderRequest, build_renderer_registry
+from .route_targets import (
+    COMPANION_TARGETS,
+    IMPLEMENTED_FORMATS,
+    canonical_target_for_format,
+    has_future_user_agent_signal,
+    resolve_query_selection,
+    resolve_user_agent_format,
+)
 from .security import redact_secret
 from .status import build_status, render_status_html
+
+ImplementedOutputFormat = Literal["provider", "surfboard", "quantumult-x", "xray-uri"]
 
 
 class _Refresher(Protocol):
@@ -177,21 +189,113 @@ def create_app(
             return f"{config.server.public_base_url}{path}"
         return path
 
-    route_by_path = {}
+    def _public_url_with_target(path: str, output_format: str) -> str:
+        separator = "&" if "?" in path else "?"
+        target = canonical_target_for_format(output_format)
+        return f"{_public_url(path)}{separator}target={target}"
+
+    def _query_values(request: Request, key: str) -> list[str]:
+        return request.query_params.getlist(key)
+
+    def _query_selection(request: Request):
+        return resolve_query_selection(
+            {
+                "target": _query_values(request, "target"),
+                "format": _query_values(request, "format"),
+                "flag": _query_values(request, "flag"),
+                "client": _query_values(request, "client"),
+            }
+        )
+
+    def _effective_output_format(
+        route: RouteConfig, companion: str | None, request: Request
+    ) -> tuple[ImplementedOutputFormat | None, str | None]:
+        if route.output.format != "auto":
+            return route.output.format, None
+
+        selection = _query_selection(request)
+        if selection.explicit:
+            if selection.format not in IMPLEMENTED_FORMATS:
+                return None, "unsupported target"
+            selected_format = cast(ImplementedOutputFormat, selection.format)
+            if companion and COMPANION_TARGETS.get(companion) != selected_format:
+                return None, "target does not support companion"
+            return selected_format, None
+
+        if companion:
+            implied = COMPANION_TARGETS.get(companion)
+            if implied is None:
+                return None, "target does not support companion"
+            return cast(ImplementedOutputFormat, implied), None
+
+        request_user_agent = request.headers.get("user-agent")
+        ua_format = resolve_user_agent_format(request_user_agent)
+        if ua_format is None and has_future_user_agent_signal(request_user_agent):
+            logger.warning(
+                "auto route future User-Agent target ignored: route={route} "
+                "user_agent={user_agent} fallback={fallback}",
+                route=route.name,
+                user_agent=sanitize_user_agent(request_user_agent),
+                fallback=route.output.auto_default,
+            )
+        if ua_format is not None:
+            return cast(ImplementedOutputFormat, ua_format), None
+        return route.output.auto_default, None
+
+    def _render_route_for_format(
+        route: RouteConfig, output_format: ImplementedOutputFormat
+    ) -> RouteConfig:
+        return replace(route, output=replace(route.output, format=output_format))
+
+    def _main_public_url(
+        route: RouteConfig, output_format: ImplementedOutputFormat
+    ) -> str:
+        if route.output.format == "auto":
+            return _public_url_with_target(route.path, output_format)
+        return _public_url(route.path)
+
+    def _companion_public_urls(route: RouteConfig) -> dict[str, str]:
+        if route.output.format == "auto":
+            urls = {
+                "nodes": _public_url_with_target(f"{route.path}-nodes", "surfboard")
+            }
+            if route.output.import_link:
+                urls["import"] = _public_url_with_target(
+                    route.path, "quantumult-x"
+                )
+            return urls
+        return companion_public_urls_by_route.get(route.name, {})
+
+    route_by_path: dict[str, tuple[RouteConfig, str | None]] = {}
     companion_public_urls_by_route: dict[str, dict[str, str]] = {}
     for route in config.routes.values():
         route_by_path[route.path] = (route, None)
-        route_companion_urls: dict[str, str] = {}
-        renderer = renderers[route.output.format]
-        for companion_path in renderer.companion_paths(route):
-            prefix = f"{route.path}-"
-            companion = (
-                companion_path[len(prefix) :]
-                if companion_path.startswith(prefix)
-                else companion_path
-            )
+        if route.output.format == "auto":
+            route_companion_urls = {
+                "nodes": _public_url_with_target(f"{route.path}-nodes", "surfboard")
+            }
+            companion_paths = [(f"{route.path}-nodes", "nodes")]
+            if route.output.import_link:
+                companion_paths.append((f"{route.path}-import", "import"))
+                route_companion_urls["import"] = _public_url_with_target(
+                    route.path, "quantumult-x"
+                )
+        else:
+            route_companion_urls = {}
+            renderer = renderers[route.output.format]
+            companion_paths = []
+            for companion_path in renderer.companion_paths(route):
+                prefix = f"{route.path}-"
+                companion = (
+                    companion_path[len(prefix) :]
+                    if companion_path.startswith(prefix)
+                    else companion_path
+                )
+                companion_paths.append((companion_path, companion))
+                route_companion_urls[companion] = _public_url(companion_path)
+
+        for companion_path, companion in companion_paths:
             route_by_path[companion_path] = (route, companion)
-            route_companion_urls[companion] = _public_url(companion_path)
         companion_public_urls_by_route[route.name] = route_companion_urls
 
     async def health(request):
@@ -279,6 +383,14 @@ def create_app(
             )
             return PlainTextResponse("forbidden", status_code=403)
 
+        output_format, target_error = _effective_output_format(
+            route, companion, request
+        )
+        if target_error is not None or output_format is None:
+            return PlainTextResponse(
+                target_error or "unsupported target", status_code=400
+            )
+
         records: list[ProxyRecord] = []
         missing: list[str] = []
         due: list[str] = []
@@ -363,16 +475,15 @@ def create_app(
             )
             return PlainTextResponse("route unavailable", status_code=503)
 
-        renderer = renderers[route.output.format]
+        render_route = _render_route_for_format(route, output_format)
+        renderer = renderers[output_format]
         response = renderer.render(
             RenderRequest(
-                route,
+                render_route,
                 records,
                 request_base_url=str(request.base_url),
-                main_public_url=_public_url(route.path),
-                companion_public_urls=companion_public_urls_by_route.get(
-                    route.name, {}
-                ),
+                main_public_url=_main_public_url(route, output_format),
+                companion_public_urls=_companion_public_urls(route),
                 companion=companion,
             )
         )

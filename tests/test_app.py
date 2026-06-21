@@ -6,6 +6,7 @@ Web application route and lifecycle tests.
 import asyncio
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 import pytest
 from starlette.testclient import TestClient
@@ -78,6 +79,43 @@ def app_config_with_route_output(
         config,
         server=replace(config.server, public_base_url=public_base_url),
         routes={**config.routes, "phone": route},
+    )
+
+
+def auto_app_config(
+    tmp_path,
+    *,
+    auto_default: Literal["provider", "surfboard", "quantumult-x", "xray-uri"] = (
+        "provider"
+    ),
+    import_link: bool = True,
+    allowed_user_agents: tuple[str, ...] = (),
+) -> AppConfig:
+    return app_config_with_route_output(
+        tmp_path,
+        RouteOutputConfig(
+            format="auto",
+            auto_default=auto_default,
+            encoding="plain",
+            import_link=import_link,
+            resource_tag="MPM",
+        ),
+        public_base_url="https://mpm.example.com",
+        allowed_user_agents=allowed_user_agents,
+    )
+
+
+def ss_node(name: str = "SS 01") -> ProxyRecord:
+    return ProxyRecord(
+        "airport_a",
+        {
+            "name": name,
+            "type": "ss",
+            "server": "example.com",
+            "port": 443,
+            "cipher": "chacha20-ietf-poly1305",
+            "password": "password",
+        },
     )
 
 
@@ -381,6 +419,318 @@ async def test_surfboard_nodes_companion_uses_same_access_policy(tmp_path) -> No
     assert matching_ua.status_code == 200
     assert "[Proxy]" not in matching_ua.text
     assert matching_ua.text.startswith("SS 01 = ss,")
+
+
+@pytest.mark.asyncio
+async def test_auto_route_query_targets_each_renderer(tmp_path) -> None:
+    config = auto_app_config(tmp_path)
+    store = JsonSourceCacheStore(config.cache)
+    await store.set("airport_a", source_cache_with_nodes(ss_node()))
+    app = create_app(config, cache_store=store, refresher=None, scheduler=None)
+    path = config.routes["phone"].path
+
+    with TestClient(app) as client:
+        surfboard = client.get(f"{path}?target=surfboard")
+        qx = client.get(f"{path}?format=quanx")
+        provider = client.get(f"{path}?flag=meta")
+        xray = client.get(f"{path}?client=v2rayn")
+
+    assert surfboard.status_code == 200
+    assert "[Proxy]" in surfboard.text
+    assert qx.status_code == 200
+    assert qx.text.startswith("shadowsocks=example.com:443,")
+    assert "tag=SS 01" in qx.text
+    assert provider.status_code == 200
+    assert provider.headers["content-type"].startswith("application/yaml")
+    assert "proxies:" in provider.text
+    assert xray.status_code == 200
+    assert xray.headers["content-type"].startswith("text/plain")
+    assert xray.text.startswith("ss://")
+
+
+@pytest.mark.asyncio
+async def test_auto_route_query_priority_and_blank_selector(tmp_path) -> None:
+    config = auto_app_config(tmp_path, auto_default="provider")
+    store = JsonSourceCacheStore(config.cache)
+    await store.set("airport_a", source_cache_with_nodes(ss_node()))
+    app = create_app(config, cache_store=store, refresher=None, scheduler=None)
+    path = config.routes["phone"].path
+
+    with TestClient(app) as client:
+        target_wins = client.get(f"{path}?target=surfboard&format=quanx")
+        format_wins = client.get(f"{path}?format=quanx&flag=meta&client=v2rayn")
+        flag_wins = client.get(f"{path}?flag=meta&client=v2rayn")
+        blank_suppresses_format = client.get(f"{path}?target=&format=quanx")
+        whitespace_suppresses_format = client.get(f"{path}?target=%20%20&format=quanx")
+
+    assert "[Proxy]" in target_wins.text
+    assert format_wins.text.startswith("shadowsocks=example.com:443,")
+    assert "tag=SS 01" in format_wins.text
+    assert "proxies:" in flag_wins.text
+    assert "proxies:" in blank_suppresses_format.text
+    assert "proxies:" in whitespace_suppresses_format.text
+
+
+@pytest.mark.asyncio
+async def test_auto_route_user_agent_selection_and_case_insensitivity(tmp_path) -> None:
+    config = auto_app_config(tmp_path)
+    store = JsonSourceCacheStore(config.cache)
+    await store.set("airport_a", source_cache_with_nodes(ss_node()))
+    app = create_app(config, cache_store=store, refresher=None, scheduler=None)
+    path = config.routes["phone"].path
+
+    with TestClient(app) as client:
+        qx = client.get(path, headers={"User-Agent": "quantumult x/1.0"})
+        xray = client.get(path, headers={"User-Agent": "V2RAYN meta"})
+        provider = client.get(path, headers={"User-Agent": "sing-box Clash"})
+
+    assert qx.text.startswith("shadowsocks=example.com:443,")
+    assert "tag=SS 01" in qx.text
+    assert xray.text.startswith("ss://")
+    assert "proxies:" in provider.text
+
+
+@pytest.mark.asyncio
+async def test_auto_route_companion_suffix_beats_user_agent_when_query_auto(
+    tmp_path,
+) -> None:
+    config = auto_app_config(tmp_path)
+    store = JsonSourceCacheStore(config.cache)
+    await store.set("airport_a", source_cache_with_nodes(ss_node()))
+    app = create_app(config, cache_store=store, refresher=None, scheduler=None)
+    path = config.routes["phone"].path
+
+    with TestClient(app) as client:
+        nodes = client.get(
+            f"{path}-nodes?target=auto",
+            headers={"User-Agent": "FlClash/1.0"},
+        )
+        qx_import = client.get(
+            f"{path}-import?target=auto",
+            headers={"User-Agent": "FlClash/1.0"},
+            follow_redirects=False,
+        )
+
+    assert nodes.status_code == 200
+    assert nodes.text.startswith("SS 01 = ss,")
+    assert qx_import.status_code == 302
+    assert "target%3Dquanx" in qx_import.headers["location"]
+
+
+@pytest.mark.asyncio
+async def test_auto_route_future_user_agent_only_logs_warning_and_uses_default(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = auto_app_config(tmp_path, auto_default="provider")
+    store = JsonSourceCacheStore(config.cache)
+    await store.set("airport_a", source_cache_with_nodes(ss_node()))
+    app = create_app(config, cache_store=store, refresher=None, scheduler=None)
+    warnings: list[str] = []
+
+    def capture_warning(message: str, *args: object, **kwargs: object) -> None:
+        if kwargs:
+            warnings.append(message.format(**kwargs))
+        elif args:
+            warnings.append(message.format(*args))
+        else:
+            warnings.append(message)
+
+    monkeypatch.setattr("mihomo_proxy_manager.app.logger.warning", capture_warning)
+
+    with TestClient(app) as client:
+        response = client.get(
+            config.routes["phone"].path,
+            headers={"User-Agent": "sing-box/1.0"},
+        )
+
+    assert response.status_code == 200
+    assert "proxies:" in response.text
+    assert len(warnings) == 1
+    assert "future User-Agent target" in warnings[0]
+    assert "sing-box/1.0" in warnings[0]
+
+
+@pytest.mark.asyncio
+async def test_auto_route_main_target_auto_uses_user_agent_then_default(tmp_path) -> None:
+    config = auto_app_config(tmp_path, auto_default="provider")
+    store = JsonSourceCacheStore(config.cache)
+    await store.set("airport_a", source_cache_with_nodes(ss_node()))
+    app = create_app(config, cache_store=store, refresher=None, scheduler=None)
+    path = config.routes["phone"].path
+
+    with TestClient(app) as client:
+        ua_selected = client.get(
+            f"{path}?target=auto",
+            headers={"User-Agent": "Surfboard/2.0"},
+        )
+        default_selected = client.get(f"{path}?target=auto")
+
+    assert "[Proxy]" in ua_selected.text
+    assert "proxies:" in default_selected.text
+
+
+@pytest.mark.asyncio
+async def test_auto_route_canonical_urls_for_incoming_selector_keys(tmp_path) -> None:
+    config = auto_app_config(tmp_path)
+    store = JsonSourceCacheStore(config.cache)
+    await store.set("airport_a", source_cache_with_nodes(ss_node()))
+    app = create_app(config, cache_store=store, refresher=None, scheduler=None)
+    path = config.routes["phone"].path
+
+    with TestClient(app) as client:
+        by_target = client.get(f"{path}?target=surfboard")
+        by_format = client.get(f"{path}?format=surfboard")
+        by_flag = client.get(f"{path}?flag=surfboard")
+        by_client = client.get(f"{path}?client=surfboard")
+
+    for response in (by_target, by_format, by_flag, by_client):
+        assert response.status_code == 200
+        assert f"{path}-nodes?target=surfboard" in response.text
+
+
+@pytest.mark.asyncio
+async def test_auto_route_import_disabled_leaves_import_path_404(tmp_path) -> None:
+    config = auto_app_config(tmp_path, import_link=False)
+    store = JsonSourceCacheStore(config.cache)
+    await store.set("airport_a", source_cache_with_nodes(ss_node()))
+    app = create_app(config, cache_store=store, refresher=None, scheduler=None)
+
+    with TestClient(app) as client:
+        response = client.get(f"{config.routes['phone'].path}-import")
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_fixed_provider_and_surfboard_ignore_auto_selectors_and_user_agent(
+    tmp_path,
+) -> None:
+    provider_config = app_config_with_route_output(tmp_path, RouteOutputConfig())
+    surfboard_config = app_config_with_route_output(
+        tmp_path,
+        RouteOutputConfig(format="surfboard"),
+        public_base_url="https://mpm.example.com",
+    )
+
+    for config, expected in (
+        (provider_config, "proxies:"),
+        (surfboard_config, "[Proxy]"),
+    ):
+        store = JsonSourceCacheStore(config.cache)
+        await store.set("airport_a", source_cache_with_nodes(ss_node()))
+        app = create_app(config, cache_store=store, refresher=None, scheduler=None)
+
+        with TestClient(app) as client:
+            response = client.get(
+                f"{config.routes['phone'].path}?target=quanx&format=v2rayn",
+                headers={"User-Agent": "Quantumult X/1.0"},
+            )
+
+        assert response.status_code == 200
+        assert expected in response.text
+
+
+@pytest.mark.asyncio
+async def test_fixed_surfboard_embedded_urls_stay_queryless(tmp_path) -> None:
+    config = app_config_with_route_output(
+        tmp_path,
+        RouteOutputConfig(format="surfboard"),
+        public_base_url="https://mpm.example.com",
+    )
+    store = JsonSourceCacheStore(config.cache)
+    await store.set("airport_a", source_cache_with_nodes(ss_node()))
+    app = create_app(config, cache_store=store, refresher=None, scheduler=None)
+
+    with TestClient(app) as client:
+        response = client.get(
+            f"{config.routes['phone'].path}?target=quanx",
+            headers={"User-Agent": "Quantumult X/1.0"},
+        )
+
+    assert response.status_code == 200
+    assert f"{config.routes['phone'].path}-nodes" in response.text
+    assert "target=" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_auto_route_rejects_unsupported_and_incompatible_targets(tmp_path) -> None:
+    config = auto_app_config(tmp_path)
+    store = JsonSourceCacheStore(config.cache)
+    await store.set("airport_a", source_cache_with_nodes(ss_node()))
+    app = create_app(config, cache_store=store, refresher=None, scheduler=None)
+    path = config.routes["phone"].path
+
+    with TestClient(app) as client:
+        unknown = client.get(f"{path}?target=not-a-client")
+        future = client.get(f"{path}?target=singbox")
+        incompatible = client.get(f"{path}-nodes?target=quanx")
+
+    assert unknown.status_code == 400
+    assert unknown.text == "unsupported target"
+    assert future.status_code == 400
+    assert future.text == "unsupported target"
+    assert incompatible.status_code == 400
+    assert incompatible.text == "target does not support companion"
+
+
+@pytest.mark.asyncio
+async def test_auto_route_does_not_double_decode_query_target(tmp_path) -> None:
+    config = auto_app_config(tmp_path)
+    store = JsonSourceCacheStore(config.cache)
+    await store.set("airport_a", source_cache_with_nodes(ss_node()))
+    app = create_app(config, cache_store=store, refresher=None, scheduler=None)
+    path = config.routes["phone"].path
+
+    with TestClient(app) as client:
+        once_decoded = client.get(f"{path}?target=clash%2Dmeta")
+        double_encoded = client.get(f"{path}?target=clash%252Dmeta")
+
+    assert once_decoded.status_code == 200
+    assert "proxies:" in once_decoded.text
+    assert double_encoded.status_code == 400
+    assert double_encoded.text == "unsupported target"
+
+
+def test_auto_route_access_runs_before_target_validation_and_cache_read(tmp_path) -> None:
+    config = auto_app_config(tmp_path, allowed_user_agents=("mihomo/*",))
+    app = create_app(
+        config,
+        cache_store=ExplodingCacheStore(),
+        refresher=FakeRefresher(),
+        scheduler=None,
+    )
+    path = config.routes["phone"].path
+
+    with TestClient(app) as client:
+        bad_target = client.get(
+            f"{path}?target=not-a-client",
+            headers={"User-Agent": "blocked/1.0"},
+        )
+        bad_companion = client.get(
+            f"{path}-nodes?target=quanx",
+            headers={"User-Agent": "blocked/1.0"},
+        )
+
+    assert bad_target.status_code == 403
+    assert bad_companion.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_auto_route_embeds_canonical_public_urls(tmp_path) -> None:
+    config = auto_app_config(tmp_path)
+    store = JsonSourceCacheStore(config.cache)
+    await store.set("airport_a", source_cache_with_nodes(ss_node()))
+    app = create_app(config, cache_store=store, refresher=None, scheduler=None)
+    path = config.routes["phone"].path
+
+    with TestClient(app) as client:
+        surfboard = client.get(f"{path}?format=surfboard")
+        qx_import = client.get(f"{path}-import?target=auto", follow_redirects=False)
+
+    assert "policy-path=https://mpm.example.com" in surfboard.text
+    assert f"{path}-nodes?target=surfboard" in surfboard.text
+    assert qx_import.status_code == 302
+    assert "target%3Dquanx" in qx_import.headers["location"]
 
 
 @pytest.mark.asyncio

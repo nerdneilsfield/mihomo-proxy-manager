@@ -269,9 +269,7 @@ def create_app(
                 "nodes": _public_url_with_target(f"{route.path}-nodes", "surfboard")
             }
             if route.output.import_link:
-                urls["import"] = _public_url_with_target(
-                    route.path, "quantumult-x"
-                )
+                urls["import"] = _public_url_with_target(route.path, "quantumult-x")
             return urls
         return companion_public_urls_by_route.get(route.name, {})
 
@@ -508,8 +506,8 @@ def create_app(
                             background_tasks.add(task)
                             task.add_done_callback(background_tasks.discard)
                             task.add_done_callback(
-                                lambda item, name=source_name: _track_background_refresh(
-                                    item, name
+                                lambda item, name=source_name: (
+                                    _track_background_refresh(item, name)
                                 )
                             )
                             continue

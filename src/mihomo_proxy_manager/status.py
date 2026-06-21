@@ -56,7 +56,9 @@ def _sort_counts(counts: dict[str, int]) -> dict[str, int]:
 def _select_fields(
     items: Iterable[dict[str, Any]], fields: tuple[str, ...]
 ) -> list[dict[str, Any]]:
-    return [{field: item.get(field) for field in fields if field in item} for item in items]
+    return [
+        {field: item.get(field) for field in fields if field in item} for item in items
+    ]
 
 
 async def _access_status(
@@ -351,8 +353,7 @@ def _render_html(data: dict[str, Any]) -> str:
             return '<section><h2>Access</h2><p class="muted">disabled</p></section>'
         if not access.get("stats_enabled"):
             return (
-                '<section><h2>Access</h2><p class="muted">stats disabled</p>'
-                "</section>"
+                '<section><h2>Access</h2><p class="muted">stats disabled</p></section>'
             )
 
         def _cell(value: object) -> str:
@@ -361,17 +362,19 @@ def _render_html(data: dict[str, Any]) -> str:
         def _table(items: list[dict[str, Any]], columns: tuple[str, ...]) -> str:
             headers = "".join(f"<th>{html.escape(column)}</th>" for column in columns)
             if not items:
-                body = (
-                    f'<tr><td colspan="{len(columns)}" class="muted">-</td></tr>'
-                )
+                body = f'<tr><td colspan="{len(columns)}" class="muted">-</td></tr>'
             else:
                 body = "".join(
                     "<tr>"
-                    + "".join(f"<td>{_cell(item.get(column))}</td>" for column in columns)
+                    + "".join(
+                        f"<td>{_cell(item.get(column))}</td>" for column in columns
+                    )
                     + "</tr>"
                     for item in items
                 )
-            return f"<table><thead><tr>{headers}</tr></thead><tbody>{body}</tbody></table>"
+            return (
+                f"<table><thead><tr>{headers}</tr></thead><tbody>{body}</tbody></table>"
+            )
 
         total = _cell(access.get("total_events", 0))
         since = _cell(access.get("since", "-"))
@@ -380,10 +383,12 @@ def _render_html(data: dict[str, Any]) -> str:
         if access.get("recent") is not None:
             recent = f"""
               <h3>Recent</h3>
-              {_table(
-                  access.get("recent", []),
-                  ("visited_at", "path", "route_name", "status_code", "real_ip"),
-              )}
+              {
+                _table(
+                    access.get("recent", []),
+                    ("visited_at", "path", "route_name", "status_code", "real_ip"),
+                )
+            }
             """
 
         return f"""

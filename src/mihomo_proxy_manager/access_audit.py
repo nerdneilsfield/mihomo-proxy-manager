@@ -304,9 +304,7 @@ class SQLiteAccessAuditStore:
         try:
             with self.engine.begin() as connection:
                 connection.execute(
-                    delete(access_events).where(
-                        access_events.c.visited_at < cutoff_ms
-                    )
+                    delete(access_events).where(access_events.c.visited_at < cutoff_ms)
                 )
             self._last_cleanup_ms = now_ms
         except Exception as exc:
@@ -543,7 +541,9 @@ class SQLiteAccessAuditStore:
                     "last_seen": int(row["last_seen"]),
                 }
             items[key]["count"] += int(row["count"])
-            items[key]["last_seen"] = max(items[key]["last_seen"], int(row["last_seen"]))
+            items[key]["last_seen"] = max(
+                items[key]["last_seen"], int(row["last_seen"])
+            )
         return _sort_counted(items)[:limit]
 
     def _recent(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

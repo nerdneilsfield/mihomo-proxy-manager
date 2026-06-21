@@ -162,10 +162,7 @@ def test_display_header_value_caps_tiny_values_after_masking() -> None:
 
 def test_mask_ip_for_status_masks_ipv4_and_ipv6() -> None:
     assert mask_ip_for_status("203.0.113.10") == "203.0.113.0/24"
-    assert (
-        mask_ip_for_status("2001:db8:abcd:1234:5678::1")
-        == "2001:db8:abcd:1234::/64"
-    )
+    assert mask_ip_for_status("2001:db8:abcd:1234:5678::1") == "2001:db8:abcd:1234::/64"
     assert mask_ip_for_status(None) is None
 
 
@@ -392,7 +389,9 @@ def test_store_stats_filters_retained_window_without_cleanup(tmp_path: Path) -> 
             stats_allowlist=("user-agent", "host"),
             stats_max_rows=100,
         ),
-        status=AccessLogStatusConfig(include_recent=True, recent_limit=10, top_limit=10),
+        status=AccessLogStatusConfig(
+            include_recent=True, recent_limit=10, top_limit=10
+        ),
     )
     store = SQLiteAccessAuditStore(config)
     try:

@@ -1561,7 +1561,7 @@ def test_surfboard_hysteria2_mixed_with_supported_nodes_is_skipped() -> None:
                         "down-speed": 50,
                         "udp-relay": False,
                     },
-                )
+                ),
             ],
             companion="nodes",
         )

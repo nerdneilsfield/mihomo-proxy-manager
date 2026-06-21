@@ -663,7 +663,9 @@ async def test_auto_route_future_user_agent_only_logs_warning_and_uses_default(
 
 
 @pytest.mark.asyncio
-async def test_auto_route_main_target_auto_uses_user_agent_then_default(tmp_path) -> None:
+async def test_auto_route_main_target_auto_uses_user_agent_then_default(
+    tmp_path,
+) -> None:
     config = auto_app_config(tmp_path, auto_default="provider")
     store = JsonSourceCacheStore(config.cache)
     await store.set("airport_a", source_cache_with_nodes(ss_node()))
@@ -765,7 +767,9 @@ async def test_fixed_surfboard_embedded_urls_stay_queryless(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_auto_route_rejects_unsupported_and_incompatible_targets(tmp_path) -> None:
+async def test_auto_route_rejects_unsupported_and_incompatible_targets(
+    tmp_path,
+) -> None:
     config = auto_app_config(tmp_path)
     store = JsonSourceCacheStore(config.cache)
     await store.set("airport_a", source_cache_with_nodes(ss_node()))
@@ -858,9 +862,7 @@ async def test_access_audit_records_forbidden_and_bad_target(tmp_path) -> None:
 
     with TestClient(app) as client:
         forbidden = client.get(path, headers={"user-agent": "blocked"})
-        bad = client.get(
-            f"{path}?target=unknown", headers={"user-agent": "allowed"}
-        )
+        bad = client.get(f"{path}?target=unknown", headers={"user-agent": "allowed"})
 
     assert forbidden.status_code == 403
     assert bad.status_code == 400
@@ -1014,7 +1016,9 @@ async def test_access_audit_store_disposed_on_lifespan_shutdown(tmp_path) -> Non
     assert store.disposed
 
 
-def test_auto_route_access_runs_before_target_validation_and_cache_read(tmp_path) -> None:
+def test_auto_route_access_runs_before_target_validation_and_cache_read(
+    tmp_path,
+) -> None:
     config = auto_app_config(tmp_path, allowed_user_agents=("mihomo/*",))
     app = create_app(
         config,
@@ -1538,9 +1542,7 @@ def _status_config_and_store(tmp_path):
 @pytest.mark.asyncio
 async def test_status_api_includes_access_stats(tmp_path) -> None:
     config, cache_store = _status_config_and_store(tmp_path)
-    data = await build_status(
-        cache_store, config, access_audit_store=FakeStatsStore()
-    )
+    data = await build_status(cache_store, config, access_audit_store=FakeStatsStore())
 
     assert data["access"]["enabled"] is True
     assert data["access"]["stats_enabled"] is True
@@ -1578,9 +1580,7 @@ async def test_status_api_access_disabled(tmp_path) -> None:
 @pytest.mark.asyncio
 async def test_status_api_stats_disabled_when_no_store(tmp_path) -> None:
     app_config, cache_store = _status_config_and_store(tmp_path)
-    data = await build_status(
-        cache_store, app_config, access_audit_store=None
-    )
+    data = await build_status(cache_store, app_config, access_audit_store=None)
 
     assert data["access"] == {"enabled": True, "stats_enabled": False}
 
@@ -1595,9 +1595,7 @@ async def test_status_api_stats_disabled_by_config(tmp_path) -> None:
             status=replace(app_config.access_log.status, enabled=False),
         ),
     )
-    data = await build_status(
-        cache_store, config, access_audit_store=FakeStatsStore()
-    )
+    data = await build_status(cache_store, config, access_audit_store=FakeStatsStore())
 
     assert data["access"] == {"enabled": True, "stats_enabled": False}
 

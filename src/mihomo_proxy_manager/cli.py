@@ -172,9 +172,7 @@ def _cmd_serve(config_path: str, *, debug: bool = False) -> int:
     """
 
     async def run() -> int:
-        runtime = await _build_runtime(
-            config_path, debug=debug, access_audit=True
-        )
+        runtime = await _build_runtime(config_path, debug=debug, access_audit=True)
         try:
             scheduler = RefreshScheduler(runtime.config, runtime.refresher)
             app = create_app(

@@ -113,7 +113,9 @@ def test_load_config_applies_defaults(temp_config_path: Path) -> None:
 
 
 def test_access_log_defaults(temp_config_path: Path) -> None:
-    config = load_config(write_config(temp_config_path, minimal_config()), validate=False)
+    config = load_config(
+        write_config(temp_config_path, minimal_config()), validate=False
+    )
     access = config.access_log
 
     assert access.enabled is True
@@ -409,7 +411,7 @@ def test_auto_route_output_fields_are_parsed(temp_config_path: Path) -> None:
     config = load_config(
         _write_base_config(
             temp_config_path,
-            '''
+            """
 format = "auto"
 auto_default = "xray-uri"
 include_meta_comments = true
@@ -420,7 +422,7 @@ test_url = "http://www.gstatic.com/generate_204"
 test_interval = 300
 test_timeout = 4
 test_tolerance = 50
-''',
+""",
         )
     )
 

@@ -236,7 +236,9 @@ def _real_ip_headers(values: object) -> tuple[RealIPHeader, ...]:
     return cast(tuple[RealIPHeader, ...], headers)
 
 
-def _reject_unknown_keys(data: dict[str, object], allowed: set[str], prefix: str) -> None:
+def _reject_unknown_keys(
+    data: dict[str, object], allowed: set[str], prefix: str
+) -> None:
     unknown = sorted(set(data) - allowed)
     if unknown:
         raise ValueError(

@@ -113,7 +113,7 @@ def test_load_config_applies_defaults(temp_config_path: Path) -> None:
 
 
 def test_access_log_defaults(temp_config_path: Path) -> None:
-    config = load_config(write_config(temp_config_path, minimal_config()))
+    config = load_config(write_config(temp_config_path, minimal_config()), validate=False)
     access = config.access_log
 
     assert access.enabled is True

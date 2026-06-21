@@ -20,6 +20,14 @@ from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, R
 from starlette.routing import Route
 
 from .access import sanitize_user_agent, user_agent_allowed
+from .access_audit import (
+    AccessAuditStore,
+    AccessEvent,
+    format_access_log_line,
+    now_epoch_ms,
+    resolve_real_ip,
+    sanitize_headers,
+)
 from .cache import SourceCacheStore
 from .logging import _collect_secret_values
 from .models import AppConfig, ProxyRecord, RouteConfig, SourceCache, SourceConfig
@@ -162,6 +170,7 @@ def create_app(
     cache_store: SourceCacheStore,
     refresher: _Refresher | None,
     scheduler: _Scheduler | None,
+    access_audit_store: AccessAuditStore | None = None,
 ) -> Starlette:
     """创建并配置 Starlette 应用。
 
@@ -265,6 +274,56 @@ def create_app(
                 )
             return urls
         return companion_public_urls_by_route.get(route.name, {})
+
+    async def _record_access_event(event: AccessEvent) -> None:
+        if access_audit_store is None or not config.access_log.enabled:
+            return
+        try:
+            await asyncio.to_thread(access_audit_store.record, event)
+            if config.access_log.file.enabled:
+                logger.bind(access_log=True).info(format_access_log_line(event))
+        except Exception as exc:
+            logger.warning("access audit write failed: {error}", error=exc)
+
+    def _response_bytes(response: Response) -> int:
+        body = getattr(response, "body", b"")
+        return len(body) if isinstance(body, (bytes, bytearray)) else 0
+
+    def _access_event(
+        *,
+        request: Request,
+        route: RouteConfig,
+        companion: str | None,
+        start_ms: int,
+        response: Response,
+        target_format: str | None,
+    ) -> AccessEvent:
+        resolved = resolve_real_ip(
+            client_host=request.client.host if request.client else None,
+            headers=dict(request.headers),
+            trusted_proxies=config.access_log.trusted_proxies,
+            header_order=config.access_log.real_ip_headers,
+        )
+        headers = sanitize_headers(
+            dict(request.headers),
+            max_value_length=config.access_log.headers.max_value_length,
+            extra_secrets=secrets,
+        )
+        return AccessEvent(
+            visited_at=start_ms,
+            route_name=route.name,
+            path=request.url.path,
+            companion=companion,
+            method=request.method,
+            status_code=response.status_code,
+            real_ip=resolved.real_ip,
+            ip_source=resolved.ip_source,
+            user_agent=headers.get("user-agent"),
+            headers=headers,
+            target_format=target_format,
+            response_bytes=_response_bytes(response),
+            duration_ms=max(0, now_epoch_ms() - start_ms),
+        )
 
     route_by_path: dict[str, tuple[RouteConfig, str | None]] = {}
     companion_public_urls_by_route: dict[str, dict[str, str]] = {}
@@ -373,64 +432,107 @@ def create_app(
             logger.debug("provider 404: path={path}", path=request.url.path)
             return PlainTextResponse("not found", status_code=404)
         route, companion = route_match
-
-        request_user_agent = request.headers.get("user-agent")
-        if not user_agent_allowed(route.access, request_user_agent):
-            logger.info(
-                "provider forbidden: route={route} user_agent={user_agent}",
-                route=route.name,
-                user_agent=sanitize_user_agent(request_user_agent),
-            )
-            return PlainTextResponse("forbidden", status_code=403)
-
-        output_format, target_error = _effective_output_format(
-            route, companion, request
-        )
-        if target_error is not None or output_format is None:
-            return PlainTextResponse(
-                target_error or "unsupported target", status_code=400
-            )
-
-        records: list[ProxyRecord] = []
-        missing: list[str] = []
-        due: list[str] = []
-        for source_name in route.sources:
-            cache = await cache_store.get(source_name)
-            if _is_still_valid(cache, config.cache.max_stale):
-                records.extend(cache.proxies)
-                if _is_due(cache, config.sources[source_name], config.server.timezone):
-                    due.append(source_name)
-            else:
-                missing.append(source_name)
-        logger.debug(
-            "provider request: route={route} sources={sources} valid={valid} missing={missing} due={due}",
-            route=route.name,
-            sources=len(route.sources),
-            valid=len(route.sources) - len(missing),
-            missing=missing,
-            due=due,
-        )
-
-        for source_name in due:
-            _spawn_background_refresh(source_name)
-        if due:
-            await asyncio.sleep(0)
-
-        if missing and refresher is not None:
-            logger.debug(
-                "provider triggering missing refresh: route={route} missing={missing} require_all={require_all}",
-                route=route.name,
-                missing=missing,
-                require_all=route.require_all_sources,
-            )
-            tasks = [asyncio.create_task(refresher.refresh(name)) for name in missing]
-            task_by_source = dict(zip(missing, tasks, strict=False))
-            if route.require_all_sources or not records:
-                done, pending = await asyncio.wait(
-                    tasks, timeout=config.server.route_refresh_wait.total_seconds()
+        start_ms = now_epoch_ms()
+        target_format_for_audit: str | None = None
+        response: Response | None = None
+        try:
+            request_user_agent = request.headers.get("user-agent")
+            if not user_agent_allowed(route.access, request_user_agent):
+                logger.info(
+                    "provider forbidden: route={route} user_agent={user_agent}",
+                    route=route.name,
+                    user_agent=sanitize_user_agent(request_user_agent),
                 )
-                for source_name, task in task_by_source.items():
-                    if task in pending:
+                response = PlainTextResponse("forbidden", status_code=403)
+                return response
+
+            output_format, target_error = _effective_output_format(
+                route, companion, request
+            )
+            if target_error is not None or output_format is None:
+                response = PlainTextResponse(
+                    target_error or "unsupported target", status_code=400
+                )
+                return response
+            target_format_for_audit = output_format
+
+            records: list[ProxyRecord] = []
+            missing: list[str] = []
+            due: list[str] = []
+            for source_name in route.sources:
+                cache = await cache_store.get(source_name)
+                if _is_still_valid(cache, config.cache.max_stale):
+                    records.extend(cache.proxies)
+                    if _is_due(
+                        cache, config.sources[source_name], config.server.timezone
+                    ):
+                        due.append(source_name)
+                else:
+                    missing.append(source_name)
+            logger.debug(
+                "provider request: route={route} sources={sources} valid={valid} missing={missing} due={due}",
+                route=route.name,
+                sources=len(route.sources),
+                valid=len(route.sources) - len(missing),
+                missing=missing,
+                due=due,
+            )
+
+            for source_name in due:
+                _spawn_background_refresh(source_name)
+            if due:
+                await asyncio.sleep(0)
+
+            if missing and refresher is not None:
+                logger.debug(
+                    "provider triggering missing refresh: route={route} missing={missing} require_all={require_all}",
+                    route=route.name,
+                    missing=missing,
+                    require_all=route.require_all_sources,
+                )
+                tasks = [
+                    asyncio.create_task(refresher.refresh(name)) for name in missing
+                ]
+                task_by_source = dict(zip(missing, tasks, strict=False))
+                if route.require_all_sources or not records:
+                    done, pending = await asyncio.wait(
+                        tasks, timeout=config.server.route_refresh_wait.total_seconds()
+                    )
+                    for source_name, task in task_by_source.items():
+                        if task in pending:
+                            background_tasks.add(task)
+                            task.add_done_callback(background_tasks.discard)
+                            task.add_done_callback(
+                                lambda item, name=source_name: _track_background_refresh(
+                                    item, name
+                                )
+                            )
+                            continue
+                        try:
+                            task.result()
+                        except Exception as exc:
+                            logger.warning(
+                                "route refresh failed for source {source}: {error}",
+                                source=source_name,
+                                error=exc,
+                            )
+                    records.clear()
+                    for source_name in route.sources:
+                        cache = await cache_store.get(source_name)
+                        if _is_still_valid(cache, config.cache.max_stale):
+                            records.extend(cache.proxies)
+                        elif route.require_all_sources:
+                            logger.warning(
+                                "provider 503 (require_all): route={route} unavailable_source={source}",
+                                route=route.name,
+                                source=source_name,
+                            )
+                            response = PlainTextResponse(
+                                "route unavailable", status_code=503
+                            )
+                            return response
+                else:
+                    for source_name, task in zip(missing, tasks, strict=False):
                         background_tasks.add(task)
                         task.add_done_callback(background_tasks.discard)
                         task.add_done_callback(
@@ -438,73 +540,58 @@ def create_app(
                                 item, name
                             )
                         )
-                        continue
-                    try:
-                        task.result()
-                    except Exception as exc:
-                        logger.warning(
-                            "route refresh failed for source {source}: {error}",
-                            source=source_name,
-                            error=exc,
-                        )
-                records.clear()
-                for source_name in route.sources:
-                    cache = await cache_store.get(source_name)
-                    if _is_still_valid(cache, config.cache.max_stale):
-                        records.extend(cache.proxies)
-                    elif route.require_all_sources:
-                        logger.warning(
-                            "provider 503 (require_all): route={route} unavailable_source={source}",
-                            route=route.name,
-                            source=source_name,
-                        )
-                        return PlainTextResponse("route unavailable", status_code=503)
-            else:
-                for source_name, task in zip(missing, tasks, strict=False):
-                    background_tasks.add(task)
-                    task.add_done_callback(background_tasks.discard)
-                    task.add_done_callback(
-                        lambda item, name=source_name: _track_background_refresh(
-                            item, name
-                        )
-                    )
 
-        if not records:
-            logger.warning(
-                "provider 503: route={route} no records available", route=route.name
-            )
-            return PlainTextResponse("route unavailable", status_code=503)
+            if not records:
+                logger.warning(
+                    "provider 503: route={route} no records available",
+                    route=route.name,
+                )
+                response = PlainTextResponse("route unavailable", status_code=503)
+                return response
 
-        render_route = _render_route_for_format(route, output_format)
-        renderer = renderers[output_format]
-        response = renderer.render(
-            RenderRequest(
-                render_route,
-                records,
-                request_base_url=str(request.base_url),
-                main_public_url=_main_public_url(route, output_format),
-                companion_public_urls=_companion_public_urls(route),
-                companion=companion,
+            render_route = _render_route_for_format(route, output_format)
+            renderer = renderers[output_format]
+            render_response = renderer.render(
+                RenderRequest(
+                    render_route,
+                    records,
+                    request_base_url=str(request.base_url),
+                    main_public_url=_main_public_url(route, output_format),
+                    companion_public_urls=_companion_public_urls(route),
+                    companion=companion,
+                )
             )
-        )
-        for warning in response.warnings:
-            logger.warning(
-                "route render warning: route={route} warning={warning}",
+            for warning in render_response.warnings:
+                logger.warning(
+                    "route render warning: route={route} warning={warning}",
+                    route=route.name,
+                    warning=redact_secret(warning, extra_secrets=secrets),
+                )
+            logger.info(
+                "provider served: route={route} nodes={nodes} bytes={bytes}",
                 route=route.name,
-                warning=redact_secret(warning, extra_secrets=secrets),
+                nodes=len(records),
+                bytes=len(render_response.body),
             )
-        logger.info(
-            "provider served: route={route} nodes={nodes} bytes={bytes}",
-            route=route.name,
-            nodes=len(records),
-            bytes=len(response.body),
-        )
-        return Response(
-            response.body,
-            status_code=response.status_code,
-            media_type=response.media_type,
-            headers=response.headers,
-        )
+            response = Response(
+                render_response.body,
+                status_code=render_response.status_code,
+                media_type=render_response.media_type,
+                headers=render_response.headers,
+            )
+            return response
+        finally:
+            if response is not None:
+                await _record_access_event(
+                    _access_event(
+                        request=request,
+                        route=route,
+                        companion=companion,
+                        start_ms=start_ms,
+                        response=response,
+                        target_format=target_format_for_audit,
+                    )
+                )
 
     routes = [Route(config.server.health_path, health)]
     if config.server.status_path:
@@ -541,5 +628,12 @@ def create_app(
                 for task in list(background_tasks):
                     task.cancel()
                 await asyncio.gather(*background_tasks, return_exceptions=True)
+            if access_audit_store is not None:
+                try:
+                    await asyncio.to_thread(access_audit_store.dispose)
+                except Exception as exc:
+                    logger.warning(
+                        "access audit store dispose failed: {error}", error=exc
+                    )
 
     return Starlette(routes=routes, lifespan=lifespan)

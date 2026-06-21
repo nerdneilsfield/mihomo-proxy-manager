@@ -11,6 +11,7 @@ from typing import Literal
 import pytest
 from starlette.testclient import TestClient
 
+from mihomo_proxy_manager.access_audit import AccessEvent
 from mihomo_proxy_manager.app import create_app
 from mihomo_proxy_manager.cache import JsonSourceCacheStore
 from mihomo_proxy_manager.config import load_config
@@ -134,6 +135,27 @@ def source_cache_with_nodes(*nodes: ProxyRecord) -> SourceCache:
         None,
         nodes,
     )
+
+
+class FakeAccessAuditStore:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.events: list[AccessEvent] = []
+        self.disposed = False
+
+    def record(self, event: AccessEvent) -> None:
+        if self.fail:
+            raise RuntimeError("audit write failed")
+        self.events.append(event)
+
+    def cleanup(self, now_ms: int | None = None) -> None:
+        pass
+
+    def stats(self, now_ms: int | None = None):
+        raise AssertionError("stats should not be called")
+
+    def dispose(self) -> None:
+        self.disposed = True
 
 
 class FakeRefresher:
@@ -689,6 +711,197 @@ async def test_auto_route_does_not_double_decode_query_target(tmp_path) -> None:
     assert "proxies:" in once_decoded.text
     assert double_encoded.status_code == 400
     assert double_encoded.text == "unsupported target"
+
+
+@pytest.mark.asyncio
+async def test_access_audit_records_success_route(tmp_path) -> None:
+    config = load_config(config_file(tmp_path))
+    cache_store = JsonSourceCacheStore(config.cache)
+    await cache_store.set("airport_a", source_cache_with_nodes(ss_node()))
+    store = FakeAccessAuditStore()
+    app = create_app(
+        config,
+        cache_store=cache_store,
+        refresher=None,
+        scheduler=None,
+        access_audit_store=store,
+    )
+    path = config.routes["phone"].path
+
+    with TestClient(app, client=("127.0.0.1", 50000)) as client:
+        response = client.get(
+            path,
+            headers={
+                "cf-connecting-ip": "203.0.113.10",
+                "user-agent": "Surfboard/2.24",
+            },
+        )
+
+    assert response.status_code == 200
+    assert len(store.events) == 1
+    event = store.events[0]
+    assert event.route_name == "phone"
+    assert event.path == path
+    assert event.companion is None
+    assert event.status_code == 200
+    assert event.target_format in {
+        "provider",
+        "surfboard",
+        "quantumult-x",
+        "xray-uri",
+    }
+    assert event.response_bytes == len(response.content)
+    assert event.real_ip == "203.0.113.10"
+    assert event.ip_source == "cf-connecting-ip"
+    assert event.user_agent == "Surfboard/2.24"
+
+
+@pytest.mark.asyncio
+async def test_access_audit_records_forbidden_and_bad_target(tmp_path) -> None:
+    config = auto_app_config(tmp_path, allowed_user_agents=("allowed",))
+    cache_store = JsonSourceCacheStore(config.cache)
+    await cache_store.set("airport_a", source_cache_with_nodes(ss_node()))
+    store = FakeAccessAuditStore()
+    app = create_app(
+        config,
+        cache_store=cache_store,
+        refresher=None,
+        scheduler=None,
+        access_audit_store=store,
+    )
+    path = config.routes["phone"].path
+
+    with TestClient(app) as client:
+        forbidden = client.get(path, headers={"user-agent": "blocked"})
+        bad = client.get(
+            f"{path}?target=unknown", headers={"user-agent": "allowed"}
+        )
+
+    assert forbidden.status_code == 403
+    assert bad.status_code == 400
+    assert [event.status_code for event in store.events] == [403, 400]
+    assert store.events[1].target_format is None
+
+
+@pytest.mark.asyncio
+async def test_access_audit_records_422_for_unsupported_nodes(tmp_path) -> None:
+    config = app_config_with_route_output(
+        tmp_path,
+        RouteOutputConfig(format="xray-uri", encoding="plain"),
+    )
+    cache_store = JsonSourceCacheStore(config.cache)
+    await cache_store.set(
+        "airport_a",
+        source_cache_with_nodes(
+            ProxyRecord(
+                "airport_a",
+                {"name": "bad", "type": "tuic", "server": "example.com", "port": 443},
+            )
+        ),
+    )
+    store = FakeAccessAuditStore()
+    app = create_app(
+        config,
+        cache_store=cache_store,
+        refresher=None,
+        scheduler=None,
+        access_audit_store=store,
+    )
+    path = config.routes["phone"].path
+
+    with TestClient(app) as client:
+        response = client.get(path)
+
+    assert response.status_code == 422
+    assert store.events[-1].route_name == "phone"
+    assert store.events[-1].path == path
+    assert store.events[-1].status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_access_audit_records_503(tmp_path) -> None:
+    config = load_config(config_file(tmp_path))
+    empty_store = JsonSourceCacheStore(config.cache)
+    store = FakeAccessAuditStore()
+    app = create_app(
+        config,
+        cache_store=empty_store,
+        refresher=None,
+        scheduler=None,
+        access_audit_store=store,
+    )
+    path = config.routes["phone"].path
+
+    with TestClient(app) as client:
+        response = client.get(path)
+
+    assert response.status_code == 503
+    assert store.events[-1].route_name == "phone"
+    assert store.events[-1].status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_access_audit_excludes_health_status_and_unknown(tmp_path) -> None:
+    config = load_config(config_file(tmp_path))
+    cache_store = JsonSourceCacheStore(config.cache)
+    await cache_store.set("airport_a", source_cache_with_nodes(ss_node()))
+    store = FakeAccessAuditStore()
+    app = create_app(
+        config,
+        cache_store=cache_store,
+        refresher=None,
+        scheduler=None,
+        access_audit_store=store,
+    )
+    assert config.server.status_path is not None
+
+    with TestClient(app) as client:
+        client.get(config.server.health_path)
+        client.get(config.server.status_path)
+        client.get(f"{config.server.status_path}/api")
+        client.get("/unknown")
+
+    assert store.events == []
+
+
+@pytest.mark.asyncio
+async def test_access_audit_failure_does_not_change_response(tmp_path) -> None:
+    config = load_config(config_file(tmp_path))
+    cache_store = JsonSourceCacheStore(config.cache)
+    await cache_store.set("airport_a", source_cache_with_nodes(ss_node()))
+    store = FakeAccessAuditStore(fail=True)
+    app = create_app(
+        config,
+        cache_store=cache_store,
+        refresher=None,
+        scheduler=None,
+        access_audit_store=store,
+    )
+    path = config.routes["phone"].path
+
+    with TestClient(app) as client:
+        response = client.get(path)
+
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_access_audit_store_disposed_on_lifespan_shutdown(tmp_path) -> None:
+    config = load_config(config_file(tmp_path))
+    cache_store = JsonSourceCacheStore(config.cache)
+    store = FakeAccessAuditStore()
+    app = create_app(
+        config,
+        cache_store=cache_store,
+        refresher=None,
+        scheduler=None,
+        access_audit_store=store,
+    )
+
+    with TestClient(app):
+        pass
+
+    assert store.disposed
 
 
 def test_auto_route_access_runs_before_target_validation_and_cache_read(tmp_path) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import threading
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -118,16 +119,6 @@ access_events = Table(
 )
 
 
-def parse_trusted_networks(values: tuple[str, ...]) -> tuple[IPNetwork, ...]:
-    networks: list[IPNetwork] = []
-    for value in values:
-        try:
-            networks.append(ipaddress.ip_network(value, strict=False))
-        except ValueError as exc:
-            raise ValueError(f"trusted proxy is invalid: {value!r}") from exc
-    return tuple(networks)
-
-
 def now_epoch_ms() -> int:
     return int(time.time() * 1000)
 
@@ -236,6 +227,12 @@ def _retention_ms(config: AccessLogConfig) -> int:
     return int(config.retention.total_seconds() * 1000)
 
 
+def _top_ip_query_limit(limit: int, mask_ips: bool) -> int:
+    if not mask_ips:
+        return limit
+    return max(limit, 1) * 64
+
+
 def _row_mapping(row: Any) -> dict[str, Any]:
     return dict(row._mapping)
 
@@ -258,6 +255,7 @@ class SQLiteAccessAuditStore:
             future=True,
         )
         self._last_cleanup_ms = 0
+        self._cleanup_lock = threading.Lock()
         with self.engine.begin() as connection:
             connection.execute(text("PRAGMA journal_mode=WAL"))
             connection.execute(text("PRAGMA busy_timeout=5000"))
@@ -286,14 +284,22 @@ class SQLiteAccessAuditStore:
                         duration_ms=event.duration_ms,
                     )
                 )
-            now_ms = now_epoch_ms()
-            if now_ms - self._last_cleanup_ms >= 3_600_000:
-                self.cleanup(now_ms=now_ms)
         except Exception as exc:
             logger.warning("access audit record failed: {error}", error=exc)
+            return
+
+        now_ms = now_epoch_ms()
+        if now_ms - self._last_cleanup_ms >= 3_600_000:
+            with self._cleanup_lock:
+                if now_ms - self._last_cleanup_ms >= 3_600_000:
+                    self._cleanup_locked(now_ms)
 
     def cleanup(self, now_ms: int | None = None) -> None:
         now_ms = now_epoch_ms() if now_ms is None else now_ms
+        with self._cleanup_lock:
+            self._cleanup_locked(now_ms)
+
+    def _cleanup_locked(self, now_ms: int) -> None:
         cutoff_ms = now_ms - _retention_ms(self.config)
         try:
             with self.engine.begin() as connection:
@@ -322,7 +328,7 @@ class SQLiteAccessAuditStore:
             "include_recent": self.config.status.include_recent,
         }
 
-        with self.engine.connect() as connection:
+        with self.engine.begin() as connection:
             total_events, since = connection.execute(
                 select(
                     func.count(access_events.c.id),
@@ -344,6 +350,7 @@ class SQLiteAccessAuditStore:
                         text("last_seen DESC"),
                         access_events.c.real_ip.asc(),
                     )
+                    .limit(_top_ip_query_limit(limit, self.config.status.mask_ips))
                 )
             ]
             top_user_agent_rows = [
@@ -489,9 +496,12 @@ class SQLiteAccessAuditStore:
     ) -> list[dict[str, Any]]:
         allowlist = set(self.config.headers.stats_allowlist)
         items: dict[tuple[Any, ...], dict[str, Any]] = {}
-        for row in rows[: self.config.headers.stats_max_rows]:
+        for row in rows:
+            raw_headers_json = row["headers_json"]
+            if not isinstance(raw_headers_json, str):
+                continue
             try:
-                headers = json.loads(str(row["headers_json"]))
+                headers = json.loads(raw_headers_json)
             except json.JSONDecodeError:
                 continue
             if not isinstance(headers, dict):

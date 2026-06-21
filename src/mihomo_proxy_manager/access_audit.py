@@ -190,13 +190,19 @@ def sanitize_headers(
     for raw_name, raw_value in headers.items():
         name = raw_name.lower()
         if name in SENSITIVE_HEADER_NAMES:
-            sanitized[name] = "***"
-            continue
-        value = redact_secret(str(raw_value), extra_secrets=extra_secrets)
-        if len(value) > max_value_length:
-            value = value[: max(0, max_value_length - 3)] + "..."
-        sanitized[name] = value
+            value = "***"
+        else:
+            value = redact_secret(str(raw_value), extra_secrets=extra_secrets)
+        sanitized[name] = _truncate_value(value, max_value_length)
     return sanitized
+
+
+def _truncate_value(value: str, max_value_length: int) -> str:
+    if len(value) <= max_value_length:
+        return value
+    if max_value_length <= 3:
+        return value[: max(0, max_value_length)]
+    return value[: max_value_length - 3] + "..."
 
 
 def mask_ip_for_status(value: str | None) -> str | None:
@@ -223,9 +229,7 @@ def display_header_value(
     if mask_ips and header in IP_BEARING_HEADERS:
         parts = [part.strip() for part in value.split(",")]
         value = ", ".join(mask_ip_for_status(part) or part for part in parts)
-    if len(value) > max_value_length:
-        value = value[: max(0, max_value_length - 3)] + "..."
-    return value
+    return _truncate_value(value, max_value_length)
 
 
 def _retention_ms(config: AccessLogConfig) -> int:
@@ -340,7 +344,6 @@ class SQLiteAccessAuditStore:
                         text("last_seen DESC"),
                         access_events.c.real_ip.asc(),
                     )
-                    .limit(limit)
                 )
             ]
             top_user_agent_rows = [

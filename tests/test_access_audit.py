@@ -12,6 +12,7 @@ from sqlalchemy import text
 from mihomo_proxy_manager.access_audit import (
     AccessEvent,
     SQLiteAccessAuditStore,
+    display_header_value,
     format_access_log_line,
     mask_ip_for_status,
     resolve_real_ip,
@@ -125,6 +126,36 @@ def test_sanitize_headers_redacts_secrets_and_truncates() -> None:
     assert sanitized["x-trace-long"] == "***-A..."
     assert len(sanitized["x-trace-long"]) == 8
     assert sanitized["user-agent"] == "AAAAA..."
+
+
+def test_sanitize_headers_caps_tiny_redacted_values() -> None:
+    for max_value_length, expected in ((1, "*"), (2, "**")):
+        sanitized = sanitize_headers(
+            {
+                "Authorization": "Bearer abc123",
+                "X-Trace": "abc123-suffix",
+            },
+            max_value_length=max_value_length,
+            extra_secrets=["abc123"],
+        )
+
+        assert sanitized["authorization"] == expected
+        assert sanitized["x-trace"] == expected
+        assert len(sanitized["authorization"]) == max_value_length
+        assert len(sanitized["x-trace"]) == max_value_length
+
+
+def test_display_header_value_caps_tiny_values_after_masking() -> None:
+    for max_value_length, expected in ((1, "2"), (2, "20")):
+        assert (
+            display_header_value(
+                "x-forwarded-for",
+                "203.0.113.10",
+                mask_ips=True,
+                max_value_length=max_value_length,
+            )
+            == expected
+        )
 
 
 def test_mask_ip_for_status_masks_ipv4_and_ipv6() -> None:
@@ -268,6 +299,29 @@ def test_store_stats_limits_header_payload_query(tmp_path: Path) -> None:
             "header": "host",
             "value": "b.test",
             "count": 1,
+            "last_seen": 1_790_000_001_000,
+        }
+    ]
+
+
+def test_store_stats_merges_masked_top_ips_before_limit(tmp_path: Path) -> None:
+    config = access_config(
+        tmp_path,
+        status=AccessLogStatusConfig(top_limit=1),
+    )
+    store = SQLiteAccessAuditStore(config)
+    try:
+        store.record(event(visited_at=1_790_000_000_000, real_ip="203.0.113.10"))
+        store.record(event(visited_at=1_790_000_001_000, real_ip="203.0.113.11"))
+        store.record(event(visited_at=1_790_000_002_000, real_ip="198.51.100.9"))
+        stats = store.stats(now_ms=1_790_000_003_000)
+    finally:
+        store.dispose()
+
+    assert stats.top_ips == [
+        {
+            "real_ip": "203.0.113.0/24",
+            "count": 2,
             "last_seen": 1_790_000_001_000,
         }
     ]

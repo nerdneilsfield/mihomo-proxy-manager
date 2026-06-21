@@ -6,6 +6,7 @@ CLI parser and command smoke tests.
 import asyncio
 from pathlib import Path
 
+import pytest
 
 from mihomo_proxy_manager.cli import _build_runtime, build_parser, main
 from mihomo_proxy_manager.refresher import RefreshResult
@@ -220,3 +221,35 @@ def test_build_runtime_does_not_initialize_access_store_by_default(
         assert runtime.access_audit_store is None
     finally:
         asyncio.run(runtime.client.aclose())
+
+
+def test_serve_cleans_up_runtime_when_app_setup_fails(
+    monkeypatch, tmp_path: Path
+) -> None:
+    events: list[str] = []
+
+    class FakeClient:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        async def aclose(self) -> None:
+            events.append("client_closed")
+
+    class FakeStore:
+        def __init__(self, config: object) -> None:
+            pass
+
+        def dispose(self) -> None:
+            events.append("store_disposed")
+
+    def raise_setup_error(*args: object, **kwargs: object) -> object:
+        raise RuntimeError("app setup failed")
+
+    monkeypatch.setattr("mihomo_proxy_manager.cli.httpx.AsyncClient", FakeClient)
+    monkeypatch.setattr("mihomo_proxy_manager.cli.SQLiteAccessAuditStore", FakeStore)
+    monkeypatch.setattr("mihomo_proxy_manager.cli.create_app", raise_setup_error)
+
+    with pytest.raises(RuntimeError, match="app setup failed"):
+        main(["serve", "-c", str(_write_cli_config(tmp_path))])
+
+    assert events == ["store_disposed", "client_closed"]

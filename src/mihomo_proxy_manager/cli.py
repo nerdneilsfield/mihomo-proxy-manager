@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -171,15 +172,16 @@ def _cmd_serve(config_path: str, *, debug: bool = False) -> int:
         runtime = await _build_runtime(
             config_path, debug=debug, access_audit=True
         )
-        scheduler = RefreshScheduler(runtime.config, runtime.refresher)
-        app = create_app(
-            runtime.config,
-            cache_store=runtime.cache_store,
-            refresher=runtime.refresher,
-            scheduler=scheduler,
-            access_audit_store=runtime.access_audit_store,
-        )
+        server_handoff_started = False
         try:
+            scheduler = RefreshScheduler(runtime.config, runtime.refresher)
+            app = create_app(
+                runtime.config,
+                cache_store=runtime.cache_store,
+                refresher=runtime.refresher,
+                scheduler=scheduler,
+                access_audit_store=runtime.access_audit_store,
+            )
             server_config = uvicorn.Config(
                 app,
                 host=runtime.config.server.host,
@@ -187,8 +189,14 @@ def _cmd_serve(config_path: str, *, debug: bool = False) -> int:
                 access_log=False,
             )
             server = uvicorn.Server(server_config)
+            server_handoff_started = True
             await server.serve()
             return 0
+        except Exception:
+            if runtime.access_audit_store is not None and not server_handoff_started:
+                with suppress(Exception):
+                    runtime.access_audit_store.dispose()
+            raise
         finally:
             await runtime.client.aclose()
 

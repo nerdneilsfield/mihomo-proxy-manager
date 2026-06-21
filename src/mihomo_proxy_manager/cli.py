@@ -172,7 +172,6 @@ def _cmd_serve(config_path: str, *, debug: bool = False) -> int:
         runtime = await _build_runtime(
             config_path, debug=debug, access_audit=True
         )
-        server_handoff_started = False
         try:
             scheduler = RefreshScheduler(runtime.config, runtime.refresher)
             app = create_app(
@@ -189,11 +188,10 @@ def _cmd_serve(config_path: str, *, debug: bool = False) -> int:
                 access_log=False,
             )
             server = uvicorn.Server(server_config)
-            server_handoff_started = True
             await server.serve()
             return 0
         except Exception:
-            if runtime.access_audit_store is not None and not server_handoff_started:
+            if runtime.access_audit_store is not None:
                 with suppress(Exception):
                     runtime.access_audit_store.dispose()
             raise

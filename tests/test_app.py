@@ -11,7 +11,7 @@ from typing import Literal
 import pytest
 from starlette.testclient import TestClient
 
-from mihomo_proxy_manager.access_audit import AccessEvent
+from mihomo_proxy_manager.access_audit import AccessEvent, AccessStats
 from mihomo_proxy_manager.app import create_app
 from mihomo_proxy_manager.cache import JsonSourceCacheStore
 from mihomo_proxy_manager.config import load_config
@@ -22,6 +22,7 @@ from mihomo_proxy_manager.models import (
     RouteOutputConfig,
     SourceCache,
 )
+from mihomo_proxy_manager.status import build_status, render_status_html
 
 
 def config_file(tmp_path):
@@ -151,11 +152,83 @@ class FakeAccessAuditStore:
     def cleanup(self, now_ms: int | None = None) -> None:
         pass
 
-    def stats(self, now_ms: int | None = None):
-        raise AssertionError("stats should not be called")
+    def stats(self, now_ms: int | None = None) -> AccessStats:
+        return AccessStats(enabled=True, stats_enabled=True)
 
     def dispose(self) -> None:
         self.disposed = True
+
+
+class FakeStatsStore:
+    def __init__(self, *, include_recent: bool = False, fail: bool = False) -> None:
+        self.include_recent = include_recent
+        self.fail = fail
+
+    def stats(self, now_ms: int | None = None) -> AccessStats:
+        if self.fail:
+            raise RuntimeError("stats failed")
+        recent = None
+        if self.include_recent:
+            recent = [
+                {
+                    "visited_at": 1_790_000_000_000,
+                    "route_name": "phone",
+                    "path": "/p/<recent>.yaml",
+                    "method": "GET",
+                    "status_code": 200,
+                    "real_ip": "203.0.113.0/24",
+                    "response_bytes": 1234,
+                    "duration_ms": 18,
+                }
+            ]
+        return AccessStats(
+            enabled=True,
+            stats_enabled=True,
+            retention_seconds=2_592_000,
+            privacy={"mask_ips": True, "include_recent": self.include_recent},
+            total_events=2,
+            since=1_789_000_000_000,
+            top_ips=[
+                {
+                    "real_ip": "203.0.113.0/24",
+                    "count": 2,
+                    "last_seen": 1_790_000_000_000,
+                }
+            ],
+            top_user_agents=[
+                {
+                    "user_agent": "Surfboard/2.24",
+                    "count": 2,
+                    "last_seen": 1_790_000_000_000,
+                }
+            ],
+            top_headers=[
+                {
+                    "header": "cf-ipcountry",
+                    "value": "<US>",
+                    "count": 2,
+                    "last_seen": 1_790_000_000_000,
+                }
+            ],
+            top_paths=[
+                {
+                    "path": "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml",
+                    "route_name": "phone",
+                    "count": 2,
+                    "last_seen": 1_790_000_000_000,
+                }
+            ],
+            recent=recent,
+        )
+
+    def record(self, event: AccessEvent) -> None:
+        pass
+
+    def cleanup(self, now_ms: int | None = None) -> None:
+        pass
+
+    def dispose(self) -> None:
+        pass
 
 
 class FailingCacheStore:
@@ -1457,6 +1530,125 @@ async def test_status_endpoint_redacts_route_path_in_last_error(tmp_path) -> Non
     data = response.json()
     assert route_path not in data["sources"][0]["last_error"]
     assert "***" in data["sources"][0]["last_error"]
+
+
+def _status_config_and_store(tmp_path):
+    config = load_config(config_file(tmp_path))
+    cache_store = JsonSourceCacheStore(config.cache)
+    return config, cache_store
+
+
+@pytest.mark.asyncio
+async def test_status_api_includes_access_stats(tmp_path) -> None:
+    config, cache_store = _status_config_and_store(tmp_path)
+    data = await build_status(
+        cache_store, config, access_audit_store=FakeStatsStore()
+    )
+
+    assert data["access"]["enabled"] is True
+    assert data["access"]["stats_enabled"] is True
+    assert data["access"]["retention_seconds"] == 2_592_000
+    assert data["access"]["privacy"] == {"mask_ips": True, "include_recent": False}
+    assert data["access"]["top_ips"][0]["real_ip"] == "203.0.113.0/24"
+    assert data["access"]["top_paths"][0]["route_name"] == "phone"
+    assert "route" not in data["access"]["top_paths"][0]
+    assert "headers_json" not in str(data["access"])
+    assert "recent" not in data["access"]
+
+
+@pytest.mark.asyncio
+async def test_status_api_includes_recent_when_store_provides_it(tmp_path) -> None:
+    config, cache_store = _status_config_and_store(tmp_path)
+    data = await build_status(
+        cache_store, config, access_audit_store=FakeStatsStore(include_recent=True)
+    )
+
+    assert data["access"]["recent"][0]["route_name"] == "phone"
+    assert "headers_json" not in str(data["access"]["recent"])
+
+
+@pytest.mark.asyncio
+async def test_status_api_access_disabled(tmp_path) -> None:
+    app_config, cache_store = _status_config_and_store(tmp_path)
+    config = replace(
+        app_config, access_log=replace(app_config.access_log, enabled=False)
+    )
+    data = await build_status(cache_store, config)
+
+    assert data["access"] == {"enabled": False}
+
+
+@pytest.mark.asyncio
+async def test_status_api_stats_disabled_when_no_store(tmp_path) -> None:
+    app_config, cache_store = _status_config_and_store(tmp_path)
+    data = await build_status(
+        cache_store, app_config, access_audit_store=None
+    )
+
+    assert data["access"] == {"enabled": True, "stats_enabled": False}
+
+
+@pytest.mark.asyncio
+async def test_status_api_stats_disabled_by_config(tmp_path) -> None:
+    app_config, cache_store = _status_config_and_store(tmp_path)
+    config = replace(
+        app_config,
+        access_log=replace(
+            app_config.access_log,
+            status=replace(app_config.access_log.status, enabled=False),
+        ),
+    )
+    data = await build_status(
+        cache_store, config, access_audit_store=FakeStatsStore()
+    )
+
+    assert data["access"] == {"enabled": True, "stats_enabled": False}
+
+
+@pytest.mark.asyncio
+async def test_status_api_stats_failure_does_not_break_status(tmp_path) -> None:
+    config, cache_store = _status_config_and_store(tmp_path)
+    data = await build_status(
+        cache_store, config, access_audit_store=FakeStatsStore(fail=True)
+    )
+
+    assert data["access"] == {"enabled": True, "stats_enabled": False}
+
+
+def test_status_html_renders_access_stats() -> None:
+    html_text = render_status_html(
+        {
+            "generated_at": "...",
+            "summary": {},
+            "sources": [],
+            "routes": [],
+            "access": FakeStatsStore().stats().__dict__,
+        }
+    )
+
+    assert "Access" in html_text
+    assert "203.0.113.0/24" in html_text
+    assert "&lt;US&gt;" in html_text
+    assert "<US>" not in html_text
+    assert "headers_json" not in html_text
+
+
+@pytest.mark.asyncio
+async def test_status_handler_passes_access_store_to_api(tmp_path) -> None:
+    config, cache_store = _status_config_and_store(tmp_path)
+    app = create_app(
+        config,
+        cache_store=cache_store,
+        refresher=None,
+        scheduler=None,
+        access_audit_store=FakeStatsStore(),
+    )
+
+    with TestClient(app) as client:
+        response = client.get(f"{config.server.status_path}/api")
+
+    assert response.status_code == 200
+    assert response.json()["access"]["total_events"] == 2
 
 
 class ExplodingCacheStore:

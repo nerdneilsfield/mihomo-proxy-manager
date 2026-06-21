@@ -6,16 +6,24 @@ protocol distributions.
 
 from __future__ import annotations
 
+import asyncio
 import html
 from collections import Counter
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Protocol
 
+from loguru import logger
+
+from .access_audit import AccessStats
 from .cache import SourceCacheStore
 from .models import AppConfig, ProxyRecord, SourceCache
 from .security import redact_secret
 from .transform import apply_transform
+
+
+class AccessStatsStore(Protocol):
+    def stats(self, now_ms: int | None = None) -> AccessStats: ...
 
 
 def _is_still_valid(cache: SourceCache | None, max_stale: timedelta) -> bool:
@@ -45,11 +53,71 @@ def _sort_counts(counts: dict[str, int]) -> dict[str, int]:
     return dict(sorted(counts.items(), key=lambda item: (-item[1], item[0])))
 
 
+def _select_fields(
+    items: Iterable[dict[str, Any]], fields: tuple[str, ...]
+) -> list[dict[str, Any]]:
+    return [{field: item.get(field) for field in fields if field in item} for item in items]
+
+
+async def _access_status(
+    config: AppConfig, access_audit_store: AccessStatsStore | None
+) -> dict[str, Any]:
+    if not config.access_log.enabled:
+        return {"enabled": False}
+    if not config.access_log.status.enabled or access_audit_store is None:
+        return {"enabled": True, "stats_enabled": False}
+    try:
+        stats = await asyncio.to_thread(access_audit_store.stats)
+    except Exception as exc:
+        logger.warning("access audit stats failed: {error}", error=exc)
+        return {"enabled": True, "stats_enabled": False}
+
+    data: dict[str, Any] = {
+        "enabled": stats.enabled,
+        "stats_enabled": stats.stats_enabled,
+        "retention_seconds": stats.retention_seconds,
+        "privacy": stats.privacy,
+        "total_events": stats.total_events,
+        "since": stats.since,
+        "top_ips": _select_fields(
+            stats.top_ips or (), ("real_ip", "count", "last_seen")
+        ),
+        "top_user_agents": _select_fields(
+            stats.top_user_agents or (), ("user_agent", "count", "last_seen")
+        ),
+        "top_headers": _select_fields(
+            stats.top_headers or (), ("header", "value", "count", "last_seen")
+        ),
+        "top_paths": _select_fields(
+            stats.top_paths or (), ("path", "route_name", "count", "last_seen")
+        ),
+    }
+    if stats.recent is not None:
+        data["recent"] = _select_fields(
+            stats.recent,
+            (
+                "visited_at",
+                "route_name",
+                "path",
+                "companion",
+                "method",
+                "status_code",
+                "real_ip",
+                "ip_source",
+                "target_format",
+                "response_bytes",
+                "duration_ms",
+            ),
+        )
+    return data
+
+
 async def build_status(
     cache_store: SourceCacheStore,
     config: AppConfig,
     *,
     extra_secrets: list[str] | None = None,
+    access_audit_store: AccessStatsStore | None = None,
 ) -> dict[str, Any]:
     """构建完整的状态字典。
 
@@ -160,6 +228,7 @@ async def build_status(
         "summary": summary,
         "sources": sources,
         "routes": routes,
+        "access": await _access_status(config, access_audit_store),
     }
 
 
@@ -275,6 +344,70 @@ def _render_html(data: dict[str, Any]) -> str:
             """
             for label, value, color in items
         )
+
+    def _access_section() -> str:
+        access = data.get("access", {})
+        if not access.get("enabled"):
+            return '<section><h2>Access</h2><p class="muted">disabled</p></section>'
+        if not access.get("stats_enabled"):
+            return (
+                '<section><h2>Access</h2><p class="muted">stats disabled</p>'
+                "</section>"
+            )
+
+        def _cell(value: object) -> str:
+            return html.escape(str(value if value is not None else "-"))
+
+        def _table(items: list[dict[str, Any]], columns: tuple[str, ...]) -> str:
+            headers = "".join(f"<th>{html.escape(column)}</th>" for column in columns)
+            if not items:
+                body = (
+                    f'<tr><td colspan="{len(columns)}" class="muted">-</td></tr>'
+                )
+            else:
+                body = "".join(
+                    "<tr>"
+                    + "".join(f"<td>{_cell(item.get(column))}</td>" for column in columns)
+                    + "</tr>"
+                    for item in items
+                )
+            return f"<table><thead><tr>{headers}</tr></thead><tbody>{body}</tbody></table>"
+
+        total = _cell(access.get("total_events", 0))
+        since = _cell(access.get("since", "-"))
+        retention = _cell(access.get("retention_seconds", "-"))
+        recent = ""
+        if access.get("recent") is not None:
+            recent = f"""
+              <h3>Recent</h3>
+              {_table(
+                  access.get("recent", []),
+                  ("visited_at", "path", "route_name", "status_code", "real_ip"),
+              )}
+            """
+
+        return f"""
+        <section>
+          <h2>Access</h2>
+          <div class="access-summary">
+            <div class="metric">
+              <div class="metric-value">{total}</div>
+              <div class="metric-label">events</div>
+            </div>
+            <div class="detail"><span class="detail-label">Since</span>{since}</div>
+            <div class="detail"><span class="detail-label">Retention Seconds</span>{retention}</div>
+          </div>
+          <h3>Top IPs</h3>
+          {_table(access.get("top_ips", []), ("real_ip", "count", "last_seen"))}
+          <h3>User-Agents</h3>
+          {_table(access.get("top_user_agents", []), ("user_agent", "count", "last_seen"))}
+          <h3>Headers</h3>
+          {_table(access.get("top_headers", []), ("header", "value", "count", "last_seen"))}
+          <h3>Paths</h3>
+          {_table(access.get("top_paths", []), ("path", "route_name", "count", "last_seen"))}
+          {recent}
+        </section>
+        """
 
     overall_pills = _pills(overall_protocols)
 
@@ -414,6 +547,37 @@ def _render_html(data: dict[str, Any]) -> str:
     .detail {{ margin-top: 0.75rem; font-size: 0.875rem; }}
     .detail-label {{ display: block; color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.35rem; }}
     .detail.error {{ color: var(--err); }}
+    h3 {{ margin: 1rem 0 0.5rem; font-size: 1rem; }}
+    .access-summary {{
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-end;
+      gap: 1rem 2rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 1rem;
+      padding: 1rem 1.25rem;
+      margin-bottom: 1rem;
+    }}
+    table {{
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 0.75rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 0.75rem;
+      overflow: hidden;
+      font-size: 0.875rem;
+    }}
+    th, td {{
+      padding: 0.55rem 0.7rem;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      vertical-align: top;
+      word-break: break-all;
+    }}
+    th {{ color: var(--muted); background: var(--surface-elevated); font-weight: 600; }}
+    tr:last-child td {{ border-bottom: 0; }}
     .pill {{
       display: inline-flex;
       align-items: center;
@@ -463,6 +627,8 @@ def _render_html(data: dict[str, Any]) -> str:
       <span class="overall-label">Overall protocols:</span>
       {overall_pills}
     </div>
+
+    {_access_section()}
 
     <section>
       <h2>Sources</h2>

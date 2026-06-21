@@ -388,7 +388,12 @@ def create_app(
         Returns:
             HTML 响应或 JSON 响应 / HTML or JSON response.
         """
-        data = await build_status(cache_store, config, extra_secrets=secrets)
+        data = await build_status(
+            cache_store,
+            config,
+            extra_secrets=secrets,
+            access_audit_store=access_audit_store,
+        )
         if api_path is not None and request.url.path == api_path:
             return JSONResponse(data)
         return HTMLResponse(render_status_html(data))

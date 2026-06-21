@@ -156,6 +156,32 @@ rotation = "10 MB"
 retention = "14 days"
 compression = "gz"
 
+[access_log]
+enabled = true
+db_path = "data/access/access.sqlite3"
+retention = "30d"
+trusted_proxies = ["127.0.0.1/32", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+real_ip_headers = ["cf-connecting-ip", "true-client-ip", "x-forwarded-for", "x-real-ip"]
+
+[access_log.file]
+enabled = true
+path = "logs/access.log"
+rotation = "10 MB"
+retention = "30 days"
+compression = "gz"
+
+[access_log.headers]
+max_value_length = 512
+stats_allowlist = ["user-agent", "host", "cf-ipcountry", "cf-ray"]
+stats_max_rows = 5000
+
+[access_log.status]
+enabled = true
+mask_ips = true
+include_recent = false
+recent_limit = 20
+top_limit = 20
+
 [http]
 timeout = "30s"
 user_agent = "mihomo/1.19.5"
@@ -451,6 +477,23 @@ compression = "gz"
 
 When running with Docker, mount `logs` to `/app/logs`; otherwise logs stay inside the container filesystem.
 
+### Access audit logging
+
+When `[access_log]` is enabled, route access events are stored in SQLite for 30 days by default. `logs/access.log` is a separate human-readable access log and is not mixed with normal Loguru file logs. Access audit data is personal data: IP addresses, User-Agents, route paths, timestamps, selected sanitized headers, response status, response size, and duration. Header values are redacted and truncated before storage.
+
+`trusted_proxies` gates `CF-Connecting-IP`, `True-Client-IP`, `X-Forwarded-For`, and `X-Real-IP`. Defaults trust loopback plus RFC1918 Docker/LAN ranges for zero-config reverse proxy deployments. If the app is reachable directly from private or LAN clients, set exact reverse proxy IPs/CIDRs; otherwise clients can spoof those headers. The reverse proxy must overwrite or sanitize `X-Forwarded-For`; otherwise remove it from `real_ip_headers`.
+
+The status page shows aggregate stats only; full `headers_json` is never shown. Access stats are exposed on `status_path`, so keep `status_path` high entropy and non-public, and do not allowlist high-entropy private headers in `access_log.headers.stats_allowlist`. IPs are masked in status by default, and recent rows are hidden by default.
+
+Disable all audit storage and access-file logging:
+
+```toml
+[access_log]
+enabled = false
+```
+
+`mpm check` may create directories through existing filesystem validation, but it does not create DB or log files.
+
 </details>
 
 ## Design
@@ -505,6 +548,7 @@ flowchart LR
 - Subscription paths are bearer secrets. Anyone with the path can fetch the route output.
 - Use HTTPS or a trusted reverse proxy in production.
 - Use a high-entropy `status_path` as well.
+- `status_path` exposes aggregate access stats; keep it non-public and avoid allowlisting high-entropy private headers.
 - Treat upstream URLs, plugin headers, node UUIDs, and node passwords as sensitive data.
 - Private, localhost, and reserved URLs are blocked by default.
 - Cache files contain proxy data. Keep runtime directory permissions tight.

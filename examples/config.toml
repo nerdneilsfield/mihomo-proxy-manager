@@ -31,6 +31,32 @@ rotation = "10 MB"
 retention = "14 days"
 compression = "gz"
 
+[access_log]
+enabled = true
+db_path = "data/access/access.sqlite3"
+retention = "30d"
+trusted_proxies = ["127.0.0.1/32", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+real_ip_headers = ["cf-connecting-ip", "true-client-ip", "x-forwarded-for", "x-real-ip"]
+
+[access_log.file]
+enabled = true
+path = "logs/access.log"
+rotation = "10 MB"
+retention = "30 days"
+compression = "gz"
+
+[access_log.headers]
+max_value_length = 512
+stats_allowlist = ["user-agent", "host", "cf-ipcountry", "cf-ray"]
+stats_max_rows = 5000
+
+[access_log.status]
+enabled = true
+mask_ips = true
+include_recent = false
+recent_limit = 20
+top_limit = 20
+
 [http]
 timeout = "30s"
 user_agent = "mihomo/1.19.5"

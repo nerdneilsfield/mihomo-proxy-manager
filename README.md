@@ -156,6 +156,32 @@ rotation = "10 MB"
 retention = "14 days"
 compression = "gz"
 
+[access_log]
+enabled = true
+db_path = "data/access/access.sqlite3"
+retention = "30d"
+trusted_proxies = ["127.0.0.1/32", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+real_ip_headers = ["cf-connecting-ip", "true-client-ip", "x-forwarded-for", "x-real-ip"]
+
+[access_log.file]
+enabled = true
+path = "logs/access.log"
+rotation = "10 MB"
+retention = "30 days"
+compression = "gz"
+
+[access_log.headers]
+max_value_length = 512
+stats_allowlist = ["user-agent", "host", "cf-ipcountry", "cf-ray"]
+stats_max_rows = 5000
+
+[access_log.status]
+enabled = true
+mask_ips = true
+include_recent = false
+recent_limit = 20
+top_limit = 20
+
 [http]
 timeout = "30s"
 user_agent = "mihomo/1.19.5"
@@ -450,6 +476,23 @@ compression = "gz"
 
 Docker 运行时要挂载 `logs` 到 `/app/logs`，否则日志会留在容器文件系统里。
 
+### 访问审计日志
+
+`[access_log]` 开启后，服务会把已匹配订阅 route 的访问事件写入 SQLite，默认保留 30 天；`logs/access.log` 是单独的人类可读访问日志，不会混入普通 Loguru 文件日志。审计数据包含个人数据：IP 地址、User-Agent、route path、时间戳、选中的已清洗 header、响应状态、响应大小和耗时。header 值入库前会先按敏感名、secret、长度做脱敏和截断。
+
+`trusted_proxies` 决定是否信任 `CF-Connecting-IP`、`True-Client-IP`、`X-Forwarded-For`、`X-Real-IP`。默认信任 loopback 与 RFC1918 Docker/LAN 网段，便于零配置反向代理；若服务可被私网或 LAN 客户端直连，请改成精确反向代理 IP/CIDR，否则客户端可伪造这些 header。反向代理必须覆盖或清洗 `X-Forwarded-For`；做不到时，从 `real_ip_headers` 删除它。
+
+状态页只展示聚合统计，永不展示完整 `headers_json`。访问统计暴露在 `status_path`，所以保持 `status_path` 高熵且不公开；不要把高熵私有 header 放进 `access_log.headers.stats_allowlist`。状态页默认遮蔽 IP，默认不显示 recent rows。
+
+关闭全部审计存储和访问文件日志：
+
+```toml
+[access_log]
+enabled = false
+```
+
+`mpm check` 可能因现有文件系统校验创建目录，但不会创建 SQLite DB 文件或访问日志文件。
+
 </details>
 
 ## 设计
@@ -504,6 +547,7 @@ flowchart LR
 - 订阅路径是 bearer secret。路径泄露后，拿到路径的人就能获取该 route 输出。
 - 生产环境请使用 HTTPS，或者放在可信反向代理后面。
 - `status_path` 也建议使用高熵随机路径。
+- `status_path` 会暴露访问聚合统计；不要公开，并避免 allowlist 高熵私有 header。
 - 上游订阅 URL、插件 header、节点 UUID/password 都应视为敏感信息。
 - 默认禁止抓取私网、localhost 和保留地址。只有在明确需要内网订阅源时才考虑放开。
 - 缓存文件会保存代理节点信息，建议把运行目录权限控制在服务用户范围内。

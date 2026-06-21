@@ -10,8 +10,9 @@ import re
 import stat
 import tomllib
 from datetime import timedelta
+from ipaddress import ip_network
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse, urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -20,17 +21,23 @@ from croniter import croniter
 from .security import SecurityError, assert_safe_url, has_path_entropy
 
 from .models import (
+    AccessLogConfig,
+    AccessLogFileConfig,
+    AccessLogHeadersConfig,
+    AccessLogStatusConfig,
     AppConfig,
     CacheConfig,
     DnsConfig,
     FetchConfig,
     FilterConfig,
     HttpConfig,
+    IPNetwork,
     LoggingSinkConfig,
     OutputConfig,
     ParserConfig,
     PluginConfig,
     PluginRefConfig,
+    RealIPHeader,
     RefreshConfig,
     RenameConfig,
     RouteAccessConfig,
@@ -52,6 +59,12 @@ USER_AGENT_PATTERN = re.compile(
 
 DNS_FAILURES = {"keep", "drop", "fail"}
 DNS_SCHEMES = {"udp", "tcp", "tls", "https"}
+SUPPORTED_REAL_IP_HEADERS = {
+    "cf-connecting-ip",
+    "true-client-ip",
+    "x-forwarded-for",
+    "x-real-ip",
+}
 
 
 def parse_duration(value: str) -> timedelta:
@@ -153,6 +166,160 @@ def _table(data: dict[str, Any], key: str) -> dict[str, Any]:
     """
     value = data.get(key, {})
     return value if isinstance(value, dict) else {}
+
+
+def _positive_duration(value: str, *, key: str) -> timedelta:
+    duration = parse_duration(value)
+    if duration.total_seconds() <= 0:
+        raise ValueError(f"{key} must be positive")
+    return duration
+
+
+def _positive_int(value: object, *, key: str) -> int:
+    if not isinstance(value, (str, bytes, bytearray, int, float)):
+        raise ValueError(f"{key} must be positive")
+    parsed = int(value)
+    if parsed <= 0:
+        raise ValueError(f"{key} must be positive")
+    return parsed
+
+
+def _string_tuple(
+    value: object, default: tuple[str, ...], *, key: str
+) -> tuple[str, ...]:
+    if value is None:
+        return default
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(f"{key} must be a list of strings")
+    result: list[str] = []
+    for item in value:
+        if not isinstance(item, (str, int, float, bool)):
+            raise ValueError(f"{key} must contain scalar string values")
+        result.append(str(item))
+    return tuple(result)
+
+
+def _trusted_proxies(values: object) -> tuple[IPNetwork, ...]:
+    raw_values = _string_tuple(
+        values,
+        (
+            "127.0.0.1/32",
+            "::1/128",
+            "10.0.0.0/8",
+            "172.16.0.0/12",
+            "192.168.0.0/16",
+        ),
+        key="access_log.trusted_proxies",
+    )
+    networks: list[IPNetwork] = []
+    try:
+        for value in raw_values:
+            networks.append(ip_network(value, strict=False))
+    except ValueError as exc:
+        raise ValueError("access_log trusted proxy is invalid") from exc
+    return tuple(networks)
+
+
+def _real_ip_headers(values: object) -> tuple[RealIPHeader, ...]:
+    raw_values = _string_tuple(
+        values,
+        ("cf-connecting-ip", "true-client-ip", "x-forwarded-for", "x-real-ip"),
+        key="access_log.real_ip_headers",
+    )
+    headers = tuple(value.lower() for value in raw_values)
+    unsupported = sorted(set(headers) - SUPPORTED_REAL_IP_HEADERS)
+    if unsupported:
+        raise ValueError(
+            "access_log.real_ip_headers value is unsupported: "
+            + ", ".join(repr(item) for item in unsupported)
+        )
+    return cast(tuple[RealIPHeader, ...], headers)
+
+
+def _reject_unknown_keys(data: dict[str, object], allowed: set[str], prefix: str) -> None:
+    unknown = sorted(set(data) - allowed)
+    if unknown:
+        raise ValueError(
+            "\n".join(f"{prefix} key is unsupported: {key!r}" for key in unknown)
+        )
+
+
+def _access_log(raw: dict[str, Any]) -> AccessLogConfig:
+    allowed = {
+        "enabled",
+        "db_path",
+        "retention",
+        "trusted_proxies",
+        "real_ip_headers",
+        "file",
+        "headers",
+        "status",
+    }
+    file_allowed = {"enabled", "path", "rotation", "retention", "compression"}
+    headers_allowed = {"max_value_length", "stats_allowlist", "stats_max_rows"}
+    status_allowed = {
+        "enabled",
+        "mask_ips",
+        "include_recent",
+        "recent_limit",
+        "top_limit",
+    }
+
+    _reject_unknown_keys(raw, allowed, "access_log")
+    file_raw = _table(raw, "file")
+    headers_raw = _table(raw, "headers")
+    status_raw = _table(raw, "status")
+    _reject_unknown_keys(file_raw, file_allowed, "access_log.file")
+    _reject_unknown_keys(headers_raw, headers_allowed, "access_log.headers")
+    _reject_unknown_keys(status_raw, status_allowed, "access_log.status")
+
+    return AccessLogConfig(
+        enabled=bool(raw.get("enabled", True)),
+        db_path=Path(raw.get("db_path", "data/access/access.sqlite3")),
+        retention=_positive_duration(
+            str(raw.get("retention", "30d")), key="access_log.retention"
+        ),
+        trusted_proxies=_trusted_proxies(raw.get("trusted_proxies")),
+        real_ip_headers=_real_ip_headers(raw.get("real_ip_headers")),
+        file=AccessLogFileConfig(
+            enabled=bool(file_raw.get("enabled", True)),
+            path=Path(file_raw.get("path", "logs/access.log")),
+            rotation=str(file_raw.get("rotation", "10 MB")),
+            retention=str(file_raw.get("retention", "30 days")),
+            compression=str(file_raw.get("compression", "gz")),
+        ),
+        headers=AccessLogHeadersConfig(
+            max_value_length=_positive_int(
+                headers_raw.get("max_value_length", 512),
+                key="access_log.headers.max_value_length",
+            ),
+            stats_allowlist=tuple(
+                item.lower()
+                for item in _string_tuple(
+                    headers_raw.get("stats_allowlist"),
+                    ("user-agent", "host", "cf-ipcountry", "cf-ray"),
+                    key="access_log.headers.stats_allowlist",
+                )
+            ),
+            stats_max_rows=_positive_int(
+                headers_raw.get("stats_max_rows", 5000),
+                key="access_log.headers.stats_max_rows",
+            ),
+        ),
+        status=AccessLogStatusConfig(
+            enabled=bool(status_raw.get("enabled", True)),
+            mask_ips=bool(status_raw.get("mask_ips", True)),
+            include_recent=bool(status_raw.get("include_recent", False)),
+            recent_limit=_positive_int(
+                status_raw.get("recent_limit", 20),
+                key="access_log.status.recent_limit",
+            ),
+            top_limit=_positive_int(
+                status_raw.get("top_limit", 20),
+                key="access_log.status.top_limit",
+            ),
+        ),
+    )
 
 
 def _filter(data: dict[str, Any]) -> FilterConfig:
@@ -800,6 +967,20 @@ class LoadedConfig(AppConfig):
                 errors.append(
                     f"log directory is not writable: {self.logging_file.path.parent}"
                 )
+        if self.access_log.enabled:
+            self.access_log.db_path.parent.mkdir(parents=True, exist_ok=True)
+            if not os.access(self.access_log.db_path.parent, os.W_OK):
+                errors.append(
+                    "access log database directory is not writable: "
+                    f"{self.access_log.db_path.parent}"
+                )
+            if self.access_log.file.enabled:
+                self.access_log.file.path.parent.mkdir(parents=True, exist_ok=True)
+                if not os.access(self.access_log.file.path.parent, os.W_OK):
+                    errors.append(
+                        "access log directory is not writable: "
+                        f"{self.access_log.file.path.parent}"
+                    )
         return errors
 
 
@@ -843,6 +1024,7 @@ def load_config(path: Path, *, validate: bool = True) -> LoadedConfig:
         "routes",
         "plugins",
         "dns",
+        "access_log",
     }
     unknown_top_level = sorted(set(raw) - allowed_top_level)
     if unknown_top_level:
@@ -861,6 +1043,7 @@ def load_config(path: Path, *, validate: bool = True) -> LoadedConfig:
     output_raw = _table(raw, "output")
     logging_raw = _table(raw, "logging")
     dns_raw = _table(raw, "dns")
+    access_log_raw = _table(raw, "access_log")
     dns = _dns(dns_raw)
 
     server = ServerConfig(
@@ -1039,6 +1222,7 @@ def load_config(path: Path, *, validate: bool = True) -> LoadedConfig:
         routes=routes,
         plugins=plugins,
         dns=dns,
+        access_log=_access_log(access_log_raw),
     )
     if validate:
         report = config.validate(config_path=path)

@@ -3,6 +3,7 @@
 Configuration loading, parsing, and validation tests.
 """
 
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -109,6 +110,203 @@ def test_load_config_applies_defaults(temp_config_path: Path) -> None:
     assert config.http.user_agent == "mihomo/1.19.5"
     assert config.sources["airport_a"].format == "auto"
     assert config.routes["phone"].sources == ("airport_a",)
+
+
+def test_access_log_defaults(temp_config_path: Path) -> None:
+    config = load_config(write_config(temp_config_path, minimal_config()))
+    access = config.access_log
+
+    assert access.enabled is True
+    assert access.db_path == Path("data/access/access.sqlite3")
+    assert access.retention == timedelta(days=30)
+    assert tuple(str(item) for item in access.trusted_proxies) == (
+        "127.0.0.1/32",
+        "::1/128",
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+    )
+    assert access.real_ip_headers == (
+        "cf-connecting-ip",
+        "true-client-ip",
+        "x-forwarded-for",
+        "x-real-ip",
+    )
+    assert access.file.enabled is True
+    assert access.file.path == Path("logs/access.log")
+    assert access.file.rotation == "10 MB"
+    assert access.file.retention == "30 days"
+    assert access.file.compression == "gz"
+    assert access.headers.max_value_length == 512
+    assert access.headers.stats_allowlist == (
+        "user-agent",
+        "host",
+        "cf-ipcountry",
+        "cf-ray",
+    )
+    assert access.headers.stats_max_rows == 5000
+    assert access.status.enabled is True
+    assert access.status.mask_ips is True
+    assert access.status.include_recent is False
+    assert access.status.recent_limit == 20
+    assert access.status.top_limit == 20
+
+
+def test_access_log_parses_nested_config(temp_config_path: Path) -> None:
+    path = write_config(
+        temp_config_path,
+        minimal_config()
+        + """
+        [access_log]
+        enabled = true
+        db_path = "audit/access.sqlite3"
+        retention = "7d"
+        trusted_proxies = ["127.0.0.1", "10.0.0.0/8"]
+        real_ip_headers = ["x-real-ip", "x-forwarded-for"]
+
+        [access_log.file]
+        enabled = true
+        path = "audit/access.log"
+        rotation = "5 MB"
+        retention = "7 days"
+        compression = "gz"
+
+        [access_log.headers]
+        max_value_length = 128
+        stats_allowlist = ["user-agent", "referer"]
+        stats_max_rows = 100
+
+        [access_log.status]
+        enabled = false
+        mask_ips = false
+        include_recent = true
+        recent_limit = 5
+        top_limit = 10
+        """,
+    )
+    config = load_config(path)
+    access = config.access_log
+
+    assert access.db_path == Path("audit/access.sqlite3")
+    assert access.retention == timedelta(days=7)
+    assert tuple(str(item) for item in access.trusted_proxies) == (
+        "127.0.0.1/32",
+        "10.0.0.0/8",
+    )
+    assert access.real_ip_headers == ("x-real-ip", "x-forwarded-for")
+    assert access.file.path == Path("audit/access.log")
+    assert access.headers.max_value_length == 128
+    assert access.headers.stats_allowlist == ("user-agent", "referer")
+    assert access.status.enabled is False
+    assert access.status.mask_ips is False
+    assert access.status.include_recent is True
+    assert access.status.recent_limit == 5
+    assert access.status.top_limit == 10
+
+
+@pytest.mark.parametrize(
+    ("snippet", "message"),
+    [
+        ("[access_log]\nunknown = true\n", "access_log key is unsupported"),
+        ("[access_log.file]\nunknown = true\n", "access_log.file key is unsupported"),
+        (
+            "[access_log.headers]\nunknown = true\n",
+            "access_log.headers key is unsupported",
+        ),
+        (
+            "[access_log.status]\nunknown = true\n",
+            "access_log.status key is unsupported",
+        ),
+        ('[access_log]\nretention = "0s"\n', "access_log.retention must be positive"),
+        (
+            '[access_log]\ntrusted_proxies = ["not-a-network"]\n',
+            "trusted proxy is invalid",
+        ),
+        (
+            '[access_log]\nreal_ip_headers = ["forwarded"]\n',
+            "real_ip_headers value is unsupported",
+        ),
+        (
+            "[access_log.headers]\nmax_value_length = 0\n",
+            "max_value_length must be positive",
+        ),
+        (
+            "[access_log.headers]\nstats_max_rows = 0\n",
+            "stats_max_rows must be positive",
+        ),
+        (
+            "[access_log.status]\nrecent_limit = 0\n",
+            "recent_limit must be positive",
+        ),
+        ("[access_log.status]\ntop_limit = 0\n", "top_limit must be positive"),
+    ],
+)
+def test_access_log_rejects_invalid_config(
+    temp_config_path: Path, snippet: str, message: str
+) -> None:
+    path = write_config(temp_config_path, minimal_config() + "\n" + snippet)
+    with pytest.raises(ValueError, match=message):
+        load_config(path)
+
+
+def test_access_log_filesystem_checks_create_dirs(
+    temp_config_path: Path, tmp_path: Path
+) -> None:
+    config_path = write_config(
+        temp_config_path,
+        minimal_config()
+        + f"""
+        [access_log]
+        enabled = true
+        db_path = "{tmp_path / "data" / "access.sqlite3"}"
+
+        [access_log.file]
+        enabled = true
+        path = "{tmp_path / "logs" / "access.log"}"
+        """,
+    )
+    config = load_config(config_path)
+
+    assert config.check_filesystem() == []
+    assert (tmp_path / "data").is_dir()
+    assert (tmp_path / "logs").is_dir()
+    assert not (tmp_path / "data" / "access.sqlite3").exists()
+    assert not (tmp_path / "logs" / "access.log").exists()
+
+
+def test_access_log_disabled_skips_access_dirs(
+    temp_config_path: Path, tmp_path: Path
+) -> None:
+    db_path = tmp_path / "disabled" / "access.sqlite3"
+    log_path = tmp_path / "disabled-logs" / "access.log"
+    config_path = write_config(
+        temp_config_path,
+        minimal_config()
+        + f"""
+        [access_log]
+        enabled = false
+        db_path = "{db_path}"
+
+        [access_log.file]
+        enabled = true
+        path = "{log_path}"
+        """,
+    )
+    config = load_config(config_path)
+
+    assert config.check_filesystem() == []
+    assert not db_path.parent.exists()
+    assert not log_path.parent.exists()
+
+
+def test_sqlalchemy_dependency_is_declared() -> None:
+    pyproject = Path("pyproject.toml").read_text(encoding="utf-8")
+    requirements = Path("requirements.txt").read_text(encoding="utf-8")
+    lock = Path("uv.lock").read_text(encoding="utf-8")
+
+    assert '"sqlalchemy>=2.0"' in pyproject
+    assert "sqlalchemy==" in requirements.lower()
+    assert 'name = "sqlalchemy"' in lock
 
 
 def test_route_output_new_format_fields_are_parsed(temp_config_path: Path) -> None:

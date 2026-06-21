@@ -7,10 +7,28 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from ipaddress import IPv4Network, IPv6Network, ip_network
 from pathlib import Path
 from typing import Any, Literal
 
 ProxyDict = dict[str, Any]
+IPNetwork = IPv4Network | IPv6Network
+RealIPHeader = Literal[
+    "cf-connecting-ip", "true-client-ip", "x-forwarded-for", "x-real-ip"
+]
+DEFAULT_TRUSTED_PROXY_NETWORKS = (
+    "127.0.0.1/32",
+    "::1/128",
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+)
+
+
+def _default_trusted_proxies() -> tuple[IPNetwork, ...]:
+    return tuple(
+        ip_network(value, strict=False) for value in DEFAULT_TRUSTED_PROXY_NETWORKS
+    )
 
 
 @dataclass(frozen=True)
@@ -253,6 +271,55 @@ class LoggingSinkConfig:
 
 
 @dataclass(frozen=True)
+class AccessLogFileConfig:
+    enabled: bool = True
+    path: Path = Path("logs/access.log")
+    rotation: str = "10 MB"
+    retention: str = "30 days"
+    compression: str = "gz"
+
+
+@dataclass(frozen=True)
+class AccessLogHeadersConfig:
+    max_value_length: int = 512
+    stats_allowlist: tuple[str, ...] = (
+        "user-agent",
+        "host",
+        "cf-ipcountry",
+        "cf-ray",
+    )
+    stats_max_rows: int = 5000
+
+
+@dataclass(frozen=True)
+class AccessLogStatusConfig:
+    enabled: bool = True
+    mask_ips: bool = True
+    include_recent: bool = False
+    recent_limit: int = 20
+    top_limit: int = 20
+
+
+@dataclass(frozen=True)
+class AccessLogConfig:
+    enabled: bool = True
+    db_path: Path = Path("data/access/access.sqlite3")
+    retention: timedelta = field(default_factory=lambda: timedelta(days=30))
+    trusted_proxies: tuple[IPNetwork, ...] = field(
+        default_factory=_default_trusted_proxies
+    )
+    real_ip_headers: tuple[RealIPHeader, ...] = (
+        "cf-connecting-ip",
+        "true-client-ip",
+        "x-forwarded-for",
+        "x-real-ip",
+    )
+    file: AccessLogFileConfig = field(default_factory=AccessLogFileConfig)
+    headers: AccessLogHeadersConfig = field(default_factory=AccessLogHeadersConfig)
+    status: AccessLogStatusConfig = field(default_factory=AccessLogStatusConfig)
+
+
+@dataclass(frozen=True)
 class HttpConfig:
     """HTTP 客户端配置，包含超时、User-Agent、响应大小限制和重定向次数。
 
@@ -331,6 +398,7 @@ class AppConfig:
     routes: dict[str, RouteConfig]
     plugins: dict[str, PluginConfig]
     dns: DnsConfig = field(default_factory=DnsConfig)
+    access_log: AccessLogConfig = field(default_factory=AccessLogConfig)
 
 
 @dataclass(frozen=True)

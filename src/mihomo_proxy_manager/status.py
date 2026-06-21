@@ -365,37 +365,72 @@ def _render_html(data: dict[str, Any]) -> str:
             *,
             compact: bool = False,
         ) -> str:
-            headers = "".join(
-                f"<th>{html.escape(c)}</th>" for c in columns
-            )
+            headers = "".join(f"<th>{html.escape(c)}</th>" for c in columns)
             if not items:
                 body = f'<tr><td colspan="{len(columns)}" class="muted">-</td></tr>'
             else:
                 body = "".join(
                     "<tr>"
-                    + "".join(
-                        f"<td>{_cell(item.get(c))}</td>" for c in columns
-                    )
+                    + "".join(f"<td>{_cell(item.get(c))}</td>" for c in columns)
                     + "</tr>"
                     for item in items
                 )
             cls = ' class="compact"' if compact else ""
-            return f'<table{cls}><thead><tr>{headers}</tr></thead><tbody>{body}</tbody></table>'
+            return f"<table{cls}><thead><tr>{headers}</tr></thead><tbody>{body}</tbody></table>"
 
         total = _cell(access.get("total_events", 0))
         since = _cell(access.get("since", "-"))
         retention = _cell(access.get("retention_seconds", "-"))
 
-        tabs_html = ""
         tab_sections = [
-            ("ips", "Top IPs", _table(access.get("top_ips", []), ("real_ip", "count", "last_seen"), compact=True)),
-            ("agents", "User-Agents", _table(access.get("top_user_agents", []), ("user_agent", "count", "last_seen"), compact=True)),
-            ("headers", "Headers", _table(access.get("top_headers", []), ("header", "value", "count", "last_seen"), compact=True)),
-            ("paths", "Paths", _table(access.get("top_paths", []), ("path", "route_name", "count", "last_seen"), compact=True)),
+            (
+                "ips",
+                "Top IPs",
+                _table(
+                    access.get("top_ips", []),
+                    ("real_ip", "count", "last_seen"),
+                    compact=True,
+                ),
+            ),
+            (
+                "agents",
+                "User-Agents",
+                _table(
+                    access.get("top_user_agents", []),
+                    ("user_agent", "count", "last_seen"),
+                    compact=True,
+                ),
+            ),
+            (
+                "headers",
+                "Headers",
+                _table(
+                    access.get("top_headers", []),
+                    ("header", "value", "count", "last_seen"),
+                    compact=True,
+                ),
+            ),
+            (
+                "paths",
+                "Paths",
+                _table(
+                    access.get("top_paths", []),
+                    ("path", "route_name", "count", "last_seen"),
+                    compact=True,
+                ),
+            ),
         ]
         if access.get("recent") is not None:
             tab_sections.append(
-                ("recent", "Recent", _table(access.get("recent", []), ("visited_at", "path", "route_name", "status_code", "real_ip"), compact=True))
+                (
+                    "recent",
+                    "Recent",
+                    _table(
+                        access.get("recent", []),
+                        ("visited_at", "path", "route_name", "status_code", "real_ip"),
+                        compact=True,
+                    ),
+                )
             )
 
         tab_buttons = "".join(

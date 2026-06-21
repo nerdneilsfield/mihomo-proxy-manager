@@ -930,7 +930,7 @@ async def test_access_audit_records_503(tmp_path) -> None:
     assert event.status_code == 503
 
 
-def test_access_audit_records_500_for_provider_exception(tmp_path) -> None:
+def test_access_audit_skips_unhandled_provider_exception(tmp_path) -> None:
     config = load_config(config_file(tmp_path))
     store = FakeAccessAuditStore()
     app = create_app(
@@ -946,11 +946,7 @@ def test_access_audit_records_500_for_provider_exception(tmp_path) -> None:
         with pytest.raises(RuntimeError, match="cache read failed"):
             client.get(path)
 
-    assert len(store.events) == 1
-    event = store.events[0]
-    assert event.route_name == "phone"
-    assert event.path == path
-    assert event.status_code == 500
+    assert store.events == []
 
 
 @pytest.mark.asyncio

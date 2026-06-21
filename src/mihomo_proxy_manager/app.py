@@ -585,12 +585,6 @@ def create_app(
                 headers=render_response.headers,
             )
             return response
-        except Exception:
-            if response is None:
-                response = PlainTextResponse(
-                    "internal server error", status_code=500
-                )
-            raise
         finally:
             if response is not None:
                 await _record_access_event(

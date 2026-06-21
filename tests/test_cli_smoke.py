@@ -57,6 +57,102 @@ sources = ["airport_a"]
     assert "OK: configuration is valid" in capsys.readouterr().out
 
 
+def test_check_command_reports_access_log_database_directory_error(
+    tmp_path: Path, capsys
+) -> None:
+    """测试 check 命令报告 access log 数据库目录错误且不创建数据库文件。
+
+    Test that check reports access log database directory errors without
+    creating the database file.
+    """
+    bad_parent = tmp_path / "not-a-directory"
+    bad_parent.write_text("file", encoding="utf-8")
+    db_path = bad_parent / "access.sqlite3"
+    access_log_path = tmp_path / "access" / "access.log"
+    config = tmp_path / "config.toml"
+    config.write_text(
+        f'''
+[server]
+status_path = "/s/X6HfeBRQz6xqk9S4dTV7gQwL2nP8aYcM"
+
+[cache]
+dir = "{tmp_path / "cache"}"
+
+[sources.airport_a]
+url = "https://example.com/sub"
+
+[routes.phone]
+path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml"
+sources = ["airport_a"]
+
+[access_log]
+enabled = true
+db_path = "{db_path}"
+
+[access_log.file]
+enabled = true
+path = "{access_log_path}"
+''',
+        encoding="utf-8",
+    )
+
+    code = main(["check", "-c", str(config)])
+    output = capsys.readouterr().out
+
+    assert code == 1
+    assert "ERROR: access log database directory cannot be created:" in output
+    assert not db_path.exists()
+    assert not access_log_path.exists()
+
+
+def test_check_command_reports_access_log_file_directory_error(
+    tmp_path: Path, capsys
+) -> None:
+    """测试 check 命令报告 access log 文件目录错误且不创建日志文件。
+
+    Test that check reports access log file directory errors without creating
+    the log file.
+    """
+    bad_parent = tmp_path / "not-a-directory"
+    bad_parent.write_text("file", encoding="utf-8")
+    db_path = tmp_path / "access" / "access.sqlite3"
+    access_log_path = bad_parent / "access.log"
+    config = tmp_path / "config.toml"
+    config.write_text(
+        f'''
+[server]
+status_path = "/s/X6HfeBRQz6xqk9S4dTV7gQwL2nP8aYcM"
+
+[cache]
+dir = "{tmp_path / "cache"}"
+
+[sources.airport_a]
+url = "https://example.com/sub"
+
+[routes.phone]
+path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml"
+sources = ["airport_a"]
+
+[access_log]
+enabled = true
+db_path = "{db_path}"
+
+[access_log.file]
+enabled = true
+path = "{access_log_path}"
+''',
+        encoding="utf-8",
+    )
+
+    code = main(["check", "-c", str(config)])
+    output = capsys.readouterr().out
+
+    assert code == 1
+    assert "ERROR: access log directory cannot be created:" in output
+    assert not db_path.exists()
+    assert not access_log_path.exists()
+
+
 class FailingRefresher:
     """模拟刷新失败的刷新器。
 

@@ -936,9 +936,8 @@ class LoadedConfig(AppConfig):
                 f"startup_refresh_mode is unsupported: {self.scheduler.startup_refresh_mode!r}"
             )
 
-        # Directory creation / writability checks are deferred to load_config()
-        # so that validate() stays side-effect free (mpm check should not
-        # mutate the filesystem).
+        # Directory creation / writability checks live in check_filesystem()
+        # so validate() remains side-effect free.
 
         if config_path and config_path.exists():
             mode = stat.S_IMODE(config_path.stat().st_mode)
@@ -951,36 +950,37 @@ class LoadedConfig(AppConfig):
         """检查并创建运行时所需的目录，返回错误列表。
 
         Check (and create) runtime directories. Returns a list of error
-        strings. This has filesystem side effects and is therefore kept out of
-        :meth:`validate`, which must remain pure for ``mpm check``.
+        strings. This may create missing parent directories, so it is kept out
+        of :meth:`validate`, which must remain side-effect free.
 
         Returns:
             目录不可写时的错误列表 / List of errors when directories are not writable.
         """
         errors: list[str] = []
-        self.cache.dir.mkdir(parents=True, exist_ok=True)
-        if not os.access(self.cache.dir, os.W_OK):
-            errors.append(f"cache directory is not writable: {self.cache.dir}")
+
+        def ensure_writable_dir(path: Path, label: str) -> None:
+            try:
+                path.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                errors.append(f"{label} cannot be created: {path}: {exc}")
+                return
+            if not path.is_dir():
+                errors.append(f"{label} is not a directory: {path}")
+                return
+            if not os.access(path, os.W_OK):
+                errors.append(f"{label} is not writable: {path}")
+
+        ensure_writable_dir(self.cache.dir, "cache directory")
         if self.logging_file.enabled and self.logging_file.path:
-            self.logging_file.path.parent.mkdir(parents=True, exist_ok=True)
-            if not os.access(self.logging_file.path.parent, os.W_OK):
-                errors.append(
-                    f"log directory is not writable: {self.logging_file.path.parent}"
-                )
+            ensure_writable_dir(self.logging_file.path.parent, "log directory")
         if self.access_log.enabled:
-            self.access_log.db_path.parent.mkdir(parents=True, exist_ok=True)
-            if not os.access(self.access_log.db_path.parent, os.W_OK):
-                errors.append(
-                    "access log database directory is not writable: "
-                    f"{self.access_log.db_path.parent}"
-                )
+            ensure_writable_dir(
+                self.access_log.db_path.parent, "access log database directory"
+            )
             if self.access_log.file.enabled:
-                self.access_log.file.path.parent.mkdir(parents=True, exist_ok=True)
-                if not os.access(self.access_log.file.path.parent, os.W_OK):
-                    errors.append(
-                        "access log directory is not writable: "
-                        f"{self.access_log.file.path.parent}"
-                    )
+                ensure_writable_dir(
+                    self.access_log.file.path.parent, "access log directory"
+                )
         return errors
 
 

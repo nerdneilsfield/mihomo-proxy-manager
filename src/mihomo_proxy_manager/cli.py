@@ -85,11 +85,14 @@ def _cmd_check(config_path: str) -> int:
     config_file = Path(config_path)
     config = load_config(config_file, validate=False)
     report = config.validate(config_path=config_file)
+    filesystem_errors = config.check_filesystem()
     for warning in report.warnings:
         print(f"WARNING: {warning}")
     for error in report.errors:
         print(f"ERROR: {error}")
-    if report.ok:
+    for error in filesystem_errors:
+        print(f"ERROR: {error}")
+    if report.ok and not filesystem_errors:
         print("OK: configuration is valid")
         return 0
     return 1

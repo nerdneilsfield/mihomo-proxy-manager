@@ -7,21 +7,34 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from dataclasses import dataclass
 from pathlib import Path
 
 import httpx2 as httpx
 import uvicorn
 
+from .access_audit import AccessAuditStore, SQLiteAccessAuditStore
 from .app import create_app
 from .cache import JsonSourceCacheStore
 from .config import load_config
 from .dns import DnsClient, DnsResolver
 from .fetcher import SafeHttpClient, SubscriptionFetcher, _NoOpCookies
 from .logging import configure_logging
-from .models import HttpConfig
+from .models import AppConfig, HttpConfig
 from .plugins.http_action import HttpActionPlugin
 from .refresher import SourceRefresher
 from .scheduler import RefreshScheduler
+
+
+@dataclass(frozen=True)
+class Runtime:
+    """CLI runtime dependencies."""
+
+    config: AppConfig
+    cache_store: JsonSourceCacheStore
+    client: httpx.AsyncClient
+    refresher: SourceRefresher
+    access_audit_store: AccessAuditStore | None = None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -81,7 +94,9 @@ def _cmd_check(config_path: str) -> int:
     return 1
 
 
-async def _build_runtime(config_path: str, *, debug: bool = False):
+async def _build_runtime(
+    config_path: str, *, debug: bool = False, access_audit: bool = False
+) -> Runtime:
     """构建运行时组件：配置、缓存、HTTP 客户端和刷新器。
 
     Build runtime components: config, cache store, HTTP client, and refresher.
@@ -90,14 +105,18 @@ async def _build_runtime(config_path: str, *, debug: bool = False):
         config_path: 配置文件路径。
             Path to the configuration file.
         debug: 是否强制控制台日志为 DEBUG 级别 / Force console log level to DEBUG.
+        access_audit: 是否初始化访问审计存储 / Whether to initialize access audit store.
 
     Returns:
-        tuple: 包含 (config, cache_store, client, refresher) 的元组。
-            A tuple of (config, cache_store, client, refresher).
+        Runtime: 包含运行时依赖的 dataclass。
+            Dataclass containing runtime dependencies.
     """
     config_file = Path(config_path)
     config = load_config(config_file)
     configure_logging(config, debug=debug)
+    access_audit_store = None
+    if access_audit and config.access_log.enabled:
+        access_audit_store = SQLiteAccessAuditStore(config.access_log)
     cache_store = JsonSourceCacheStore(config.cache)
     client = httpx.AsyncClient(cookies=_NoOpCookies())
     plugin_safe_http = SafeHttpClient(client, config.http)
@@ -124,7 +143,13 @@ async def _build_runtime(config_path: str, *, debug: bool = False):
         refresh_lock_timeout=config.scheduler.refresh_lock_timeout,
         dns_resolver=dns_resolver,
     )
-    return config, cache_store, client, refresher
+    return Runtime(
+        config=config,
+        cache_store=cache_store,
+        client=client,
+        refresher=refresher,
+        access_audit_store=access_audit_store,
+    )
 
 
 def _cmd_serve(config_path: str, *, debug: bool = False) -> int:
@@ -143,22 +168,29 @@ def _cmd_serve(config_path: str, *, debug: bool = False) -> int:
     """
 
     async def run() -> int:
-        config, cache_store, client, refresher = await _build_runtime(
-            config_path, debug=debug
+        runtime = await _build_runtime(
+            config_path, debug=debug, access_audit=True
         )
-        scheduler = RefreshScheduler(config, refresher)
+        scheduler = RefreshScheduler(runtime.config, runtime.refresher)
         app = create_app(
-            config, cache_store=cache_store, refresher=refresher, scheduler=scheduler
+            runtime.config,
+            cache_store=runtime.cache_store,
+            refresher=runtime.refresher,
+            scheduler=scheduler,
+            access_audit_store=runtime.access_audit_store,
         )
         try:
             server_config = uvicorn.Config(
-                app, host=config.server.host, port=config.server.port, access_log=False
+                app,
+                host=runtime.config.server.host,
+                port=runtime.config.server.port,
+                access_log=False,
             )
             server = uvicorn.Server(server_config)
             await server.serve()
             return 0
         finally:
-            await client.aclose()
+            await runtime.client.aclose()
 
     return asyncio.run(run())
 
@@ -181,14 +213,12 @@ def _cmd_refresh(config_path: str, source_name: str, *, debug: bool = False) -> 
     """
 
     async def run() -> int:
-        config, _cache_store, client, refresher = await _build_runtime(
-            config_path, debug=debug
-        )
+        runtime = await _build_runtime(config_path, debug=debug)
         try:
-            if source_name not in config.sources:
+            if source_name not in runtime.config.sources:
                 print(f"ERROR: unknown source {source_name!r}")
                 return 1
-            result = await refresher.refresh(source_name)
+            result = await runtime.refresher.refresh(source_name)
             if result.ok:
                 print(
                     f"OK: refreshed {result.source}: nodes={result.node_count} warnings={result.warning_count} cache={result.cache_path}"
@@ -199,7 +229,7 @@ def _cmd_refresh(config_path: str, source_name: str, *, debug: bool = False) -> 
             )
             return 1
         finally:
-            await client.aclose()
+            await runtime.client.aclose()
 
     return asyncio.run(run())
 

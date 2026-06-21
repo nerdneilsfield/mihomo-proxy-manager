@@ -3,10 +3,11 @@
 CLI parser and command smoke tests.
 """
 
+import asyncio
 from pathlib import Path
 
 
-from mihomo_proxy_manager.cli import build_parser, main
+from mihomo_proxy_manager.cli import _build_runtime, build_parser, main
 from mihomo_proxy_manager.refresher import RefreshResult
 
 
@@ -126,3 +127,96 @@ sources = ["airport_a"]
     assert "nodes=0" in output
     assert "warnings=1" in output
     assert "error=boom" in output
+
+
+def _write_cli_config(tmp_path: Path, *, access_enabled: bool = True) -> Path:
+    config = tmp_path / "config.toml"
+    config.write_text(
+        f'''
+[server]
+status_path = "/s/X6HfeBRQz6xqk9S4dTV7gQwL2nP8aYcM"
+
+[cache]
+dir = "{tmp_path / "cache"}"
+
+[sources.airport_a]
+url = "https://example.com/sub"
+
+[routes.phone]
+path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml"
+sources = ["airport_a"]
+
+[access_log]
+enabled = {str(access_enabled).lower()}
+db_path = "{tmp_path / "access" / "access.sqlite3"}"
+''',
+        encoding="utf-8",
+    )
+    return config
+
+
+def test_serve_runtime_initializes_access_store_when_enabled(
+    monkeypatch, tmp_path: Path
+) -> None:
+    created = {}
+
+    class FakeStore:
+        def __init__(self, config):
+            created["db_path"] = config.db_path
+
+        def cleanup(self, now_ms=None):
+            pass
+
+        def record(self, event):
+            pass
+
+        def stats(self, now_ms=None):
+            raise AssertionError("not used")
+
+        def dispose(self):
+            pass
+
+    monkeypatch.setattr("mihomo_proxy_manager.cli.SQLiteAccessAuditStore", FakeStore)
+    runtime = asyncio.run(
+        _build_runtime(str(_write_cli_config(tmp_path)), debug=False, access_audit=True)
+    )
+    try:
+        assert runtime.access_audit_store is not None
+    finally:
+        asyncio.run(runtime.client.aclose())
+        runtime.access_audit_store.dispose()
+    assert created["db_path"].name == "access.sqlite3"
+
+
+def test_serve_runtime_does_not_initialize_access_store_when_disabled(
+    monkeypatch, tmp_path: Path
+) -> None:
+    def fail_store(config):
+        raise AssertionError("store should not be created")
+
+    monkeypatch.setattr("mihomo_proxy_manager.cli.SQLiteAccessAuditStore", fail_store)
+    runtime = asyncio.run(
+        _build_runtime(
+            str(_write_cli_config(tmp_path, access_enabled=False)),
+            debug=False,
+            access_audit=True,
+        )
+    )
+    try:
+        assert runtime.access_audit_store is None
+    finally:
+        asyncio.run(runtime.client.aclose())
+
+
+def test_build_runtime_does_not_initialize_access_store_by_default(
+    monkeypatch, tmp_path: Path
+) -> None:
+    def fail_store(config):
+        raise AssertionError("store should not be created")
+
+    monkeypatch.setattr("mihomo_proxy_manager.cli.SQLiteAccessAuditStore", fail_store)
+    runtime = asyncio.run(_build_runtime(str(_write_cli_config(tmp_path)), debug=False))
+    try:
+        assert runtime.access_audit_store is None
+    finally:
+        asyncio.run(runtime.client.aclose())

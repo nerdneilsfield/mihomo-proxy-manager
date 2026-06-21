@@ -2,7 +2,7 @@
 
 # mihomo-proxy-manager
 
-A small upstream provider service that turns multiple Clash/Mihomo subscriptions into stable, reusable provider feeds.
+A small upstream subscription service that turns multiple Clash/Mihomo subscriptions into stable, reusable route outputs.
 
 [![CI](https://github.com/nerdneilsfield/mihomo-proxy-manager/actions/workflows/ci.yml/badge.svg)](https://github.com/nerdneilsfield/mihomo-proxy-manager/actions/workflows/ci.yml)
 [![Docker Image](https://img.shields.io/badge/docker-ghcr.io-2496ED?logo=docker&logoColor=white)](https://ghcr.io/nerdneilsfield/mihomo-proxy-manager)
@@ -16,13 +16,13 @@ A small upstream provider service that turns multiple Clash/Mihomo subscriptions
 
 ## What It Is
 
-`mihomo-proxy-manager` is an upstream provider service for Clash/Mihomo. It downloads proxy nodes from multiple subscription sources, parses YAML, share links, or base64 payloads, applies configurable filters and renaming rules, then returns Mihomo-compatible `proxy-providers` YAML.
+`mihomo-proxy-manager` is an upstream subscription service for Clash/Mihomo and related clients. It downloads proxy nodes from multiple subscription sources, parses YAML, share links, or base64 payloads, applies configurable filters and renaming rules, then renders configured route output formats such as provider YAML or direct subscription payloads. Mihomo-compatible `proxy-providers` YAML is the original and default use case.
 
-The project is built for a practical problem: raw subscription URLs are often not suitable for every device. You may want to hide the original subscription URL, normalize node names, combine multiple providers, or expose different node sets for phones, laptops, and routers. This service keeps those rules in a TOML file and exposes stable hidden provider routes.
+The project is built for a practical problem: raw subscription URLs are often not suitable for every device. You may want to hide the original subscription URL, normalize node names, combine multiple providers, or expose different node sets and subscription formats for phones, laptops, and routers. This service keeps those rules in a TOML file and exposes stable hidden subscription routes.
 
 ## When To Use It
 
-- You have multiple subscription sources and want one clean provider feed.
+- You have multiple subscription sources and want one clean provider YAML output or client-specific subscription output.
 - You want Mihomo clients to consume provider YAML without seeing raw upstream URLs.
 - Different devices need different node sets.
 - Upstream subscriptions sometimes fail, but clients should still receive the last valid cache.
@@ -30,7 +30,7 @@ The project is built for a practical problem: raw subscription URLs are often no
 
 ## Features
 
-- Aggregates multiple sources and exposes different provider routes.
+- Aggregates multiple sources and exposes different subscription routes and output formats.
 - Parses Clash/Mihomo provider YAML, full YAML configs, common share links, and base64 subscriptions.
 - Supports `ss://`, `vmess://`, `vless://`, `trojan://`, and `hysteria2://`.
 - Route format research and extension boundaries are documented in [docs/route-formats.md](docs/route-formats.md).
@@ -119,7 +119,7 @@ Configuration is written in TOML. A useful config usually has four parts:
 
 - `[server]`: listen address, health path, and status path.
 - `[sources.*]`: upstream subscriptions, fetch options, refresh policy, filters, and naming rules.
-- `[routes.*]`: provider routes exposed to clients and the sources each route uses.
+- `[routes.*]`: subscription routes exposed to clients and the sources each route uses.
 - `[security]`: hidden path entropy and private-network URL policy.
 
 **Important: `user_agent` must use `clash-meta/<version>`, `clash.meta/<version>`, or `mihomo/<version>`. Other formats are rejected. The example uses `mihomo/1.19.5`, a real released Mihomo version. Do not use the project name or a placeholder string; some subscription providers change behavior based on the User-Agent.**
@@ -244,14 +244,14 @@ exclude = "倍率|测试"
 | `sources.<name>.filter.include` | Keeps nodes whose names match the regex. |
 | `sources.<name>.filter.exclude` | Drops nodes whose names match the regex. |
 | `sources.<name>.rename.prefix` | Adds a prefix to source-level node names. `{source}` is available. |
-| `routes.<name>.path` | Provider path consumed by clients. This path is a bearer secret. |
+| `routes.<name>.path` | Subscription path consumed by clients. This path is a bearer secret. |
 | `routes.<name>.sources` | Sources included by this route. |
 | `routes.<name>.require_all_sources` | If `true`, any unavailable source makes the route return `503`. |
 | `routes.<name>.output.format` | Route output format: `provider`, `auto`, `xray-uri`, `quantumult-x`, or `surfboard`. |
 
 </details>
 
-A provider route returns YAML like this:
+A route using provider output returns YAML like this:
 
 ```yaml
 proxies:
@@ -261,7 +261,7 @@ proxies:
     port: 443
 ```
 
-See [examples/config.toml](examples/config.toml) for a complete runnable template with two sources, a plugin, provider routes, an auto one-URL route, v2rayN / Quantumult X / Surfboard direct subscription routes, file logging, and Docker-friendly runtime paths.
+See [examples/config.toml](examples/config.toml) for a complete runnable template with two sources, a plugin, provider-format routes, an auto one-URL route, v2rayN / Quantumult X / Surfboard direct subscription routes, file logging, and Docker-friendly runtime paths.
 
 <details>
 <summary>Feature usage quick reference</summary>
@@ -323,7 +323,7 @@ prefix = "[phone] "
 exclude = "倍率|测试|Traffic"
 ```
 
-Route-level rules run after source aggregation. Use them to expose different provider feeds for different devices or scenarios.
+Route-level rules run after source aggregation. Use them to expose different subscription outputs for different devices or scenarios.
 
 ### Metadata comments in provider output
 
@@ -428,14 +428,14 @@ By default only A records (IPv4) are queried. To enable IPv6, set `enable_ipv6 =
 
 DNS servers may use `udp://`, `tcp://`, `tls://`, or `https://`. The DNS server hostname is resolved once per query and pinned to a public IP at connect time, preventing DNS rebinding attacks.
 
-### Restrict provider client User-Agent
+### Restrict subscription client User-Agent
 
 ```toml
 [routes.phone.access]
 user_agent = ["mihomo/*", "clash-meta/*", "clash.meta/*"]
 ```
 
-Patterns are matched case-sensitively using shell-style glob (`fnmatch`). When unset or set to an empty list, the route stays open. Access control applies only to provider routes; system endpoints such as `/healthz` are unaffected.
+Patterns are matched case-sensitively using shell-style glob (`fnmatch`). When unset or set to an empty list, the route stays open. Access control applies only to configured subscription routes, including main route paths and companion paths such as `-nodes` and `-import`; system endpoints such as `/healthz` are unaffected.
 
 ### File logging
 
@@ -455,7 +455,7 @@ When running with Docker, mount `logs` to `/app/logs`; otherwise logs stay insid
 
 ## Design
 
-The service separates source refresh from route rendering. A source is responsible for turning one upstream subscription into cached proxy records. A route is responsible for combining cached records into the provider YAML that a client needs. This keeps upstream failures, client requests, and output formatting from blocking each other unnecessarily.
+The service separates source refresh from route rendering. A source is responsible for turning one upstream subscription into cached proxy records. A route is responsible for combining cached records into the subscription output that a client needs. Provider YAML is the original and default output, while other route formats render through the same pipeline. This keeps upstream failures, client requests, and output formatting from blocking each other unnecessarily.
 
 ```mermaid
 flowchart LR
@@ -467,9 +467,9 @@ flowchart LR
   fetcher --> parser[Parse YAML / share links / base64]
   parser --> sourceTransform[Source filters and rename rules]
   sourceTransform --> cache[(Source JSON cache)]
-  cache --> route[Hidden provider route]
+  cache --> route[Hidden subscription route]
   route --> routeTransform[Route filters and rename rules]
-  routeTransform --> renderer[Provider YAML renderer]
+  routeTransform --> renderer[Route output renderer]
   renderer --> client[Clash / Mihomo client]
 ```
 
@@ -496,13 +496,13 @@ flowchart LR
 4. If `require_all_sources = false`, return available nodes when at least one source is usable.
 5. If `require_all_sources = true`, return `503` when any source remains unavailable.
 6. Apply route-level filters and rename rules after aggregation.
-7. Repair duplicate final node names and render YAML.
+7. Repair duplicate final node names and render the configured route output format.
 
 </details>
 
 ## Security
 
-- Provider paths are bearer secrets. Anyone with the path can fetch the provider.
+- Subscription paths are bearer secrets. Anyone with the path can fetch the route output.
 - Use HTTPS or a trusted reverse proxy in production.
 - Use a high-entropy `status_path` as well.
 - Treat upstream URLs, plugin headers, node UUIDs, and node passwords as sensitive data.

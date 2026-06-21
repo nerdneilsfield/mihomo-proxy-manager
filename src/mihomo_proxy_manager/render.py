@@ -373,7 +373,16 @@ def _prepare_surfboard_records(
     )
     normalized_records: list[ProxyRecord] = []
     warnings: list[str] = []
-    supported_types = {"ss", "trojan", "vmess", "hysteria2", "snell", "anytls", "http", "socks5"}
+    supported_types = {
+        "ss",
+        "trojan",
+        "vmess",
+        "hysteria2",
+        "snell",
+        "anytls",
+        "http",
+        "socks5",
+    }
     for record in transformed:
         data = dict(record.data)
         critical_field = _has_security_critical_field(data)
@@ -520,7 +529,9 @@ def _render_sb_hysteria2(data: dict[str, object]) -> str | None:
     sni={sni}, salamander-password={salamander}, udp-relay={udp}
     """
     segments = _sb_base_segments(data, "hysteria2")
-    password = _sb_value(data.get("password") or data.get("auth") or data.get("auth-str"))
+    password = _sb_value(
+        data.get("password") or data.get("auth") or data.get("auth-str")
+    )
     if segments is None or not password:
         return None
     segments.append(f"password={password}")

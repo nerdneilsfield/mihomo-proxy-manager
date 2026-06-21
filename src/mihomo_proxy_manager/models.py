@@ -146,7 +146,12 @@ class RouteOutputConfig:
     Route output configuration controlling output format and meta comments.
     """
 
-    format: Literal["provider", "surfboard", "quantumult-x", "xray-uri"] = "provider"
+    format: Literal["provider", "surfboard", "quantumult-x", "xray-uri", "auto"] = (
+        "provider"
+    )
+    auto_default: Literal["provider", "surfboard", "quantumult-x", "xray-uri"] = (
+        "provider"
+    )
     include_meta_comments: bool = False
     mode: Literal["default", "full-profile", "server-remote"] = "default"
     encoding: Literal["base64", "plain"] = "base64"

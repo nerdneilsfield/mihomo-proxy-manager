@@ -177,6 +177,37 @@ encoding = "plain"
     assert v2rayn_output.encoding == "plain"
 
 
+def test_auto_route_output_fields_are_parsed(temp_config_path: Path) -> None:
+    config = load_config(
+        _write_base_config(
+            temp_config_path,
+            '''
+format = "auto"
+auto_default = "xray-uri"
+include_meta_comments = true
+encoding = "plain"
+import_link = true
+resource_tag = "Phones"
+test_url = "http://www.gstatic.com/generate_204"
+test_interval = 300
+test_timeout = 4
+test_tolerance = 50
+''',
+        )
+    )
+
+    output = config.routes["phone"].output
+    assert output.format == "auto"
+    assert output.auto_default == "xray-uri"
+    assert output.include_meta_comments is True
+    assert output.encoding == "plain"
+    assert output.import_link is True
+    assert output.resource_tag == "Phones"
+    assert output.test_interval == 300
+    assert output.test_timeout == 4
+    assert output.test_tolerance == 50
+
+
 def test_route_output_unknown_key_raises_clear_error(temp_config_path: Path) -> None:
     body = (
         minimal_config()
@@ -228,6 +259,28 @@ def test_route_output_validation_rejects_invalid_values(
 
 
 @pytest.mark.parametrize(
+    ("output", "message"),
+    (
+        ('format = "auto"\nauto_default = "auto"', "auto_default is unsupported"),
+        (
+            'format = "auto"\nauto_default = "sing-box"',
+            "auto_default is unsupported",
+        ),
+        ('format = "auto"\nmode = "full-profile"', "auto output mode must be default"),
+        (
+            'format = "auto"\nmode = "server-remote"',
+            "auto output mode must be default",
+        ),
+    ),
+)
+def test_auto_route_output_validation_rejects_invalid_values(
+    temp_config_path: Path, output: str, message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        load_config(_write_base_config(temp_config_path, output))
+
+
+@pytest.mark.parametrize(
     "public_base_url",
     (
         "mpm.example.com/base",
@@ -263,6 +316,17 @@ def test_route_output_formats_requiring_import_links_need_public_base_url(
         load_config(_write_base_config(temp_config_path, output, server=""))
 
 
+def test_auto_route_requires_public_base_url(temp_config_path: Path) -> None:
+    with pytest.raises(ValueError, match="public_base_url is required for auto output"):
+        load_config(
+            _write_base_config(
+                temp_config_path,
+                'format = "auto"',
+                server="",
+            )
+        )
+
+
 def test_route_output_companion_path_collision_is_rejected(
     temp_config_path: Path,
 ) -> None:
@@ -280,6 +344,63 @@ sources = ["airport_a"]
 
 [routes.surf.output]
 format = "surfboard"
+
+[routes.nodes]
+path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL-nodes"
+sources = ["airport_a"]
+"""
+
+    with pytest.raises(ValueError, match="path collision"):
+        load_config(write_config(temp_config_path, body))
+
+
+def test_auto_route_import_companion_not_registered_when_disabled(
+    temp_config_path: Path,
+) -> None:
+    body = """
+[server]
+public_base_url = "https://mpm.example.com/base"
+status_path = "/s/X6HfeBRQz6xqk9S4dTV7gQwL2nP8aYcM"
+
+[sources.airport_a]
+url = "https://example.com/sub"
+
+[routes.auto]
+path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL"
+sources = ["airport_a"]
+
+[routes.auto.output]
+format = "auto"
+import_link = false
+
+[routes.normal_import]
+path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL-import"
+sources = ["airport_a"]
+"""
+
+    config = load_config(write_config(temp_config_path, body))
+
+    assert config.routes["auto"].output.format == "auto"
+    assert config.routes["normal_import"].path.endswith("-import")
+
+
+def test_auto_route_companion_path_collision_is_rejected(
+    temp_config_path: Path,
+) -> None:
+    body = """
+[server]
+public_base_url = "https://mpm.example.com/base"
+status_path = "/s/X6HfeBRQz6xqk9S4dTV7gQwL2nP8aYcM"
+
+[sources.airport_a]
+url = "https://example.com/sub"
+
+[routes.auto]
+path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL"
+sources = ["airport_a"]
+
+[routes.auto.output]
+format = "auto"
 
 [routes.nodes]
 path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL-nodes"

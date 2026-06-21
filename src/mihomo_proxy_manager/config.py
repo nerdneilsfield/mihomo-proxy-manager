@@ -416,6 +416,11 @@ def _companion_paths(route: RouteConfig) -> tuple[str, ...]:
         return (f"{route.path}-nodes",)
     if route.output.format == "quantumult-x" and route.output.import_link:
         return (f"{route.path}-import",)
+    if route.output.format == "auto":
+        paths = [f"{route.path}-nodes"]
+        if route.output.import_link:
+            paths.append(f"{route.path}-import")
+        return tuple(paths)
     return ()
 
 
@@ -531,10 +536,65 @@ class LoadedConfig(AppConfig):
                 "surfboard",
                 "quantumult-x",
                 "xray-uri",
+                "auto",
             }:
                 errors.append(
                     f"route {route.name!r} output format is unsupported: {route.output.format!r}"
                 )
+                continue
+            if route.output.format == "auto":
+                if route.output.mode != "default":
+                    errors.append(
+                        f"route {route.name!r} auto output mode must be default"
+                    )
+                if route.output.auto_default not in {
+                    "provider",
+                    "surfboard",
+                    "quantumult-x",
+                    "xray-uri",
+                }:
+                    errors.append(
+                        f"route {route.name!r} auto_default is unsupported: "
+                        f"{route.output.auto_default!r}"
+                    )
+                if route.output.import_response not in {"redirect", "plain"}:
+                    errors.append(
+                        f"route {route.name!r} quantumult-x import_response is unsupported: "
+                        f"{route.output.import_response!r}"
+                    )
+                if route.output.import_target not in {
+                    "app-scheme",
+                    "universal-link",
+                }:
+                    errors.append(
+                        f"route {route.name!r} quantumult-x import_target is unsupported: "
+                        f"{route.output.import_target!r}"
+                    )
+                if not route.output.test_url.startswith("http://"):
+                    errors.append(
+                        f"route {route.name!r} surfboard test_url must use http://"
+                    )
+                if not 1 <= route.output.test_interval <= 2_678_400:
+                    errors.append(
+                        f"route {route.name!r} surfboard test_interval must be between 1 and 2678400"
+                    )
+                if not 1 <= route.output.test_timeout <= 300:
+                    errors.append(
+                        f"route {route.name!r} surfboard test_timeout must be between 1 and 300"
+                    )
+                if not 0 <= route.output.test_tolerance <= 60_000:
+                    errors.append(
+                        f"route {route.name!r} surfboard test_tolerance must be between 0 and 60000"
+                    )
+                if route.output.encoding not in {"base64", "plain"}:
+                    errors.append(
+                        f"route {route.name!r} xray-uri encoding is unsupported: "
+                        f"{route.output.encoding!r}"
+                    )
+                if not self.server.public_base_url:
+                    errors.append(
+                        f"route {route.name!r} public_base_url is required for auto output"
+                    )
                 continue
             if route.output.format == "provider":
                 if route.output.mode != "default":
@@ -906,6 +966,7 @@ def load_config(path: Path, *, validate: bool = True) -> LoadedConfig:
     routes = {}
     allowed_route_output_keys = {
         "format",
+        "auto_default",
         "include_meta_comments",
         "mode",
         "encoding",
@@ -944,6 +1005,7 @@ def load_config(path: Path, *, validate: bool = True) -> LoadedConfig:
             require_all_sources=bool(values.get("require_all_sources", False)),
             output=RouteOutputConfig(
                 format=output_format,
+                auto_default=output_values.get("auto_default", "provider"),
                 include_meta_comments=include_meta_comments,
                 mode=output_values.get("mode", "default"),
                 encoding=output_values.get("encoding", "base64"),

@@ -54,9 +54,6 @@ stats_allowlist = [
   "host",
   "cf-ipcountry",
   "cf-ray",
-  "x-forwarded-for",
-  "x-real-ip",
-  "true-client-ip",
 ]
 stats_max_rows = 5000
 
@@ -81,7 +78,7 @@ Defaults:
 - `access_log.file.retention = "30 days"`
 - `access_log.file.compression = "gz"`
 - `access_log.headers.max_value_length = 512`
-- `access_log.headers.stats_allowlist = ["user-agent", "host", "cf-ipcountry", "cf-ray", "x-forwarded-for", "x-real-ip", "true-client-ip"]`
+- `access_log.headers.stats_allowlist = ["user-agent", "host", "cf-ipcountry", "cf-ray"]`
 - `access_log.headers.stats_max_rows = 5000`
 - `access_log.status.enabled = true`
 - `access_log.status.mask_ips = true`
@@ -110,6 +107,13 @@ sqlalchemy>=2.0
 ```
 
 Use SQLAlchemy Core, not ORM, for a small explicit schema and simple insert/select/delete queries. SQLite is the only supported backend in this feature.
+
+Dependency files must stay in sync:
+
+- Add `sqlalchemy>=2.0` to `pyproject.toml`.
+- Regenerate and commit `uv.lock`.
+- Regenerate and commit `requirements.txt` because CI and README installation use `pip install -r requirements.txt` followed by `pip install -e . --no-deps`.
+- Verify CI-style install path still has SQLAlchemy available.
 
 ## Data Model
 
@@ -168,7 +172,8 @@ Rules:
 
 - Header names are case-insensitive.
 - If the direct peer is not trusted, ignore all proxy headers and use `request.client.host` with `ip_source = "client-host"`.
-- `X-Forwarded-For` may contain comma-separated values; trim whitespace and pick the first syntactically valid global IP address.
+- `X-Forwarded-For` is accepted only when the trusted reverse proxy is configured to overwrite or sanitize this header before forwarding to the app. The application cannot prove that from the HTTP request, so docs and examples must warn operators not to pass through client-supplied XFF chains.
+- For accepted `X-Forwarded-For`, trim comma-separated values and pick the leftmost syntactically valid global IP address after the trusted proxy has sanitized/overwritten the header.
 - Private, loopback, link-local, multicast, unspecified, documentation, and otherwise non-global/reserved `X-Forwarded-For` entries are skipped. If every `X-Forwarded-For` entry is non-global or invalid, continue to the next configured source.
 - Single-IP headers (`CF-Connecting-IP`, `True-Client-IP`, `X-Real-IP`) must parse as IP addresses. They may be private when the trusted proxy supplies them because private clients behind LAN/VPN are legitimate; invalid values are skipped.
 - IPv4 and IPv6 are accepted.
@@ -211,6 +216,8 @@ Other header values are not stored exactly as received; they always pass through
 Status page and status API must not expose full `headers_json` by default. Full header JSON may remain available only inside SQLite for operators with filesystem access.
 
 Header statistics are computed only for `access_log.headers.stats_allowlist`. Displayed values are masked/truncated with the same max length, and the HTML should use a shorter visual cap if needed.
+
+IP-bearing headers such as `x-forwarded-for`, `x-real-ip`, `true-client-ip`, and `cf-connecting-ip` are excluded from the default stats allowlist because `top_ips` already exposes masked IP aggregates. If an operator explicitly adds an IP-bearing header to `stats_allowlist`, status API and HTML must mask IP values with the same IPv4 `/24` and IPv6 `/64` rules used by `top_ips`; XFF chains must be parsed and each IP-like value masked before display.
 
 Default allowlist excludes `referer` because full URLs often carry tokens or query parameters. If operators add `referer`, aggregation stores and displays origin only (`scheme://host[:port]`), never path or query.
 
@@ -473,6 +480,7 @@ Add tests for:
 
 - Config defaults and parsing for `[access_log]`, `[access_log.file]`, `[access_log.headers]`, and `[access_log.status]`.
 - Config whitelist rejects unknown access log keys, and parsed model is available at `AppConfig.access_log`.
+- Dependency packaging: `pyproject.toml`, `uv.lock`, and `requirements.txt` all include SQLAlchemy; a CI-style `pip install -r requirements.txt && pip install -e . --no-deps` can import `sqlalchemy`.
 - Invalid retention is rejected.
 - Invalid or unwritable paths are rejected.
 - Invalid `trusted_proxies`, `real_ip_headers`, header limits, and status limits are rejected.
@@ -496,6 +504,7 @@ Add tests for:
 - Header sanitizer redacts sensitive headers case-insensitively, applies existing secret redaction to all values, and truncates long values.
 - Header stats aggregate in Python without requiring SQLite JSON1.
 - Header stats honor allowlist and never expose full `referer` URL; referer aggregation uses origin only when explicitly allowlisted.
+- Header stats exclude IP-bearing headers by default; if configured, IP-bearing header values are masked before status display.
 - Matched subscription route writes SQLite event for all outcomes: `403`, `400`, `422`, `503`, and successful render.
 - Health/status/unknown route do not write access event.
 - Access logging failure does not change response.
@@ -523,6 +532,7 @@ Docs should explain:
 - SQLite access audit log.
 - Human-readable access log file.
 - Real IP trusted proxy behavior, default trusted proxy ranges, and spoofing tradeoff.
+- `X-Forwarded-For` trust requirement: upstream proxy must overwrite or sanitize XFF; otherwise use `CF-Connecting-IP`, `True-Client-IP`, `X-Real-IP`, or disable XFF in `real_ip_headers`.
 - Header redaction pipeline, value truncation, and status header aggregation allowlist.
 - Status access stats privacy controls: masked IPs by default and recent rows hidden by default.
 - Default 30-day retention.

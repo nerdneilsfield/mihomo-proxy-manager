@@ -899,6 +899,7 @@ def _has_unrepresentable_qx_scalar(data: dict[str, object]) -> str | None:
         "obfs-host",
         "obfs-uri",
         "flow",
+        "username",
     )
     for field_name in scalar_fields:
         if field_name in data and _profile_scalar_issue(data[field_name]) is not None:
@@ -1026,6 +1027,105 @@ def _render_qx_vmess(data: dict[str, object]) -> str | None:
     alter_id = _string(data.get("alterId") or data.get("alter-id"))
     if alter_id and alter_id != "0":
         segments.append("aead=false")
+    udp_relay = _qx_udp_relay_segment(data)
+    if udp_relay:
+        segments.append(udp_relay)
+    segments.append(_qx_tag(data))
+    return ", ".join(segments)
+
+
+def _qx_http_socks5_tls_segments(data: dict[str, object], default_host: str) -> list[str]:
+    """Build Quantumult X HTTP/SOCKS5 TLS segments when over-tls is enabled."""
+    segments: list[str] = ["over-tls=true"]
+    tls_host = _string(data.get("servername") or data.get("sni") or default_host)
+    if tls_host:
+        segments.append(f"tls-host={_qx_value(tls_host)}")
+    if "skip-cert-verify" in data:
+        verification = "false" if _boolish(data.get("skip-cert-verify")) else "true"
+        segments.append(f"tls-verification={verification}")
+    return segments
+
+
+def _render_qx_http(data: dict[str, object]) -> str | None:
+    """Render HTTP/HTTPS proxy as Quantumult X server_remote line.
+
+    Format follows QX sample.conf:
+    http={host}:{port}, username={username}, password={password},
+    over-tls={tls}, tls-host={sni}, tls-verification={skip},
+    udp-relay={udp}, tag={name}
+    """
+    hostport = _qx_hostport(data)
+    if not hostport:
+        return None
+    host = _string(data.get("server"))
+    tls_enabled = _boolish(data.get("tls")) or _qx_has_reality(data)
+    segments = [f"http={hostport}"]
+    username = _string(data.get("username"))
+    password = _string(data.get("password"))
+    if username:
+        segments.append(f"username={_qx_value(username)}")
+    if password:
+        segments.append(f"password={_qx_value(password)}")
+    if tls_enabled:
+        segments.extend(_qx_http_socks5_tls_segments(data, default_host=host))
+    segments.extend(_qx_reality_segments(data))
+    udp_relay = _qx_udp_relay_segment(data)
+    if udp_relay:
+        segments.append(udp_relay)
+    segments.append(_qx_tag(data))
+    return ", ".join(segments)
+
+
+def _render_qx_socks5(data: dict[str, object]) -> str | None:
+    """Render SOCKS5/SOCKS5-TLS proxy as Quantumult X server_remote line.
+
+    Format follows QX sample.conf:
+    socks5={host}:{port}, username={username}, password={password},
+    over-tls={tls}, tls-host={sni}, tls-verification={skip},
+    udp-relay={udp}, tag={name}
+    """
+    hostport = _qx_hostport(data)
+    if not hostport:
+        return None
+    host = _string(data.get("server"))
+    tls_enabled = _boolish(data.get("tls")) or _qx_has_reality(data)
+    segments = [f"socks5={hostport}"]
+    username = _string(data.get("username"))
+    password = _string(data.get("password"))
+    if username:
+        segments.append(f"username={_qx_value(username)}")
+    if password:
+        segments.append(f"password={_qx_value(password)}")
+    if tls_enabled:
+        segments.extend(_qx_http_socks5_tls_segments(data, default_host=host))
+    segments.extend(_qx_reality_segments(data))
+    udp_relay = _qx_udp_relay_segment(data)
+    if udp_relay:
+        segments.append(udp_relay)
+    segments.append(_qx_tag(data))
+    return ", ".join(segments)
+
+
+def _render_qx_anytls(data: dict[str, object]) -> str | None:
+    """Render AnyTLS proxy as Quantumult X server_remote line.
+
+    Format follows QX sample.conf:
+    anytls={host}:{port}, password={password}, over-tls=true,
+    tls-host={sni}, tls-verification={skip}, udp-relay={udp}, tag={name}
+
+    AnyTLS is always TLS-based (over-tls=true).
+    """
+    hostport = _qx_hostport(data)
+    password = _string(data.get("password"))
+    if not hostport or not password:
+        return None
+    host = _string(data.get("server"))
+    segments = [
+        f"anytls={hostport}",
+        f"password={_qx_value(password)}",
+    ]
+    segments.extend(_qx_http_socks5_tls_segments(data, default_host=host))
+    segments.extend(_qx_reality_segments(data))
     udp_relay = _qx_udp_relay_segment(data)
     if udp_relay:
         segments.append(udp_relay)
@@ -1364,6 +1464,9 @@ class QuantumultXRenderer:
             "trojan": _render_qx_trojan,
             "vless": _render_qx_vless,
             "vmess": _render_qx_vmess,
+            "http": _render_qx_http,
+            "socks5": _render_qx_socks5,
+            "anytls": _render_qx_anytls,
         }
 
         for proxy in proxies:

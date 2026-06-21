@@ -25,22 +25,47 @@ The project solves a practical problem: raw subscription URLs rarely suit every 
 - You have multiple subscription sources and want one clean provider YAML or client-specific subscription output.
 - You want Mihomo clients to consume provider YAML without seeing raw upstream URLs.
 - Different devices need different node sets.
+- Different clients need the same node pool in different subscription formats, such as Mihomo, Surfboard, Quantumult X, and v2rayN.
+- You want one route to return different formats through `?target=`, `?format=`, `?flag=`, `?client=`, or User-Agent detection.
 - Upstream subscriptions sometimes fail, but clients should still receive the last valid cache.
 - You prefer centralizing refresh, parsing, filtering, and naming rules on a server.
+- You need route access audit records: real client IP, User-Agent, selected headers, aggregate stats, and a human-readable access log.
 
 ## Features
 
-- Aggregates multiple sources and exposes different subscription routes and output formats.
+- Aggregates multiple sources and exposes Mihomo provider, Surfboard, Quantumult X, v2rayN/Xray URI, and other route outputs.
+- Supports fixed-format routes and `format = "auto"` routes for one-URL multi-client subscriptions.
+- Supports query selectors and User-Agent detection: `target`, `format`, `flag`, and `client` take precedence over User-Agent.
 - Parses Clash/Mihomo provider YAML, full YAML configs, common share links, and base64 subscriptions.
 - Supports `ss://`, `vmess://`, `vless://`, `trojan://`, and `hysteria2://`.
+- Preserves common vless reality / vision fields in compatible outputs.
 - Route format research and extension boundaries: [docs/route-formats.md](docs/route-formats.md).
 - Source-level and route-level regex filters, type filters, prefixes, and suffixes.
-- Renders Mihomo-compatible `proxies:` YAML.
+- Renders Mihomo-compatible `proxies:` YAML with optional metadata comments.
 - Source-level JSON caches preserved on refresh failure.
 - ETag and Last-Modified conditional requests.
 - Interval, cron, startup refresh, and jitter.
+- Per-source opt-in DNS resolution for node hostnames, with UDP/TCP/DoT/DoH servers.
 - `before_fetch` HTTP Action plugin hook.
+- Route-level User-Agent access control.
+- SQLite access audit, separate human-readable access log, status-page access stats, and IP/header aggregates.
+- HTML status dashboard plus `{status_path}/api` JSON API.
 - Private-network URLs, redirect count, and response size limited by default.
+
+## Current Capability Matrix
+
+| Capability | Status | Notes |
+| --- | --- | --- |
+| Source input `auto` | Implemented | Detects YAML, share links, and base64 payloads. |
+| Source input `yaml` | Implemented | Supports provider YAML and full Clash/Mihomo YAML configs. |
+| Source input `share-links` | Implemented | Parses raw share links or base64-decoded share links. |
+| Route output `provider` | Implemented | Returns Mihomo/Clash provider YAML: `proxies:`. |
+| Route output `xray-uri` | Implemented | Returns `ss://`, `vmess://`, `vless://`, `trojan://`, and `hysteria2://` URIs; base64 by default. |
+| Route output `quantumult-x` | Implemented | Main route returns server lines; optional `-import` one-click import. |
+| Route output `surfboard` | Implemented | Main route returns a minimal full profile; `-nodes` returns policy-path nodes. |
+| Route output `auto` | Implemented | Chooses output by query, companion suffix, User-Agent, then `auto_default`. |
+| `sing-box` / `loon` | Aliases reserved, renderer not implemented | Query/UA can recognize them as future targets, but no usable renderer exists yet. |
+| Access audit | Implemented | SQLite + separate access log + status aggregates, default 30-day retention. |
 
 ## Quick Start
 
@@ -260,13 +285,26 @@ exclude = "倍率|测试"
 | `server.public_base_url` | Public base URL. Surfboard and Quantumult X import companions use it to generate stable absolute subscription URLs. |
 | `cache.dir` | Directory for source JSON cache files. Cache files contain proxy data. |
 | `cache.max_stale` | Maximum age for cache entries. Older entries are treated as unavailable. |
+| `logging.file.*` | Normal application log file. Access logs do not go here. |
+| `access_log.enabled` | Parent switch. Disables both SQLite audit storage and the human-readable access log. |
+| `access_log.db_path` | SQLite audit database path. `serve` creates the DB; `mpm check` only checks directories. |
+| `access_log.retention` | Retention for SQLite audit events. Default is `30d`. |
+| `access_log.trusted_proxies` | Proxy CIDRs trusted for real-IP headers. Narrow this to exact reverse proxy CIDRs for public/LAN exposure. |
+| `access_log.real_ip_headers` | Real-IP header priority. Defaults to `cf-connecting-ip`, `true-client-ip`, `x-forwarded-for`, and `x-real-ip`. |
+| `access_log.file.*` | Separate human-readable access log, independent from normal app logs. |
+| `access_log.headers.stats_allowlist` | Headers to aggregate on the status page. Do not include tokens or high-entropy private headers. |
+| `access_log.status.*` | Status-page access stats controls: IP masking, recent rows, and top-list length. |
 | `http.max_response_size` | Maximum upstream response size. |
 | `http.max_redirects` | Maximum redirect count for subscription downloads and plugin requests. |
 | `scheduler.startup_refresh_mode` | `background` starts serving first; `blocking` waits for startup refreshes first. |
 | `security.hidden_path_min_entropy_bits` | Minimum estimated entropy for hidden route paths. 128 or higher is recommended. |
 | `security.allow_private_network_urls` | Allows private, localhost, and reserved addresses. Keep `false` in production unless needed. |
+| `dns.*` | Global DNS resolution defaults. Node hostnames are resolved only when a source explicitly sets `dns.enabled = true`. |
 | `sources.<name>.format` | `auto`, `yaml`, or `share-links`. `auto` is the usual choice. |
 | `sources.<name>.parse_error` | `skip` drops bad nodes; `fail` fails the whole source refresh. |
+| `sources.<name>.fetch.*` | Per-source HTTP fetch overrides: timeout, User-Agent, and headers. |
+| `sources.<name>.refresh.*` | Per-source interval / cron refresh policy. |
+| `sources.<name>.dns.*` | Per-source DNS resolution settings. Enabled sources skip ETag/Last-Modified conditional requests. |
 | `sources.<name>.filter.include` | Keeps nodes whose names match the regex. |
 | `sources.<name>.filter.exclude` | Drops nodes whose names match the regex. |
 | `sources.<name>.rename.prefix` | Adds a prefix to source-level node names. `{source}` is available. |
@@ -274,6 +312,14 @@ exclude = "倍率|测试"
 | `routes.<name>.sources` | Sources included by this route. |
 | `routes.<name>.require_all_sources` | If `true`, any unavailable source makes the route return `503`. |
 | `routes.<name>.output.format` | Route output format: `provider`, `auto`, `xray-uri`, `quantumult-x`, or `surfboard`. |
+| `routes.<name>.output.auto_default` | Default output for `format = "auto"` when no query/UA selector matches. |
+| `routes.<name>.output.encoding` | `xray-uri` encoding: `base64` or `plain`. |
+| `routes.<name>.output.import_link` | Whether to register the Quantumult X `-import` companion. Auto routes also use it. |
+| `routes.<name>.output.import_response` | Quantumult X import response: `redirect` or `plain`. |
+| `routes.<name>.output.import_target` | Quantumult X import target: app scheme or universal link. |
+| `routes.<name>.output.resource_tag` | Resource name for Quantumult X server-remote / import. |
+| `routes.<name>.output.test_*` | Surfboard url-test parameters. |
+| `routes.<name>.access.user_agent` | Route-level User-Agent allowlist. Applies to main route and companion paths. |
 
 </details>
 
@@ -363,6 +409,10 @@ When enabled, the YAML output includes generation time, route name, source count
 
 ### Direct Subscription Outputs
 
+One fixed-format route returns exactly one output format. If you want the same
+URL to serve multiple clients, use `format = "auto"` in the next section.
+Fixed-format routes do not read query selectors and do not switch by User-Agent.
+
 ```toml
 [server]
 public_base_url = "https://mpm.example.com"
@@ -380,7 +430,18 @@ format = "surfboard"
 test_url = "http://www.gstatic.com/generate_204"
 ```
 
-`xray-uri` is directly subscribable by v2rayN-style clients and returns a base64 URI payload by default. `quantumult-x` returns server lines on the main route and registers a `-import` one-click import endpoint. `surfboard` returns a minimal full profile on the main route and registers `-nodes` for `policy-path`; compatible output is `ss`, `trojan`, and `vmess` — `hysteria2` and `vless` are skipped.
+| Output | Main route returns | Companion | Intended clients | Current node support |
+| --- | --- | --- | --- | --- |
+| `provider` | Mihomo provider YAML | none | Mihomo / Clash Meta `proxy-providers` | Emits Mihomo proxy dictionaries. |
+| `xray-uri` | URI subscription, base64 by default | none | v2rayN / v2rayNG / Xray-style clients | `ss`, `vmess`, `vless`, `trojan`, `hysteria2`. |
+| `quantumult-x` | Quantumult X server lines | `-import` | Quantumult X | Common `ss`, `vmess`, `trojan`, and `vless` fields; incompatible nodes are skipped. |
+| `surfboard` | Minimal full profile | `-nodes` | Surfboard | Client-compatible `ss`, `trojan`, and `vmess`; `hysteria2` and `vless` are skipped. |
+
+`xray-uri` is directly subscribable by v2rayN-style clients. The default is `encoding = "base64"`; use `plain` for debugging. The renderer preserves common reality, vision, TLS, SNI, WebSocket, and gRPC fields when the target format supports them. Nodes that cannot be rendered for the target client are skipped and logged as warnings.
+
+`quantumult-x` returns server lines on the main route. By default it also registers `{path}-import` for one-click remote resource import. `import_response = "redirect"` returns a 302 redirect, while `plain` returns the import URL as text. `import_target = "app-scheme"` uses `quantumult-x:///add-resource?...`; `universal-link` uses a Quantumult X universal link.
+
+`surfboard` returns a minimal full profile with `[Proxy]`, `[Proxy Group]`, and `[Rule]` sections. By default it also registers `{path}-nodes` for `policy-path`. The generated profile uses three groups: `Main`, `Auto`, and `Proxy`; `Main` can choose automatic, manual, or direct behavior, and `Final` uses `Main`.
 
 ### One URL For Multiple Clients
 
@@ -401,6 +462,9 @@ https://mpm.example.com/p/token?target=clash
 https://mpm.example.com/p/token?target=surfboard
 https://mpm.example.com/p/token?target=quanx
 https://mpm.example.com/p/token?target=v2rayn
+https://mpm.example.com/p/token?format=quanx
+https://mpm.example.com/p/token?flag=meta
+https://mpm.example.com/p/token?client=v2rayn
 ```
 
 Query selector priority is `target > format > flag > client`; overall target
@@ -410,6 +474,21 @@ so `-nodes` still selects Surfboard and `-import` still selects Quantumult X.
 
 Every auto route requires `server.public_base_url` because Surfboard and
 Quantumult X embed absolute subscription URLs.
+
+Supported query / UA target aliases:
+
+| Target | Aliases |
+| --- | --- |
+| `provider` | `provider`, `clash`, `mihomo`, `clash-meta`, `clash.meta`, `meta` |
+| `xray-uri` | `xray-uri`, `xray`, `v2ray`, `v2rayn`, `v2rayng`, `general` |
+| `quantumult-x` | `quantumult-x`, `quanx`, `qx`, `quantumult x` |
+| `surfboard` | `surfboard` |
+| Reserved but not rendered | `sing-box`, `singbox`, `sfa`, `sfi`, `sfm`, `hiddify`, `loon` |
+
+User-Agent detection maps Quantumult X, Surfboard, v2rayN/v2rayNG,
+Clash/Mihomo/FlClash/Clash Verge, and similar clients to implemented outputs.
+sing-box / Loon / Hiddify-style User-Agents are recognized as future targets
+but are not rendered yet.
 
 ### HTTP Action plugin
 
@@ -481,9 +560,15 @@ When running with Docker, mount `logs` to `/app/logs`; otherwise logs stay insid
 
 When `[access_log]` is enabled, route access events are stored in SQLite for 30 days by default. `logs/access.log` is a separate human-readable access log, not mixed with normal Loguru file logs. Access audit data is personal data: IP addresses, User-Agents, route paths, timestamps, selected sanitized headers, response status, response size, and duration. Header values are redacted and truncated before storage.
 
+Only matched subscription routes are recorded: success, 403, 400, 422, 503, and other returned responses are audited. `/healthz`, `status_path`, `status_path/api`, and unknown 404 paths are excluded. If a provider handler raises an unhandled exception and Starlette creates the response outside the route wrapper, the service does not fabricate a 500 access event.
+
 `trusted_proxies` gates `CF-Connecting-IP`, `True-Client-IP`, `X-Forwarded-For`, and `X-Real-IP`. Defaults trust loopback plus RFC1918 Docker/LAN ranges for zero-config reverse proxy deployments. If the app is reachable directly from private or LAN clients, set exact reverse proxy IPs/CIDRs; otherwise clients can spoof those headers. The reverse proxy must overwrite or sanitize `X-Forwarded-For`; otherwise remove it from `real_ip_headers`.
 
-The status page shows aggregate stats only; full `headers_json` is never shown. Access stats are exposed on `status_path`, so keep `status_path` high entropy and non-public, and do not allowlist high-entropy private headers in `access_log.headers.stats_allowlist`. IPs are masked in status by default, and recent rows are hidden by default.
+The human-readable access log writes one request per line with `ip=`, `ip_source=`, `method=`, `path=`, `route_name=`, `target=`, `status=`, `bytes=`, `duration_ms=`, `ua=`, and `headers=` fields. Use it for debugging real client traffic; SQLite powers aggregate status stats.
+
+The status page shows aggregate stats only; full `headers_json` is never shown. Access stats appear in the `status_path` HTML dashboard and `{status_path}/api` JSON: total events, retention, top IPs, top User-Agents, top headers, top paths, and optional recent rows. IPs are masked in status by default, recent rows are hidden by default, and recent rows still exclude full headers. Keep `status_path` high entropy and non-public, and do not allowlist high-entropy private headers in `access_log.headers.stats_allowlist`.
+
+SQLite stats queries are bounded: Top IP/User-Agent/Path use SQL `LIMIT`, and header stats read at most `stats_max_rows` rows before Python-side aggregation. High-traffic deployments should still use reverse-proxy rate limits, status-path access control, and disk monitoring.
 
 Disable all audit storage and access-file logging:
 
@@ -513,7 +598,7 @@ flowchart LR
   cache --> route[Hidden subscription route]
   route --> routeTransform[Route filters and rename rules]
   routeTransform --> renderer[Route output renderer]
-  renderer --> client[Clash / Mihomo client]
+  renderer --> client[Mihomo / Surfboard / Quantumult X / v2rayN]
 ```
 
 <details>
@@ -593,8 +678,10 @@ src/mihomo_proxy_manager/
   parsers/        # YAML and share-link parsers
   plugins/        # HTTP Action plugin
   cache.py        # source JSON cache
+  access_audit.py # SQLite access audit, real IP, access log formatting
+  status.py       # HTML status dashboard and JSON status API
   transform.py    # filters, rename rules, duplicate-name repair
-  render.py       # provider YAML rendering
+  render.py       # provider / Xray URI / Quantumult X / Surfboard rendering
 ```
 
 ## License

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from dataclasses import replace
 from datetime import timedelta
 from ipaddress import ip_network
@@ -15,6 +16,7 @@ from mihomo_proxy_manager.access_audit import (
     display_header_value,
     format_access_log_line,
     mask_ip_for_status,
+    now_epoch_ms,
     resolve_real_ip,
     sanitize_headers,
 )
@@ -304,6 +306,48 @@ def test_store_stats_limits_header_payload_query(tmp_path: Path) -> None:
     ]
 
 
+def test_store_stats_limits_top_ip_query(tmp_path: Path) -> None:
+    config = access_config(
+        tmp_path,
+        status=AccessLogStatusConfig(top_limit=5),
+    )
+    store = SQLiteAccessAuditStore(config)
+    try:
+        store.record(event(real_ip="203.0.113.10"))
+        store.record(event(real_ip="198.51.100.9"))
+
+        def reject_unbounded_top_ip_query(
+            conn,
+            cursor,
+            statement,
+            parameters,
+            context,
+            executemany,
+        ) -> None:
+            normalized = " ".join(statement.lower().split())
+            if (
+                "select" in normalized
+                and "real_ip" in normalized
+                and "from access_events" in normalized
+                and "group by access_events.real_ip" in normalized
+                and "limit" not in normalized
+            ):
+                raise AssertionError("stats must not select top IPs without a limit")
+
+        sqlalchemy_event.listen(
+            store.engine, "before_cursor_execute", reject_unbounded_top_ip_query
+        )
+        try:
+            stats = store.stats(now_ms=1_790_000_002_000)
+        finally:
+            sqlalchemy_event.remove(
+                store.engine, "before_cursor_execute", reject_unbounded_top_ip_query
+            )
+    finally:
+        store.dispose()
+    assert len(stats.top_ips) == 2
+
+
 def test_store_stats_merges_masked_top_ips_before_limit(tmp_path: Path) -> None:
     config = access_config(
         tmp_path,
@@ -443,6 +487,28 @@ def test_record_and_cleanup_log_failures_without_raising(
         store.dispose()
     assert any("access audit record failed" in message for message in messages)
     assert any("access audit cleanup failed" in message for message in messages)
+
+
+def test_record_triggers_cleanup_without_deadlock(tmp_path: Path) -> None:
+    store = SQLiteAccessAuditStore(access_config(tmp_path))
+    try:
+        store._last_cleanup_ms = 0
+        now_ms = now_epoch_ms()
+        recorded: list[str] = []
+
+        def target() -> None:
+            store.record(event(visited_at=now_ms))
+            recorded.append("ok")
+
+        thread = threading.Thread(target=target, daemon=True)
+        thread.start()
+        thread.join(timeout=5)
+        assert not thread.is_alive(), "record/cleanup deadlocked"
+        assert recorded == ["ok"]
+        stats = store.stats(now_ms=now_ms)
+        assert stats.total_events == 1
+    finally:
+        store.dispose()
 
 
 def test_referer_allowlist_displays_origin_only(tmp_path: Path) -> None:

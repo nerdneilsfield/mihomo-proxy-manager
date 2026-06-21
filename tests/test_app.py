@@ -968,8 +968,9 @@ async def test_access_audit_excludes_health_status_and_unknown(tmp_path) -> None
         client.get(config.server.health_path)
         client.get(config.server.status_path)
         client.get(f"{config.server.status_path}/api")
-        client.get("/unknown")
+        unknown = client.get("/unknown")
 
+    assert unknown.status_code == 404
     assert store.events == []
 
 

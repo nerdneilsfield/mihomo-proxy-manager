@@ -433,7 +433,7 @@ test_url = "http://www.gstatic.com/generate_204"
 | --- | --- | --- | --- | --- |
 | `provider` | Mihomo provider YAML | 无 | Mihomo / Clash Meta `proxy-providers` | 原样输出 Mihomo proxy dict。 |
 | `xray-uri` | URI 订阅，默认 base64 | 无 | v2rayN / v2rayNG / Xray 类客户端 | `ss`、`vmess`、`vless`、`trojan`、`hysteria2`。 |
-| `quantumult-x` | Quantumult X server lines | `-import` | Quantumult X | `ss`、`vmess`、`trojan`、`vless` 的常见字段；不兼容节点会跳过。 |
+| `quantumult-x` | Quantumult X server lines | `-import` | Quantumult X | `ss`、`vmess`、`trojan`、`vless`、`http`、`socks5`、`anytls` 的常见字段；不兼容节点会跳过。 |
 | `surfboard` | 最小 full profile | `-nodes` | Surfboard | 为客户端兼容性输出 `ss`、`vmess`、`trojan`、`hysteria2`、`snell`、`anytls`、`http`、`socks5`；`vless` 和 `wireguard` 会跳过。 |
 
 `xray-uri` 可直接给 v2rayN 等客户端订阅。默认 `encoding = "base64"`，调试时可改成 `plain` 看每行 URI。渲染器会尽量保留 reality、vision、TLS、SNI、WebSocket、gRPC 等常见字段；如果某个节点无法转换成目标客户端格式，会跳过并在服务日志里记录 warning。

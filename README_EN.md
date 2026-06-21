@@ -434,7 +434,7 @@ test_url = "http://www.gstatic.com/generate_204"
 | --- | --- | --- | --- | --- |
 | `provider` | Mihomo provider YAML | none | Mihomo / Clash Meta `proxy-providers` | Emits Mihomo proxy dictionaries. |
 | `xray-uri` | URI subscription, base64 by default | none | v2rayN / v2rayNG / Xray-style clients | `ss`, `vmess`, `vless`, `trojan`, `hysteria2`. |
-| `quantumult-x` | Quantumult X server lines | `-import` | Quantumult X | Common `ss`, `vmess`, `trojan`, and `vless` fields; incompatible nodes are skipped. |
+| `quantumult-x` | Quantumult X server lines | `-import` | Quantumult X | Common `ss`, `vmess`, `trojan`, `vless`, `http`, `socks5`, and `anytls` fields; incompatible nodes are skipped. |
 | `surfboard` | Minimal full profile | `-nodes` | Surfboard | Client-compatible `ss`, `vmess`, `trojan`, `hysteria2`, `snell`, `anytls`, `http`, `socks5`; `vless` and `wireguard` are skipped. |
 
 `xray-uri` is directly subscribable by v2rayN-style clients. The default is `encoding = "base64"`; use `plain` for debugging. The renderer preserves common reality, vision, TLS, SNI, WebSocket, and gRPC fields when the target format supports them. Nodes that cannot be rendered for the target client are skipped and logged as warnings.

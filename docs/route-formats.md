@@ -590,9 +590,14 @@ shadowsocks=example.com:443, method=chacha20-ietf-poly1305, password=password, u
 vmess=example.com:443, method=none, password=00000000-0000-0000-0000-000000000000, obfs=wss, obfs-host=example.com, obfs-uri=/ws, tag=VMess 01
 vless=example.com:443, method=none, password=00000000-0000-0000-0000-000000000000, obfs=wss, obfs-host=example.com, obfs-uri=/ws, tag=VLESS 01
 trojan=example.com:443, password=password, over-tls=true, tls-host=example.com, tls-verification=true, udp-relay=false, tag=Trojan 01
+http=example.com:80, username=user, password=pass, udp-relay=false, tag=HTTP 01
+http=example.com:443, username=user, password=pass, over-tls=true, tls-host=example.com, tls-verification=true, udp-relay=false, tag=HTTPS 01
+socks5=example.com:1080, username=user, password=pass, udp-relay=false, tag=SOCKS5 01
+socks5=example.com:443, username=user, password=pass, over-tls=true, tls-host=example.com, tls-verification=true, udp-relay=false, tag=SOCKS5-TLS 01
+anytls=example.com:443, password=password, over-tls=true, tls-host=example.com, udp-relay=true, tag=AnyTLS 01
 ```
 
-Supported protocols are `shadowsocks`, `vmess`, `vless`, and `trojan`. QX Reality fields are supported when the source carries `reality-opts.public-key`; unsupported security-critical fields and unsupported Shadowsocks plugin fields are skipped with route render warnings; if every node is skipped, the route returns HTTP 422 with `no supported nodes for quantumult-x output`.
+Supported protocols are `shadowsocks`, `vmess`, `vless`, `trojan`, `http`, `socks5`, and `anytls`. QX Reality fields are supported when the source carries `reality-opts.public-key`; unsupported security-critical fields and unsupported Shadowsocks plugin fields are skipped with route render warnings; if every node is skipped, the route returns HTTP 422 with `no supported nodes for quantumult-x output`.
 
 Reality and Vision mapping uses QX-specific params:
 
@@ -612,9 +617,10 @@ vless=example.com:443, method=none, password=00000000-0000-0000-0000-00000000000
 | `vmess.cipher` | `method=none/aes-128-gcm/chacha20-poly1305` | `aead=false` only for legacy VMess. |
 | `udp` / `udp-relay` | `udp-relay=` | Emitted when source explicitly sets UDP relay. |
 | SS simple obfs | `obfs=http/tls`, `obfs-host=`, `obfs-uri=` | Direct Mihomo `obfs*` fields map to QX fields. |
-| TLS over TCP | `obfs=over-tls` or `over-tls=true` | SS/VMess/VLESS use `obfs=over-tls`; Trojan uses `over-tls=true`. |
+| TLS over TCP | `obfs=over-tls` or `over-tls=true` | SS/VMess/VLESS use `obfs=over-tls`; Trojan/HTTP/SOCKS5/AnyTLS use `over-tls=true`. AnyTLS is always TLS-based. |
 | WebSocket TLS | `obfs=wss`, `obfs-host=`, `obfs-uri=` | `obfs-host` is also TLS host for `wss`. |
 | WebSocket cleartext | `obfs=ws`, `obfs-host=`, `obfs-uri=` | No `over-tls`. |
+| HTTP/SOCKS5 `username` | `username=` | Emitted only when present; AnyTLS has no username field. |
 | `skip-cert-verify` | `tls-verification=false` | Inverted boolean. |
 | `reality-opts.public-key` | `reality-base64-pubkey=` | Supported for QX over-tls/wss capable protocols. |
 | `reality-opts.short-id` | `reality-hex-shortid=` | Optional. |
@@ -762,7 +768,7 @@ Renderer split:
 | `down` / `down-speed` | `down` / `down-speed` | — | — | — | `download-bandwidth` (HY2) | — | — |
 | `ports` | `ports` | — | — | — | `port-hopping` (HY2, `,`→`;`) | — | — |
 | `psk` | `psk` | — | — | — | `psk` (Snell) | — | — |
-| `username` (HTTP/SOCKS5) | `username` | — | — | — | positional (HTTP/SOCKS5) | — | — |
+| `username` (HTTP/SOCKS5) | `username` | — | — | — | positional (HTTP/SOCKS5) | `username` for HTTP/SOCKS5 | — |
 | Reality public key | `reality-opts.public-key` | skipped | Reality settings | target-version-specific TLS Reality | not validated | `reality-base64-pubkey` | not validated |
 | Reality short id | `reality-opts.short-id` | skipped | Reality settings | target-version-specific TLS Reality | not validated | `reality-hex-shortid` | not validated |
 | VLESS flow | `flow` | skipped | `settings.flow` | `flow` | not validated | `vless-flow` for `xtls-rprx-vision` | not validated |

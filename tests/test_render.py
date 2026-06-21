@@ -736,17 +736,53 @@ def test_quantumult_x_renderer_includes_all_supported_protocols() -> None:
                         "password": "secret",
                     },
                 ),
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "HTTP 01",
+                        "type": "http",
+                        "server": "http.example.com",
+                        "port": 80,
+                        "username": "user",
+                        "password": "pass",
+                    },
+                ),
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "SOCKS5 01",
+                        "type": "socks5",
+                        "server": "socks5.example.com",
+                        "port": 1080,
+                        "username": "user",
+                        "password": "pass",
+                    },
+                ),
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "AnyTLS 01",
+                        "type": "anytls",
+                        "server": "anytls.example.com",
+                        "port": 443,
+                        "password": "secret",
+                        "tls": True,
+                    },
+                ),
             ],
         )
     )
 
     lines = response.body.decode("utf-8").splitlines()
     assert response.status_code == 200
-    assert len(lines) == 4
+    assert len(lines) == 7
     assert lines[0].startswith("shadowsocks=ss.example.com:443")
     assert lines[1].startswith("vmess=vmess.example.com:443")
     assert lines[2].startswith("vless=vless.example.com:443")
     assert lines[3].startswith("trojan=trojan.example.com:443")
+    assert lines[4].startswith("http=http.example.com:80")
+    assert lines[5].startswith("socks5=socks5.example.com:1080")
+    assert lines[6].startswith("anytls=anytls.example.com:443")
 
 
 def test_quantumult_x_renderer_sanitizes_node_tag() -> None:
@@ -1224,6 +1260,330 @@ def test_quantumult_x_rejects_unsupported_vless_flow() -> None:
 
     assert response.status_code == 422
     assert response.body == b"no supported nodes for quantumult-x output"
+
+
+def test_quantumult_x_http_plain_renders_documented_fields() -> None:
+    """Test QX HTTP proxy emits documented fields without TLS."""
+    response = build_renderer_registry()["quantumult-x"].render(
+        RenderRequest(
+            quantumult_x_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "HTTP Plain",
+                        "type": "http",
+                        "server": "example.com",
+                        "port": 80,
+                        "username": "user",
+                        "password": "pass",
+                    },
+                )
+            ],
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert response.status_code == 200
+    assert "http=example.com:80, username=user, password=pass, tag=HTTP Plain" in text
+    assert "over-tls=" not in text
+    assert "tls-host=" not in text
+
+
+def test_quantumult_x_http_tls_renders_over_tls_and_tls_host() -> None:
+    """Test QX HTTPS proxy maps tls to over-tls and tls-host."""
+    response = build_renderer_registry()["quantumult-x"].render(
+        RenderRequest(
+            quantumult_x_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "HTTPS",
+                        "type": "http",
+                        "server": "example.com",
+                        "port": 443,
+                        "username": "user",
+                        "password": "pass",
+                        "tls": True,
+                        "servername": "sni.example.com",
+                        "skip-cert-verify": True,
+                    },
+                )
+            ],
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert response.status_code == 200
+    assert (
+        "http=example.com:443, username=user, password=pass, "
+        "over-tls=true, tls-host=sni.example.com, tls-verification=false, "
+        "tag=HTTPS"
+    ) in text
+
+
+def test_quantumult_x_http_without_credentials_omits_username_password() -> None:
+    """Test QX HTTP proxy omits username/password when absent."""
+    response = build_renderer_registry()["quantumult-x"].render(
+        RenderRequest(
+            quantumult_x_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "HTTP No Auth",
+                        "type": "http",
+                        "server": "example.com",
+                        "port": 8080,
+                    },
+                )
+            ],
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert response.status_code == 200
+    assert "http=example.com:8080, tag=HTTP No Auth" in text
+    assert "username=" not in text
+    assert "password=" not in text
+
+
+def test_quantumult_x_socks5_plain_renders_documented_fields() -> None:
+    """Test QX SOCKS5 proxy emits documented fields without TLS."""
+    response = build_renderer_registry()["quantumult-x"].render(
+        RenderRequest(
+            quantumult_x_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "SOCKS5 Plain",
+                        "type": "socks5",
+                        "server": "example.com",
+                        "port": 1080,
+                        "username": "user",
+                        "password": "pass",
+                    },
+                )
+            ],
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert response.status_code == 200
+    assert (
+        "socks5=example.com:1080, username=user, password=pass, tag=SOCKS5 Plain"
+    ) in text
+    assert "over-tls=" not in text
+    assert "tls-host=" not in text
+
+
+def test_quantumult_x_socks5_tls_renders_over_tls_and_tls_host() -> None:
+    """Test QX SOCKS5-TLS proxy maps tls to over-tls and tls-host."""
+    response = build_renderer_registry()["quantumult-x"].render(
+        RenderRequest(
+            quantumult_x_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "SOCKS5 TLS",
+                        "type": "socks5",
+                        "server": "example.com",
+                        "port": 1080,
+                        "username": "user",
+                        "password": "pass",
+                        "tls": True,
+                        "sni": "sni.example.com",
+                    },
+                )
+            ],
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert response.status_code == 200
+    assert (
+        "socks5=example.com:1080, username=user, password=pass, "
+        "over-tls=true, tls-host=sni.example.com, tag=SOCKS5 TLS"
+    ) in text
+
+
+def test_quantumult_x_anytls_renders_with_password_and_tls() -> None:
+    """Test QX AnyTLS proxy emits password and over-tls=true."""
+    response = build_renderer_registry()["quantumult-x"].render(
+        RenderRequest(
+            quantumult_x_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "AnyTLS",
+                        "type": "anytls",
+                        "server": "example.com",
+                        "port": 443,
+                        "password": "secret",
+                        "sni": "sni.example.com",
+                    },
+                )
+            ],
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert response.status_code == 200
+    assert (
+        "anytls=example.com:443, password=secret, "
+        "over-tls=true, tls-host=sni.example.com, tag=AnyTLS"
+    ) in text
+    assert "username=" not in text
+
+
+def test_quantumult_x_anytls_without_password_is_skipped() -> None:
+    """Test QX skips AnyTLS proxy missing required password."""
+    response = build_renderer_registry()["quantumult-x"].render(
+        RenderRequest(
+            quantumult_x_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "AnyTLS No Pass",
+                        "type": "anytls",
+                        "server": "example.com",
+                        "port": 443,
+                        "tls": True,
+                    },
+                )
+            ],
+        )
+    )
+
+    assert response.status_code == 422
+    assert response.body == b"no supported nodes for quantumult-x output"
+
+
+def test_quantumult_x_http_reality_preserves_public_key() -> None:
+    """Test QX HTTP Reality preserves reality-base64-pubkey and short-id."""
+    response = build_renderer_registry()["quantumult-x"].render(
+        RenderRequest(
+            quantumult_x_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "HTTP Reality",
+                        "type": "http",
+                        "server": "example.com",
+                        "port": 443,
+                        "username": "user",
+                        "password": "pass",
+                        "reality-opts": {
+                            "public-key": REALITY_PUBLIC_KEY,
+                            "short-id": "0123456789abcdef",
+                        },
+                    },
+                )
+            ],
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert response.status_code == 200
+    assert "over-tls=true" in text
+    assert f"reality-base64-pubkey={REALITY_PUBLIC_KEY}" in text
+    assert "reality-hex-shortid=0123456789abcdef" in text
+
+
+def test_quantumult_x_socks5_reality_preserves_public_key() -> None:
+    """Test QX SOCKS5 Reality preserves reality-base64-pubkey and short-id."""
+    response = build_renderer_registry()["quantumult-x"].render(
+        RenderRequest(
+            quantumult_x_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "SOCKS5 Reality",
+                        "type": "socks5",
+                        "server": "example.com",
+                        "port": 443,
+                        "username": "user",
+                        "password": "pass",
+                        "reality-opts": {
+                            "public-key": REALITY_PUBLIC_KEY,
+                            "short-id": "0123456789abcdef",
+                        },
+                    },
+                )
+            ],
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert response.status_code == 200
+    assert "over-tls=true" in text
+    assert f"reality-base64-pubkey={REALITY_PUBLIC_KEY}" in text
+    assert "reality-hex-shortid=0123456789abcdef" in text
+
+
+def test_quantumult_x_anytls_reality_preserves_public_key() -> None:
+    """Test QX AnyTLS Reality preserves reality-base64-pubkey and short-id."""
+    response = build_renderer_registry()["quantumult-x"].render(
+        RenderRequest(
+            quantumult_x_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "AnyTLS Reality",
+                        "type": "anytls",
+                        "server": "example.com",
+                        "port": 443,
+                        "password": "secret",
+                        "reality-opts": {
+                            "public-key": REALITY_PUBLIC_KEY,
+                            "short-id": "0123456789abcdef",
+                        },
+                    },
+                )
+            ],
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert response.status_code == 200
+    assert "over-tls=true" in text
+    assert f"reality-base64-pubkey={REALITY_PUBLIC_KEY}" in text
+    assert "reality-hex-shortid=0123456789abcdef" in text
+
+
+def test_quantumult_x_http_udp_relay_is_preserved() -> None:
+    """Test QX HTTP proxy preserves udp-relay field."""
+    response = build_renderer_registry()["quantumult-x"].render(
+        RenderRequest(
+            quantumult_x_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "HTTP UDP",
+                        "type": "http",
+                        "server": "example.com",
+                        "port": 80,
+                        "username": "user",
+                        "password": "pass",
+                        "udp-relay": True,
+                    },
+                )
+            ],
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert response.status_code == 200
+    assert "udp-relay=true" in text
 
 
 def test_surfboard_full_profile_contains_main_auto_proxy_groups() -> None:

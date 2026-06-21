@@ -27,6 +27,7 @@ from .models import (
     AccessLogStatusConfig,
     AppConfig,
     CacheConfig,
+    DEFAULT_TRUSTED_PROXY_NETWORKS,
     DnsConfig,
     FetchConfig,
     FilterConfig,
@@ -176,9 +177,14 @@ def _positive_duration(value: str, *, key: str) -> timedelta:
 
 
 def _positive_int(value: object, *, key: str) -> int:
-    if not isinstance(value, (str, bytes, bytearray, int, float)):
+    if isinstance(value, bool):
         raise ValueError(f"{key} must be positive")
-    parsed = int(value)
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str) and value.isdecimal():
+        parsed = int(value)
+    else:
+        raise ValueError(f"{key} must be positive")
     if parsed <= 0:
         raise ValueError(f"{key} must be positive")
     return parsed
@@ -193,22 +199,16 @@ def _string_tuple(
         raise ValueError(f"{key} must be a list of strings")
     result: list[str] = []
     for item in value:
-        if not isinstance(item, (str, int, float, bool)):
-            raise ValueError(f"{key} must contain scalar string values")
-        result.append(str(item))
+        if not isinstance(item, str):
+            raise ValueError(f"{key} must contain string values")
+        result.append(item)
     return tuple(result)
 
 
 def _trusted_proxies(values: object) -> tuple[IPNetwork, ...]:
     raw_values = _string_tuple(
         values,
-        (
-            "127.0.0.1/32",
-            "::1/128",
-            "10.0.0.0/8",
-            "172.16.0.0/12",
-            "192.168.0.0/16",
-        ),
+        DEFAULT_TRUSTED_PROXY_NETWORKS,
         key="access_log.trusted_proxies",
     )
     networks: list[IPNetwork] = []

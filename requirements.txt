@@ -3,6 +3,7 @@ click==8.4.1
 coverage==7.14.1
 croniter==6.2.2
 filelock==3.29.4
+greenlet==3.5.2
 h11==0.16.0
 httpcore2==2.4.0
 httptools==0.8.0

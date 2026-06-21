@@ -184,7 +184,7 @@ def test_access_log_parses_nested_config(temp_config_path: Path) -> None:
         top_limit = 10
         """,
     )
-    config = load_config(path)
+    config = load_config(path, validate=False)
     access = config.access_log
 
     assert access.db_path == Path("audit/access.sqlite3")
@@ -223,12 +223,40 @@ def test_access_log_parses_nested_config(temp_config_path: Path) -> None:
             "trusted proxy is invalid",
         ),
         (
+            "[access_log]\ntrusted_proxies = [127]\n",
+            "access_log.trusted_proxies must contain string values",
+        ),
+        (
             '[access_log]\nreal_ip_headers = ["forwarded"]\n',
             "real_ip_headers value is unsupported",
         ),
         (
+            "[access_log]\nreal_ip_headers = [true]\n",
+            "access_log.real_ip_headers must contain string values",
+        ),
+        (
             "[access_log.headers]\nmax_value_length = 0\n",
             "max_value_length must be positive",
+        ),
+        (
+            "[access_log.headers]\nmax_value_length = true\n",
+            "max_value_length must be positive",
+        ),
+        (
+            "[access_log.headers]\nmax_value_length = 1.5\n",
+            "max_value_length must be positive",
+        ),
+        (
+            '[access_log.headers]\nmax_value_length = "1.5"\n',
+            "max_value_length must be positive",
+        ),
+        (
+            "[access_log.headers]\nmax_value_length = -1\n",
+            "max_value_length must be positive",
+        ),
+        (
+            "[access_log.headers]\nstats_allowlist = [1]\n",
+            "access_log.headers.stats_allowlist must contain string values",
         ),
         (
             "[access_log.headers]\nstats_max_rows = 0\n",
@@ -306,7 +334,9 @@ def test_sqlalchemy_dependency_is_declared() -> None:
 
     assert '"sqlalchemy>=2.0"' in pyproject
     assert "sqlalchemy==" in requirements.lower()
+    assert "greenlet==3.5.2" in requirements.lower()
     assert 'name = "sqlalchemy"' in lock
+    assert 'name = "greenlet"' in lock
 
 
 def test_route_output_new_format_fields_are_parsed(temp_config_path: Path) -> None:

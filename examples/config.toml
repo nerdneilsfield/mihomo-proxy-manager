@@ -46,7 +46,9 @@ compression = "gz"
 #
 # Status endpoint privacy: aggregate stats only, no full headers_json; keep
 # status_path high entropy and non-public. IP masking is enabled and recent
-# requests are hidden by default.
+# requests are hidden by default. The HTML dashboard is at status_path and the
+# JSON API is at status_path + "/api"; both include access aggregates when
+# [access_log.status] enabled = true.
 [access_log]
 enabled = true
 db_path = "data/access/access.sqlite3"
@@ -218,6 +220,14 @@ exclude_types = ["http"]
 
 # One auto route for multiple clients. Query target, companion suffix, and
 # User-Agent decide the effective output; fixed routes below remain explicit.
+# Query selector priority: target > format > flag > client.
+# Examples:
+#   /p/auto-Cs...?target=clash      -> provider YAML
+#   /p/auto-Cs...?target=surfboard  -> Surfboard profile
+#   /p/auto-Cs...?target=quanx      -> Quantumult X server lines
+#   /p/auto-Cs...?target=v2rayn     -> Xray/V2Ray URI subscription
+#   /p/auto-Cs...?flag=meta         -> provider YAML
+#   /p/auto-Cs...?client=v2rayn     -> Xray/V2Ray URI subscription
 [routes.auto]
 path = "/p/auto-CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL"
 sources = ["airport_a", "airport_b"]
@@ -226,6 +236,8 @@ require_all_sources = false
 [routes.auto.output]
 format = "auto"
 auto_default = "provider"
+# import_link controls Quantumult X "-import"; Surfboard "-nodes" is registered
+# automatically for auto routes because Surfboard full profiles use policy-path.
 import_link = true
 resource_tag = "MPM Auto"
 encoding = "base64"

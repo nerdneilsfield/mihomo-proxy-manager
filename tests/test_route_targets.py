@@ -129,6 +129,15 @@ def test_user_agent_matching_is_case_insensitive() -> None:
     assert resolve_user_agent_format("flclash/1.0") == "provider"
 
 
+def test_surfboard_profile_fetcher_user_agent_matches() -> None:
+    """Test real Surfboard Profile Fetcher UA resolves to surfboard format."""
+    ua = (
+        "Surfboard Profile Fetcher/mobile-2.25.3 (Build 261) "
+        "Dalvik/2.1.0 (Linux; U; Android 15; PJZ110 Build/AP3A.240617.008)"
+    )
+    assert resolve_user_agent_format(ua) == "surfboard"
+
+
 def test_specific_xray_user_agent_beats_broad_provider_signal() -> None:
     assert resolve_user_agent_format("v2rayN meta") == "xray-uri"
 

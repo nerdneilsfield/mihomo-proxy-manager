@@ -1435,8 +1435,8 @@ def test_surfboard_vmess_ws_tls_uses_documented_option_order() -> None:
     ) in text
 
 
-def test_surfboard_hysteria2_only_node_is_skipped_for_client_compatibility() -> None:
-    """Test Surfboard skips Hysteria2 because some client decoders reject it."""
+def test_surfboard_hysteria2_only_node_renders_profile_line() -> None:
+    """Test Surfboard renders Hysteria2 following the documented profile format."""
     response = build_renderer_registry()["surfboard"].render(
         RenderRequest(
             surfboard_route(),
@@ -1463,9 +1463,17 @@ def test_surfboard_hysteria2_only_node_is_skipped_for_client_compatibility() -> 
         )
     )
 
-    assert response.status_code == 422
-    assert b"no supported nodes for surfboard output" in response.body
-    assert any("hysteria2" in warning for warning in response.warnings)
+    text = response.body.decode("utf-8")
+    assert response.status_code == 200
+    assert "HY2 01 = hysteria2, example.com, 443" in text
+    assert "password=secret" in text
+    assert "download-bandwidth=100 Mbps" in text
+    assert "port-hopping=1234;5000-6000" in text
+    assert "port-hopping-interval=30" in text
+    assert "skip-cert-verify=true" in text
+    assert "sni=example.com" in text
+    assert "salamander-password=obfs-secret" in text
+    assert not any("hysteria2" in w and "skipping" in w for w in response.warnings)
 
 
 def test_surfboard_full_profile_includes_all_client_compatible_protocols() -> None:
@@ -1513,6 +1521,62 @@ def test_surfboard_full_profile_includes_all_client_compatible_protocols() -> No
                         },
                     },
                 ),
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "HY2 01",
+                        "type": "hysteria2",
+                        "server": "hy2.example.com",
+                        "port": 443,
+                        "password": "hy2-secret",
+                        "down": "100 Mbps",
+                        "sni": "hy2.example.com",
+                    },
+                ),
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "Snell 01",
+                        "type": "snell",
+                        "server": "snell.example.com",
+                        "port": 443,
+                        "psk": "psk-secret",
+                        "version": 4,
+                    },
+                ),
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "AnyTLS 01",
+                        "type": "anytls",
+                        "server": "anytls.example.com",
+                        "port": 443,
+                        "password": "anytls-secret",
+                        "sni": "anytls.example.com",
+                    },
+                ),
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "HTTP 01",
+                        "type": "http",
+                        "server": "http.example.com",
+                        "port": 8080,
+                        "username": "user",
+                        "password": "pass",
+                    },
+                ),
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "SOCKS 01",
+                        "type": "socks5",
+                        "server": "socks.example.com",
+                        "port": 1080,
+                        "username": "user",
+                        "password": "pass",
+                    },
+                ),
             ],
             companion_public_urls={"nodes": "https://mpm.example.com/surfboard-nodes"},
         )
@@ -1523,18 +1587,25 @@ def test_surfboard_full_profile_includes_all_client_compatible_protocols() -> No
     assert "SS 01 = ss, ss.example.com, 443" in text
     assert "Trojan 01 = trojan, trojan.example.com, 443" in text
     assert "VMess 01 = vmess, vmess.example.com, 443" in text
+    assert "HY2 01 = hysteria2, hy2.example.com, 443" in text
+    assert "Snell 01 = snell, snell.example.com, 443" in text
+    assert "AnyTLS 01 = anytls, anytls.example.com, 443" in text
+    assert "HTTP 01 = http, http.example.com, 8080" in text
+    assert "SOCKS 01 = socks5, socks.example.com, 1080" in text
     assert (
-        "Auto = url-test, SS 01, Trojan 01, VMess 01, "
+        "Auto = url-test, SS 01, Trojan 01, VMess 01, HY2 01, Snell 01, "
+        "AnyTLS 01, HTTP 01, SOCKS 01, "
         "policy-path=https://mpm.example.com/surfboard-nodes"
     ) in text
     assert (
-        "Proxy = select, SS 01, Trojan 01, VMess 01, "
+        "Proxy = select, SS 01, Trojan 01, VMess 01, HY2 01, Snell 01, "
+        "AnyTLS 01, HTTP 01, SOCKS 01, "
         "policy-path=https://mpm.example.com/surfboard-nodes"
     ) in text
 
 
-def test_surfboard_hysteria2_mixed_with_supported_nodes_is_skipped() -> None:
-    """Test Surfboard drops Hysteria2 while keeping supported nodes."""
+def test_surfboard_hysteria2_mixed_with_supported_nodes_is_rendered() -> None:
+    """Test Surfboard renders Hysteria2 alongside supported nodes."""
     response = build_renderer_registry()["surfboard"].render(
         RenderRequest(
             surfboard_route(),
@@ -1570,8 +1641,10 @@ def test_surfboard_hysteria2_mixed_with_supported_nodes_is_skipped() -> None:
     text = response.body.decode("utf-8")
     assert response.status_code == 200
     assert "SS 01 = ss, example.com, 443" in text
-    assert "hysteria2" not in text
-    assert any("hysteria2" in warning for warning in response.warnings)
+    assert "HY2 Minimal = hysteria2, example.com, 443" in text
+    assert "download-bandwidth=50" in text
+    assert "udp-relay=false" in text
+    assert not any("hysteria2" in w and "skipping" in w for w in response.warnings)
 
 
 def test_surfboard_trojan_ws_maps_path_and_multi_headers() -> None:
@@ -1750,6 +1823,165 @@ def test_surfboard_renderer_sanitizes_node_names() -> None:
     assert "HK, 01" not in proxy_line
     assert "HK, 01" not in auto_line
     assert "\n" not in proxy_line
+
+
+def test_surfboard_snell_renders_with_psk_and_obfs() -> None:
+    """Test Surfboard Snell maps psk, version, obfs-opts, and udp-relay."""
+    response = build_renderer_registry()["surfboard"].render(
+        RenderRequest(
+            surfboard_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "Snell 01",
+                        "type": "snell",
+                        "server": "snell.example.com",
+                        "port": 443,
+                        "psk": "psk-secret",
+                        "version": 4,
+                        "udp-relay": True,
+                        "obfs-opts": {
+                            "mode": "tls",
+                            "host": "snell.example.com",
+                            "uri": "/snell",
+                        },
+                    },
+                )
+            ],
+            companion="nodes",
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert response.status_code == 200
+    assert "Snell 01 = snell, snell.example.com, 443" in text
+    assert "psk=psk-secret" in text
+    assert "version=4" in text
+    assert "udp-relay=true" in text
+    assert "obfs=tls" in text
+    assert "obfs-host=snell.example.com" in text
+    assert "obfs-uri=/snell" in text
+
+
+def test_surfboard_anytls_renders_positional_password() -> None:
+    """Test Surfboard AnyTLS renders positional password, sni, and reuse."""
+    response = build_renderer_registry()["surfboard"].render(
+        RenderRequest(
+            surfboard_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "AnyTLS 01",
+                        "type": "anytls",
+                        "server": "anytls.example.com",
+                        "port": 443,
+                        "password": "anytls-secret",
+                        "sni": "anytls.example.com",
+                        "skip-cert-verify": True,
+                        "reuse": True,
+                    },
+                )
+            ],
+            companion="nodes",
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert response.status_code == 200
+    assert "AnyTLS 01 = anytls, anytls.example.com, 443, anytls-secret" in text
+    assert "skip-cert-verify=true" in text
+    assert "sni=anytls.example.com" in text
+    assert "reuse=true" in text
+
+
+def test_surfboard_http_renders_plain_and_tls() -> None:
+    """Test Surfboard HTTP uses 'http' for plain and 'https' for TLS."""
+    response = build_renderer_registry()["surfboard"].render(
+        RenderRequest(
+            surfboard_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "HTTP 01",
+                        "type": "http",
+                        "server": "http.example.com",
+                        "port": 8080,
+                        "username": "user",
+                        "password": "pass",
+                    },
+                ),
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "HTTPS 01",
+                        "type": "http",
+                        "server": "https.example.com",
+                        "port": 443,
+                        "username": "user2",
+                        "password": "pass2",
+                        "tls": True,
+                        "sni": "https.example.com",
+                        "skip-cert-verify": True,
+                    },
+                ),
+            ],
+            companion="nodes",
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert response.status_code == 200
+    assert "HTTP 01 = http, http.example.com, 8080, user, pass" in text
+    assert "HTTPS 01 = https, https.example.com, 443, user2, pass2" in text
+    assert "sni=https.example.com" in text
+    assert "skip-cert-verify=true" in text
+
+
+def test_surfboard_socks5_renders_plain_and_tls() -> None:
+    """Test Surfboard SOCKS5 uses 'socks5' for plain and 'socks5-tls' for TLS."""
+    response = build_renderer_registry()["surfboard"].render(
+        RenderRequest(
+            surfboard_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "SOCKS 01",
+                        "type": "socks5",
+                        "server": "socks.example.com",
+                        "port": 1080,
+                        "username": "user",
+                        "password": "pass",
+                    },
+                ),
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "SOCKS TLS 01",
+                        "type": "socks5",
+                        "server": "socks-tls.example.com",
+                        "port": 443,
+                        "username": "user2",
+                        "password": "pass2",
+                        "tls": True,
+                        "sni": "socks-tls.example.com",
+                        "skip-cert-verify": True,
+                    },
+                ),
+            ],
+            companion="nodes",
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert response.status_code == 200
+    assert "SOCKS 01 = socks5, socks.example.com, 1080, user, pass" in text
+    assert "SOCKS TLS 01 = socks5-tls, socks-tls.example.com, 443, user2, pass2" in text
+    assert "sni=socks-tls.example.com" in text
+    assert "skip-cert-verify=true" in text
 
 
 def test_prepare_render_records_preserves_filtering_and_renaming() -> None:

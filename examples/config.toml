@@ -173,6 +173,20 @@ prefix = "[gateway] "
 include = "香港|日本|新加坡|HK|JP|SG"
 exclude_types = ["http"]
 
+# One auto route for multiple clients. Query target, companion suffix, and
+# User-Agent decide the effective output; fixed routes below remain explicit.
+[routes.auto]
+path = "/p/auto-CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL"
+sources = ["airport_a", "airport_b"]
+require_all_sources = false
+
+[routes.auto.output]
+format = "auto"
+auto_default = "provider"
+import_link = true
+resource_tag = "MPM Auto"
+encoding = "base64"
+
 # Direct subscription for v2rayN/Xray-compatible clients.
 # Default encoding is base64; set encoding = "plain" for debugging.
 [routes.v2rayn]

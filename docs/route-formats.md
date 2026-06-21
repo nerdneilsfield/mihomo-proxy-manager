@@ -5,7 +5,7 @@ Date: 2026-06-19
 本文记录 `mihomo-proxy-manager` route 输出格式的格式边界、字段映射、写法示例和后续实现检查项。当前实现支持：
 
 - source input: `auto`, `yaml`, `share-links`
-- route output: `provider`, `xray-uri`, `quantumult-x`, `surfboard`
+- route output: `provider`, `auto`, `xray-uri`, `quantumult-x`, `surfboard`
 - provider payload: Mihomo/Clash `proxies:` YAML
 - direct subscription payloads: Xray/V2Ray URI subscription, Quantumult X server lines plus import companion, Surfboard minimal full profile plus nodes companion
 
@@ -33,6 +33,7 @@ Date: 2026-06-19
 | Target | Current support | Route format | Recommended MVP | Notes |
 | --- | --- | --- | --- | --- |
 | Clash/Mihomo provider | Supported as input and output | `provider` | Keep current `proxies:` YAML | Mihomo provider content也可为 URI lines/base64，但 YAML 最稳。 |
+| Auto per-request subscription | Implemented route output | `auto` | Query/UA-selected `provider`, `surfboard`, `quantumult-x`, or `xray-uri` | Query selectors: `target`, `format`, `flag`, `client`; fixed routes are unchanged. |
 | Xray/V2Ray subscription | Implemented route output | `xray-uri` | Default base64 URI subscription; `encoding = "plain"` optional | Direct v2rayN-compatible subscription; no companion endpoint. Full Xray JSON remains future work. |
 | Quantumult X profile | Implemented route output | `quantumult-x` | Server lines on main route plus `-import` companion | `server_remote`/server lines output; app-scheme/universal-link and redirect/plain import supported. |
 | Surfboard profile | Implemented route output | `surfboard` | Minimal full profile with `Main`, `Auto`, `Proxy`, `FINAL,Main` | Main route returns profile; `-nodes` companion returns proxy lines for `policy-path`. |
@@ -48,6 +49,10 @@ public_base_url = "https://mpm.example.com"
 [routes.surfboard.output]
 format = "surfboard"
 
+[routes.auto.output]
+format = "auto"
+auto_default = "provider"
+
 [routes.qx.output]
 format = "quantumult-x"
 
@@ -56,6 +61,35 @@ format = "xray-uri"
 ```
 
 Each `[routes.*]` still needs `path` and `sources`; omitted here for brevity.
+
+## Auto Route Target Selection
+
+`format = "auto"` is opt-in per route. It supports implemented targets:
+
+| Target aliases | Effective output |
+| --- | --- |
+| `clash`, `clash-meta`, `clash.meta`, `provider`, `mihomo`, `meta` | `provider` |
+| `surfboard` | `surfboard` |
+| `quanx`, `qx`, `quantumult-x`, `quantumult x` | `quantumult-x` |
+| `v2rayn`, `v2rayng`, `v2ray`, `xray`, `xray-uri`, `general` | `xray-uri` |
+
+Reserved future aliases such as `singbox`, `sing-box`, `sfa`, `sfi`, `sfm`,
+`hiddify`, and `loon` return `400 unsupported target` until renderers exist.
+
+Alias matching receives the value after the HTTP parser's normal one-time percent
+decoding; the resolver must not decode again. It trims leading and trailing
+whitespace, is case-insensitive, normalizes `_` to `-`, and keeps `.` significant
+(`clash.meta` remains distinct from `clash-meta` before alias lookup).
+
+Selection order:
+
+```text
+explicit query target > companion suffix > User-Agent > auto_default
+```
+
+Canonical embedded URLs always use `?target=surfboard`, `?target=quanx`,
+`?target=v2rayn`, or `?target=clash` so imported client resources do not depend
+on the fetching client's `User-Agent`.
 
 ## Common Source Input
 
@@ -667,7 +701,7 @@ Current and future output enum shape:
 
 ```toml
 [routes.phone.output]
-format = "provider" # implemented: provider | xray-uri | surfboard | quantumult-x
+format = "provider" # implemented: provider | auto | xray-uri | surfboard | quantumult-x
 mode = "default"    # surfboard also accepts full-profile; quantumult-x also accepts server-remote
 encoding = "base64" # xray-uri: base64 | plain
 ```
@@ -677,6 +711,7 @@ Target-specific modes:
 | Format | MVP mode | Later modes |
 | --- | --- | --- |
 | `provider` | existing YAML provider | `uri` or `base64-uri` if needed later |
+| `auto` | query/UA-selected implemented route output | future targets after renderers exist |
 | `xray-uri` | default base64 URI subscription | plain URI lines |
 | `xray-json` | future `outbounds` | future `full-config` |
 | `sing-box` | future `outbounds` | future `full-config`, `selector`, `urltest` |

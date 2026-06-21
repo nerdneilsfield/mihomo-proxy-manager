@@ -247,6 +247,7 @@ exclude = "倍率|测试"
 | `routes.<name>.path` | Provider path consumed by clients. This path is a bearer secret. |
 | `routes.<name>.sources` | Sources included by this route. |
 | `routes.<name>.require_all_sources` | If `true`, any unavailable source makes the route return `503`. |
+| `routes.<name>.output.format` | Route output format: `provider`, `auto`, `xray-uri`, `quantumult-x`, or `surfboard`. |
 
 </details>
 
@@ -260,7 +261,7 @@ proxies:
     port: 443
 ```
 
-See [examples/config.toml](examples/config.toml) for a complete runnable template with two sources, a plugin, provider routes, v2rayN / Quantumult X / Surfboard direct subscription routes, file logging, and Docker-friendly runtime paths.
+See [examples/config.toml](examples/config.toml) for a complete runnable template with two sources, a plugin, provider routes, an auto one-URL route, v2rayN / Quantumult X / Surfboard direct subscription routes, file logging, and Docker-friendly runtime paths.
 
 <details>
 <summary>Feature usage quick reference</summary>
@@ -354,6 +355,35 @@ test_url = "http://www.gstatic.com/generate_204"
 ```
 
 `xray-uri` is directly subscribable by v2rayN-style clients and returns a base64 URI payload by default. `quantumult-x` returns server lines on the main route and registers a `-import` one-click import endpoint. `surfboard` returns a minimal full profile on the main route and registers `-nodes` for `policy-path`; its client-compatible output is currently `ss`, `trojan`, and `vmess`, while `hysteria2` and `vless` are skipped.
+
+### One URL For Multiple Clients
+
+`format = "auto"` enables per-request format selection only for that route.
+Fixed-format routes still ignore `target`, `format`, `flag`, `client`, and
+`User-Agent`.
+
+```toml
+[routes.auto.output]
+format = "auto"
+auto_default = "provider"
+```
+
+Clients can subscribe to the same route with different query targets:
+
+```text
+https://mpm.example.com/p/token?target=clash
+https://mpm.example.com/p/token?target=surfboard
+https://mpm.example.com/p/token?target=quanx
+https://mpm.example.com/p/token?target=v2rayn
+```
+
+Query selector priority is `target > format > flag > client`; overall target
+resolution is `explicit query target > companion suffix > User-Agent >
+auto_default`. `target=auto` or a blank value means no explicit query target,
+so `-nodes` still selects Surfboard and `-import` still selects Quantumult X.
+
+Every auto route requires `server.public_base_url` because Surfboard and
+Quantumult X embed absolute subscription URLs.
 
 ### HTTP Action plugin
 

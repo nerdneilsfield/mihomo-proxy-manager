@@ -247,6 +247,7 @@ exclude = "倍率|测试"
 | `routes.<name>.path` | 客户端订阅的 provider 路径。它本身就是 bearer secret。 |
 | `routes.<name>.sources` | 当前 route 聚合的 source 名称列表。 |
 | `routes.<name>.require_all_sources` | 为 `true` 时，任一 source 不可用都会让该 route 返回 `503`。 |
+| `routes.<name>.output.format` | route 输出格式：`provider`、`auto`、`xray-uri`、`quantumult-x`、`surfboard`。 |
 
 </details>
 
@@ -260,7 +261,7 @@ proxies:
     port: 443
 ```
 
-完整可运行模板见 [examples/config.toml](examples/config.toml)，里面包含两个订阅源、插件、provider 路由、v2rayN / Quantumult X / Surfboard 直连订阅路由、文件日志和 Docker 运行所需目录。
+完整可运行模板见 [examples/config.toml](examples/config.toml)，里面包含两个订阅源、插件、provider 路由、auto 单 URL 路由、v2rayN / Quantumult X / Surfboard 直连订阅路由、文件日志和 Docker 运行所需目录。
 
 <details>
 <summary>功能用法速查</summary>
@@ -354,6 +355,34 @@ test_url = "http://www.gstatic.com/generate_204"
 ```
 
 `xray-uri` 可直接给 v2rayN 等客户端订阅，默认返回 base64 URI payload。`quantumult-x` 主路由返回 server lines，并额外注册 `-import` 一键导入端点。`surfboard` 主路由返回最小完整 profile，并额外注册 `-nodes` 给 `policy-path` 使用；当前客户端兼容输出为 `ss`、`trojan`、`vmess`，`hysteria2` 和 `vless` 会被跳过。
+
+### 单 URL 自动订阅
+
+`format = "auto"` 只对该 route 开启自动格式选择。固定格式 route 仍忽略
+`target`、`format`、`flag`、`client` 查询参数和 `User-Agent`。
+
+```toml
+[routes.auto.output]
+format = "auto"
+auto_default = "provider"
+```
+
+同一路径可供不同客户端直接订阅：
+
+```text
+https://mpm.example.com/p/token?target=clash
+https://mpm.example.com/p/token?target=surfboard
+https://mpm.example.com/p/token?target=quanx
+https://mpm.example.com/p/token?target=v2rayn
+```
+
+查询优先级为 `target > format > flag > client`，整体选择顺序为
+`explicit query target > companion suffix > User-Agent > auto_default`。
+`target=auto` 或空值表示没有显式查询目标；此时 `-nodes` 仍选 Surfboard，
+`-import` 仍选 Quantumult X。
+
+`format = "auto"` 必须配置 `server.public_base_url`，因为 Surfboard 和
+Quantumult X 需要嵌入绝对订阅 URL。
 
 ### HTTP Action 插件
 

@@ -326,6 +326,10 @@ def _has_unrepresentable_sb_scalar(data: dict[str, object]) -> str | None:
         "method",
         "password",
         "uuid",
+        "username",
+        "psk",
+        "version",
+        "reuse",
         "sni",
         "servername",
         "obfs",
@@ -340,6 +344,11 @@ def _has_unrepresentable_sb_scalar(data: dict[str, object]) -> str | None:
     for field_name in scalar_fields:
         if field_name in data and _profile_scalar_issue(data[field_name]) is not None:
             return field_name
+    obfs_opts = data.get("obfs-opts")
+    if isinstance(obfs_opts, dict):
+        for obfs_key in ("mode", "host", "uri", "obfs", "obfs-host", "obfs-uri"):
+            if _profile_scalar_issue(obfs_opts.get(obfs_key)) is not None:
+                return f"obfs-opts.{obfs_key}"
     ws_opts = data.get("ws-opts")
     if isinstance(ws_opts, dict):
         if _profile_scalar_issue(ws_opts.get("path")) is not None:
@@ -364,7 +373,7 @@ def _prepare_surfboard_records(
     )
     normalized_records: list[ProxyRecord] = []
     warnings: list[str] = []
-    supported_types = {"ss", "trojan", "vmess"}
+    supported_types = {"ss", "trojan", "vmess", "hysteria2", "snell", "anytls", "http", "socks5"}
     for record in transformed:
         data = dict(record.data)
         critical_field = _has_security_critical_field(data)
@@ -498,6 +507,149 @@ def _render_sb_trojan(data: dict[str, object]) -> str | None:
         segments.extend(_sb_ws_segments(data))
     elif network and network != "tcp":
         return None
+    return ", ".join(segments)
+
+
+def _render_sb_hysteria2(data: dict[str, object]) -> str | None:
+    """Render Hysteria2 proxy as a Surfboard proxy line.
+
+    Field mapping follows the Surfboard hysteria2 documentation:
+    {proxy name} = hysteria2, {server}, {port}, password={password},
+    download-bandwidth={bandwidth}, port-hopping={hopping},
+    port-hopping-interval={interval}, skip-cert-verify={skip},
+    sni={sni}, salamander-password={salamander}, udp-relay={udp}
+    """
+    segments = _sb_base_segments(data, "hysteria2")
+    password = _sb_value(data.get("password") or data.get("auth") or data.get("auth-str"))
+    if segments is None or not password:
+        return None
+    segments.append(f"password={password}")
+    download_bandwidth = _sb_value(data.get("down") or data.get("down-speed"))
+    if download_bandwidth:
+        segments.append(f"download-bandwidth={download_bandwidth}")
+    port_hopping_raw = _string(data.get("ports"))
+    if port_hopping_raw:
+        port_hopping = _sb_value(port_hopping_raw.replace(",", ";"))
+        segments.append(f"port-hopping={port_hopping}")
+    hop_interval = _sb_value(data.get("hop-interval"))
+    if hop_interval:
+        segments.append(f"port-hopping-interval={hop_interval}")
+    if "skip-cert-verify" in data:
+        segments.append(f"skip-cert-verify={_sb_bool(data.get('skip-cert-verify'))}")
+    sni = _sb_value(data.get("sni") or data.get("servername"))
+    if sni:
+        segments.append(f"sni={sni}")
+    obfs = _sb_value(data.get("obfs"))
+    obfs_password = _sb_value(data.get("obfs-password"))
+    if obfs == "salamander" and obfs_password:
+        segments.append(f"salamander-password={obfs_password}")
+    udp_relay = _sb_udp_relay_segment(data)
+    if udp_relay:
+        segments.append(udp_relay)
+    return ", ".join(segments)
+
+
+def _render_sb_snell(data: dict[str, object]) -> str | None:
+    """Render Snell proxy as a Surfboard proxy line.
+
+    Format: {name} = snell, {server}, {port}, psk={psk}, version={version},
+    udp-relay={udp}, obfs={obfs}, obfs-host={obfs-host}, obfs-uri={obfs-uri}
+    """
+    segments = _sb_base_segments(data, "snell")
+    psk = _sb_value(data.get("psk"))
+    if segments is None or not psk:
+        return None
+    segments.append(f"psk={psk}")
+    version = _sb_value(data.get("version"))
+    if version:
+        segments.append(f"version={version}")
+    udp_relay = _sb_udp_relay_segment(data)
+    if udp_relay:
+        segments.append(udp_relay)
+    obfs_opts = data.get("obfs-opts")
+    if isinstance(obfs_opts, dict):
+        obfs = _sb_value(obfs_opts.get("mode") or obfs_opts.get("obfs"))
+        if obfs:
+            segments.append(f"obfs={obfs}")
+        obfs_host = _sb_value(obfs_opts.get("host") or obfs_opts.get("obfs-host"))
+        if obfs_host:
+            segments.append(f"obfs-host={obfs_host}")
+        obfs_uri = _sb_value(obfs_opts.get("uri") or obfs_opts.get("obfs-uri"))
+        if obfs_uri:
+            segments.append(f"obfs-uri={obfs_uri}")
+    return ", ".join(segments)
+
+
+def _render_sb_anytls(data: dict[str, object]) -> str | None:
+    """Render AnyTLS proxy as a Surfboard proxy line.
+
+    Format: {name} = anytls, {server}, {port}, {password}, skip-cert-verify={skip},
+    sni={sni}, reuse={reuse}
+    """
+    segments = _sb_base_segments(data, "anytls")
+    password = _sb_value(data.get("password"))
+    if segments is None or not password:
+        return None
+    segments.append(password)
+    if "skip-cert-verify" in data:
+        segments.append(f"skip-cert-verify={_sb_bool(data.get('skip-cert-verify'))}")
+    sni = _sb_value(data.get("sni") or data.get("servername"))
+    if sni:
+        segments.append(f"sni={sni}")
+    if "reuse" in data:
+        segments.append(f"reuse={_sb_bool(data.get('reuse'))}")
+    return ", ".join(segments)
+
+
+def _render_sb_http(data: dict[str, object]) -> str | None:
+    """Render HTTP/HTTPS proxy as a Surfboard proxy line.
+
+    Format: {name} = {http|https}, {server}, {port}, {username}, {password},
+    skip-cert-verify={skip}, sni={sni}
+    """
+    tls_enabled = _boolish(data.get("tls"))
+    protocol = "https" if tls_enabled else "http"
+    segments = _sb_base_segments(data, protocol)
+    if segments is None:
+        return None
+    username = _sb_value(data.get("username"))
+    password = _sb_value(data.get("password"))
+    segments.append(username or "")
+    segments.append(password or "")
+    if tls_enabled:
+        if "skip-cert-verify" in data:
+            segments.append(
+                f"skip-cert-verify={_sb_bool(data.get('skip-cert-verify'))}"
+            )
+        sni = _sb_value(data.get("sni") or data.get("servername"))
+        if sni:
+            segments.append(f"sni={sni}")
+    return ", ".join(segments)
+
+
+def _render_sb_socks5(data: dict[str, object]) -> str | None:
+    """Render SOCKS5/SOCKS5-TLS proxy as a Surfboard proxy line.
+
+    Format: {name} = {socks5|socks5-tls}, {server}, {port}, {username}, {password},
+    skip-cert-verify={skip}, sni={sni}
+    """
+    tls_enabled = _boolish(data.get("tls"))
+    protocol = "socks5-tls" if tls_enabled else "socks5"
+    segments = _sb_base_segments(data, protocol)
+    if segments is None:
+        return None
+    username = _sb_value(data.get("username"))
+    password = _sb_value(data.get("password"))
+    segments.append(username or "")
+    segments.append(password or "")
+    if tls_enabled:
+        if "skip-cert-verify" in data:
+            segments.append(
+                f"skip-cert-verify={_sb_bool(data.get('skip-cert-verify'))}"
+            )
+        sni = _sb_value(data.get("sni") or data.get("servername"))
+        if sni:
+            segments.append(f"sni={sni}")
     return ", ".join(segments)
 
 
@@ -1091,6 +1243,11 @@ class SurfboardRenderer:
             "ss": _render_sb_ss,
             "trojan": _render_sb_trojan,
             "vmess": _render_sb_vmess,
+            "hysteria2": _render_sb_hysteria2,
+            "snell": _render_sb_snell,
+            "anytls": _render_sb_anytls,
+            "http": _render_sb_http,
+            "socks5": _render_sb_socks5,
         }
 
         for proxy in proxies:

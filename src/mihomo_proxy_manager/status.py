@@ -331,11 +331,11 @@ def _render_html(data: dict[str, Any]) -> str:
 
     def _summary_cards() -> str:
         items = [
-            ("Sources", source_summary.get("total", 0), "#818cf8"),
-            ("Healthy", source_summary.get("healthy", 0), "#34d399"),
-            ("Refreshing", source_summary.get("refreshing", 0), "#fbbf24"),
-            ("Routes", route_summary.get("total", 0), "#818cf8"),
-            ("Route Nodes", route_summary.get("nodes", 0), "#38bdf8"),
+            ("Sources", source_summary.get("total", 0), "var(--accent)"),
+            ("Healthy", source_summary.get("healthy", 0), "var(--ok)"),
+            ("Refreshing", source_summary.get("refreshing", 0), "var(--warn)"),
+            ("Routes", route_summary.get("total", 0), "var(--accent)"),
+            ("Route Nodes", route_summary.get("nodes", 0), "var(--info)"),
         ]
         return "".join(
             f"""
@@ -359,37 +359,53 @@ def _render_html(data: dict[str, Any]) -> str:
         def _cell(value: object) -> str:
             return html.escape(str(value if value is not None else "-"))
 
-        def _table(items: list[dict[str, Any]], columns: tuple[str, ...]) -> str:
-            headers = "".join(f"<th>{html.escape(column)}</th>" for column in columns)
+        def _table(
+            items: list[dict[str, Any]],
+            columns: tuple[str, ...],
+            *,
+            compact: bool = False,
+        ) -> str:
+            headers = "".join(
+                f"<th>{html.escape(c)}</th>" for c in columns
+            )
             if not items:
                 body = f'<tr><td colspan="{len(columns)}" class="muted">-</td></tr>'
             else:
                 body = "".join(
                     "<tr>"
                     + "".join(
-                        f"<td>{_cell(item.get(column))}</td>" for column in columns
+                        f"<td>{_cell(item.get(c))}</td>" for c in columns
                     )
                     + "</tr>"
                     for item in items
                 )
-            return (
-                f"<table><thead><tr>{headers}</tr></thead><tbody>{body}</tbody></table>"
-            )
+            cls = ' class="compact"' if compact else ""
+            return f'<table{cls}><thead><tr>{headers}</tr></thead><tbody>{body}</tbody></table>'
 
         total = _cell(access.get("total_events", 0))
         since = _cell(access.get("since", "-"))
         retention = _cell(access.get("retention_seconds", "-"))
-        recent = ""
+
+        tabs_html = ""
+        tab_sections = [
+            ("ips", "Top IPs", _table(access.get("top_ips", []), ("real_ip", "count", "last_seen"), compact=True)),
+            ("agents", "User-Agents", _table(access.get("top_user_agents", []), ("user_agent", "count", "last_seen"), compact=True)),
+            ("headers", "Headers", _table(access.get("top_headers", []), ("header", "value", "count", "last_seen"), compact=True)),
+            ("paths", "Paths", _table(access.get("top_paths", []), ("path", "route_name", "count", "last_seen"), compact=True)),
+        ]
         if access.get("recent") is not None:
-            recent = f"""
-              <h3>Recent</h3>
-              {
-                _table(
-                    access.get("recent", []),
-                    ("visited_at", "path", "route_name", "status_code", "real_ip"),
-                )
-            }
-            """
+            tab_sections.append(
+                ("recent", "Recent", _table(access.get("recent", []), ("visited_at", "path", "route_name", "status_code", "real_ip"), compact=True))
+            )
+
+        tab_buttons = "".join(
+            f'<button class="tab-btn{" active" if i == 0 else ""}" data-tab="{tab_id}">{html.escape(label)}</button>'
+            for i, (tab_id, label, _) in enumerate(tab_sections)
+        )
+        tab_panels = "".join(
+            f'<div class="tab-panel{" active" if i == 0 else ""}" data-tab="{tab_id}">{content}</div>'
+            for i, (tab_id, _, content) in enumerate(tab_sections)
+        )
 
         return f"""
         <section>
@@ -400,131 +416,235 @@ def _render_html(data: dict[str, Any]) -> str:
               <div class="metric-label">events</div>
             </div>
             <div class="detail"><span class="detail-label">Since</span>{since}</div>
-            <div class="detail"><span class="detail-label">Retention Seconds</span>{retention}</div>
+            <div class="detail"><span class="detail-label">Retention</span>{retention}s</div>
           </div>
-          <h3>Top IPs</h3>
-          {_table(access.get("top_ips", []), ("real_ip", "count", "last_seen"))}
-          <h3>User-Agents</h3>
-          {_table(access.get("top_user_agents", []), ("user_agent", "count", "last_seen"))}
-          <h3>Headers</h3>
-          {_table(access.get("top_headers", []), ("header", "value", "count", "last_seen"))}
-          <h3>Paths</h3>
-          {_table(access.get("top_paths", []), ("path", "route_name", "count", "last_seen"))}
-          {recent}
+          <div class="tabs">
+            <div class="tab-bar">{tab_buttons}</div>
+            <div class="tab-content">{tab_panels}</div>
+          </div>
         </section>
         """
 
     overall_pills = _pills(overall_protocols)
 
     return f"""<!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Proxy Manager Status</title>
   <style>
     :root {{
+      --bg: #f8fafc;
+      --surface: #ffffff;
+      --surface-elevated: #f1f5f9;
+      --border: #e2e8f0;
+      --text: #0f172a;
+      --text-secondary: #475569;
+      --muted: #94a3b8;
+      --accent: #6366f1;
+      --accent-soft: rgba(99, 102, 241, 0.08);
+      --ok: #10b981;
+      --ok-soft: rgba(16, 185, 129, 0.1);
+      --warn: #f59e0b;
+      --warn-soft: rgba(245, 158, 11, 0.1);
+      --err: #ef4444;
+      --err-soft: rgba(239, 68, 68, 0.1);
+      --info: #0ea5e9;
+      --info-soft: rgba(14, 165, 233, 0.1);
+      --shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+      --shadow-lg: 0 4px 6px -1px rgba(0,0,0,0.06), 0 2px 4px -2px rgba(0,0,0,0.04);
+      --radius: 0.75rem;
+      --radius-sm: 0.5rem;
+    }}
+    .dark {{
       --bg: #0b0f19;
       --surface: #111827;
       --surface-elevated: #1f2937;
-      --border: #374151;
-      --text: #e5e7eb;
-      --muted: #9ca3af;
-      --accent: #6366f1;
-      --accent-soft: rgba(99, 102, 241, 0.15);
-      --ok: #10b981;
-      --ok-soft: rgba(16, 185, 129, 0.15);
-      --warn: #f59e0b;
-      --warn-soft: rgba(245, 158, 11, 0.15);
-      --err: #ef4444;
-      --err-soft: rgba(239, 68, 68, 0.15);
+      --border: #1e293b;
+      --text: #e2e8f0;
+      --text-secondary: #94a3b8;
+      --muted: #64748b;
+      --shadow: 0 1px 3px rgba(0,0,0,0.3), 0 1px 2px rgba(0,0,0,0.2);
+      --shadow-lg: 0 4px 6px -1px rgba(0,0,0,0.4), 0 2px 4px -2px rgba(0,0,0,0.3);
     }}
-    * {{ box-sizing: border-box; }}
+    *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
     body {{
-      margin: 0;
-      padding: 2rem 1.25rem;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-      background: radial-gradient(ellipse at top, #111827 0%, var(--bg) 60%);
-      background-attachment: fixed;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+      background: var(--bg);
       color: var(--text);
       line-height: 1.6;
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
     }}
-    .container {{ max-width: 1200px; margin: 0 auto; }}
+    body::before {{
+      content: "";
+      position: fixed;
+      inset: 0;
+      background:
+        radial-gradient(ellipse 80% 50% at 50% -20%, rgba(99,102,241,0.08), transparent),
+        radial-gradient(ellipse 60% 40% at 80% 80%, rgba(16,185,129,0.04), transparent);
+      pointer-events: none;
+      z-index: 0;
+    }}
+    .container {{ max-width: 1280px; margin: 0 auto; padding: 2rem 1.5rem; position: relative; z-index: 1; }}
     header {{
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       justify-content: space-between;
       gap: 1rem;
       margin-bottom: 2rem;
       flex-wrap: wrap;
     }}
-    h1 {{ font-size: 1.75rem; margin: 0; letter-spacing: -0.025em; }}
+    .header-left {{ display: flex; flex-direction: column; gap: 0.25rem; }}
+    h1 {{
+      font-size: 1.75rem;
+      font-weight: 700;
+      letter-spacing: -0.025em;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }}
+    h1 .dot {{
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: var(--ok);
+      box-shadow: 0 0 8px var(--ok);
+      animation: pulse 2s ease-in-out infinite;
+    }}
+    @keyframes pulse {{
+      0%, 100% {{ opacity: 1; }}
+      50% {{ opacity: 0.5; }}
+    }}
     h1 span {{ color: var(--accent); }}
-    .subtitle {{ color: var(--muted); font-size: 0.875rem; margin-top: 0.25rem; }}
-    .api-link {{
+    .subtitle {{
+      color: var(--muted);
+      font-size: 0.8125rem;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }}
+    .header-actions {{ display: flex; align-items: center; gap: 0.5rem; }}
+    .btn {{
       display: inline-flex;
       align-items: center;
       gap: 0.4rem;
       padding: 0.5rem 0.875rem;
-      border-radius: 0.5rem;
+      border-radius: var(--radius-sm);
       background: var(--surface);
       border: 1px solid var(--border);
       color: var(--text);
       text-decoration: none;
-      font-size: 0.875rem;
-      transition: background 0.15s, border-color 0.15s;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s;
+      white-space: nowrap;
     }}
-    .api-link:hover {{ background: var(--surface-elevated); border-color: var(--accent); }}
+    .btn:hover {{ background: var(--surface-elevated); border-color: var(--accent); }}
+    .btn-icon {{
+      padding: 0.5rem;
+      line-height: 1;
+    }}
+    .theme-toggle {{
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      cursor: pointer;
+      padding: 0.5rem;
+      font-size: 1rem;
+      line-height: 1;
+      transition: all 0.15s;
+    }}
+    .theme-toggle:hover {{ background: var(--surface-elevated); border-color: var(--accent); }}
     .summary-grid {{
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-      gap: 1rem;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 0.75rem;
       margin-bottom: 1.5rem;
     }}
     .summary-card {{
       background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: 1rem;
-      padding: 1.25rem;
+      border-radius: var(--radius);
+      padding: 1.25rem 1rem;
       text-align: center;
-      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
+      box-shadow: var(--shadow);
+      transition: transform 0.15s, box-shadow 0.15s;
     }}
-    .summary-value {{ font-size: 2rem; font-weight: 700; line-height: 1; }}
-    .summary-label {{ color: var(--muted); font-size: 0.875rem; margin-top: 0.5rem; text-transform: uppercase; letter-spacing: 0.05em; }}
+    .summary-card:hover {{ transform: translateY(-1px); box-shadow: var(--shadow-lg); }}
+    .summary-value {{
+      font-size: 2.25rem;
+      font-weight: 800;
+      line-height: 1;
+      font-variant-numeric: tabular-nums;
+    }}
+    .summary-label {{
+      color: var(--muted);
+      font-size: 0.75rem;
+      font-weight: 600;
+      margin-top: 0.5rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }}
     .overall {{
       background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: 1rem;
-      padding: 1rem 1.25rem;
-      margin-bottom: 2.5rem;
+      border-radius: var(--radius);
+      padding: 0.875rem 1.25rem;
+      margin-bottom: 2rem;
       display: flex;
       flex-wrap: wrap;
       align-items: center;
       gap: 0.75rem;
+      box-shadow: var(--shadow);
     }}
-    .overall-label {{ color: var(--muted); font-size: 0.875rem; }}
-    section {{ margin-bottom: 2.5rem; }}
+    .overall-label {{
+      color: var(--muted);
+      font-size: 0.8125rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }}
+    section {{ margin-bottom: 2rem; }}
+    .section-header {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 1rem;
+    }}
     h2 {{
-      font-size: 1.25rem;
-      margin: 0 0 1rem 0;
+      font-size: 1.125rem;
+      font-weight: 700;
       display: flex;
       align-items: center;
       gap: 0.5rem;
     }}
+    h2 .count {{
+      font-size: 0.8125rem;
+      font-weight: 600;
+      color: var(--muted);
+      background: var(--surface-elevated);
+      padding: 0.15rem 0.5rem;
+      border-radius: 999px;
+    }}
     .grid {{
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-      gap: 1rem;
+      gap: 0.75rem;
     }}
     .card {{
       background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: 1rem;
+      border-radius: var(--radius);
       padding: 1.25rem;
-      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
-      transition: transform 0.15s, border-color 0.15s;
+      box-shadow: var(--shadow);
+      transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
     }}
-    .card:hover {{ transform: translateY(-2px); border-color: var(--accent); }}
+    .card:hover {{ transform: translateY(-1px); box-shadow: var(--shadow-lg); border-color: var(--accent); }}
     .card-header {{
       display: flex;
       align-items: center;
@@ -532,27 +652,58 @@ def _render_html(data: dict[str, Any]) -> str:
       gap: 0.75rem;
       margin-bottom: 1rem;
     }}
-    .card-title {{ font-weight: 600; font-size: 1rem; word-break: break-all; }}
+    .card-title {{
+      font-weight: 700;
+      font-size: 0.9375rem;
+      word-break: break-all;
+      color: var(--text);
+    }}
     .badge {{
       display: inline-flex;
       align-items: center;
-      padding: 0.25rem 0.6rem;
+      gap: 0.3rem;
+      padding: 0.2rem 0.55rem;
       border-radius: 999px;
-      font-size: 0.75rem;
-      font-weight: 600;
+      font-size: 0.6875rem;
+      font-weight: 700;
       white-space: nowrap;
+      letter-spacing: 0.02em;
     }}
-    .badge-ok {{ background: var(--ok-soft); color: var(--ok); border: 1px solid rgba(16, 185, 129, 0.3); }}
-    .badge-warn {{ background: var(--warn-soft); color: var(--warn); border: 1px solid rgba(245, 158, 11, 0.3); }}
-    .badge-err {{ background: var(--err-soft); color: var(--err); border: 1px solid rgba(239, 68, 68, 0.3); }}
+    .badge::before {{
+      content: "";
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+      flex-shrink: 0;
+    }}
+    .badge-ok {{ background: var(--ok-soft); color: var(--ok); border: 1px solid rgba(16,185,129,0.2); }}
+    .badge-warn {{ background: var(--warn-soft); color: var(--warn); border: 1px solid rgba(245,158,11,0.2); }}
+    .badge-err {{ background: var(--err-soft); color: var(--err); border: 1px solid rgba(239,68,68,0.2); }}
     .badge-neutral {{ background: var(--surface-elevated); color: var(--muted); border: 1px solid var(--border); }}
+    .badge-neutral::before {{ display: none; }}
     .metric {{ margin-bottom: 1rem; }}
-    .metric-value {{ font-size: 2.5rem; font-weight: 700; line-height: 1; }}
-    .metric-label {{ color: var(--muted); font-size: 0.875rem; }}
-    .detail {{ margin-top: 0.75rem; font-size: 0.875rem; }}
-    .detail-label {{ display: block; color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.35rem; }}
+    .metric-value {{
+      font-size: 2.5rem;
+      font-weight: 800;
+      line-height: 1;
+      font-variant-numeric: tabular-nums;
+    }}
+    .metric-label {{ color: var(--muted); font-size: 0.8125rem; font-weight: 500; margin-top: 0.25rem; }}
+    .detail {{
+      margin-top: 0.75rem;
+      font-size: 0.8125rem;
+      color: var(--text-secondary);
+    }}
+    .detail-label {{
+      display: block;
+      color: var(--muted);
+      font-size: 0.6875rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 0.35rem;
+    }}
     .detail.error {{ color: var(--err); }}
-    h3 {{ margin: 1rem 0 0.5rem; font-size: 1rem; }}
     .access-summary {{
       display: flex;
       flex-wrap: wrap;
@@ -560,68 +711,146 @@ def _render_html(data: dict[str, Any]) -> str:
       gap: 1rem 2rem;
       background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: 1rem;
+      border-radius: var(--radius);
       padding: 1rem 1.25rem;
       margin-bottom: 1rem;
+      box-shadow: var(--shadow);
     }}
+    .tabs {{ margin-top: 0.5rem; }}
+    .tab-bar {{
+      display: flex;
+      gap: 0.25rem;
+      border-bottom: 2px solid var(--border);
+      margin-bottom: 0.75rem;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }}
+    .tab-btn {{
+      padding: 0.5rem 0.875rem;
+      background: none;
+      border: none;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -2px;
+      color: var(--muted);
+      font-size: 0.8125rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: color 0.15s, border-color 0.15s;
+      white-space: nowrap;
+    }}
+    .tab-btn:hover {{ color: var(--text); }}
+    .tab-btn.active {{ color: var(--accent); border-bottom-color: var(--accent); }}
+    .tab-panel {{ display: none; }}
+    .tab-panel.active {{ display: block; animation: fadeIn 0.2s ease; }}
+    @keyframes fadeIn {{ from {{ opacity: 0; transform: translateY(4px); }} to {{ opacity: 1; transform: translateY(0); }} }}
     table {{
       width: 100%;
-      border-collapse: collapse;
-      margin-bottom: 0.75rem;
+      border-collapse: separate;
+      border-spacing: 0;
+      margin-bottom: 0.5rem;
       background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: 0.75rem;
+      border-radius: var(--radius);
       overflow: hidden;
-      font-size: 0.875rem;
+      font-size: 0.8125rem;
+      box-shadow: var(--shadow);
     }}
     th, td {{
-      padding: 0.55rem 0.7rem;
+      padding: 0.6rem 0.75rem;
       border-bottom: 1px solid var(--border);
       text-align: left;
       vertical-align: top;
-      word-break: break-all;
     }}
-    th {{ color: var(--muted); background: var(--surface-elevated); font-weight: 600; }}
+    th {{
+      color: var(--muted);
+      background: var(--surface-elevated);
+      font-weight: 700;
+      font-size: 0.6875rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }}
     tr:last-child td {{ border-bottom: 0; }}
+    tr:hover td {{ background: var(--surface-elevated); }}
+    td {{
+      color: var(--text-secondary);
+      word-break: break-all;
+      max-width: 300px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }}
+    table.compact th, table.compact td {{ padding: 0.4rem 0.6rem; font-size: 0.75rem; }}
     .pill {{
       display: inline-flex;
       align-items: center;
-      gap: 0.35rem;
+      gap: 0.3rem;
       background: var(--accent-soft);
-      color: #818cf8;
-      border: 1px solid rgba(99, 102, 241, 0.25);
+      color: var(--accent);
+      border: 1px solid rgba(99,102,241,0.15);
       border-radius: 999px;
-      padding: 0.25rem 0.65rem;
-      font-size: 0.8rem;
-      margin: 0.15rem 0.15rem 0 0;
+      padding: 0.2rem 0.6rem;
+      font-size: 0.75rem;
+      font-weight: 600;
+      margin: 0.1rem 0.1rem 0 0;
     }}
-    .pill-count {{ color: #c7d2fe; font-weight: 600; }}
+    .pill-count {{ opacity: 0.75; font-weight: 700; }}
     .bar-bg {{
-      height: 0.5rem;
+      height: 0.375rem;
       background: var(--surface-elevated);
       border-radius: 999px;
       overflow: hidden;
       margin-top: 0.35rem;
     }}
-    .bar-fill {{ height: 100%; border-radius: 999px; transition: width 0.3s ease; }}
-    .bar-fill-ok {{ background: var(--ok); }}
-    .bar-fill-warn {{ background: var(--warn); }}
+    .bar-fill {{
+      height: 100%;
+      border-radius: 999px;
+      transition: width 0.5s ease;
+    }}
+    .bar-fill-ok {{ background: linear-gradient(90deg, var(--ok), #34d399); }}
+    .bar-fill-warn {{ background: linear-gradient(90deg, var(--warn), #fbbf24); }}
     .muted {{ color: var(--muted); }}
+    .empty-state {{
+      text-align: center;
+      padding: 3rem 1rem;
+      color: var(--muted);
+    }}
+    .empty-state .icon {{ font-size: 2rem; margin-bottom: 0.5rem; }}
+    footer {{
+      margin-top: 2rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--border);
+      text-align: center;
+      color: var(--muted);
+      font-size: 0.75rem;
+    }}
     @media (max-width: 640px) {{
-      body {{ padding: 1rem; }}
+      .container {{ padding: 1rem; }}
       .grid {{ grid-template-columns: 1fr; }}
-      h1 {{ font-size: 1.4rem; }}
+      h1 {{ font-size: 1.35rem; }}
+      .summary-grid {{ grid-template-columns: repeat(2, 1fr); }}
+      .summary-value {{ font-size: 1.75rem; }}
+      header {{ flex-direction: column; }}
+      .header-actions {{ width: 100%; justify-content: flex-end; }}
+      table {{ font-size: 0.75rem; }}
+      th, td {{ padding: 0.45rem 0.5rem; }}
     }}
   </style>
 </head>
 <body>
   <div class="container">
     <header>
-      <div>
-        <h1>Proxy Manager <span>Status</span></h1>
-        <div class="subtitle">Generated at {generated}</div>
+      <div class="header-left">
+        <h1><span class="dot"></span>Proxy Manager <span>Status</span></h1>
+        <div class="subtitle">
+          <span>Generated at {generated}</span>
+        </div>
       </div>
-      <a class="api-link" href="./api">JSON API ↗</a>
+      <div class="header-actions">
+        <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme" aria-label="Toggle dark/light theme">☀</button>
+        <a class="btn" href="./api">JSON API ↗</a>
+      </div>
     </header>
 
     <div class="summary-grid">
@@ -629,26 +858,67 @@ def _render_html(data: dict[str, Any]) -> str:
     </div>
 
     <div class="overall">
-      <span class="overall-label">Overall protocols:</span>
+      <span class="overall-label">Protocols</span>
       {overall_pills}
     </div>
 
     {_access_section()}
 
     <section>
-      <h2>Sources</h2>
+      <div class="section-header">
+        <h2>Sources <span class="count">{source_summary.get("total", 0)}</span></h2>
+      </div>
       <div class="grid">
         {_source_cards()}
       </div>
     </section>
 
     <section>
-      <h2>Routes</h2>
+      <div class="section-header">
+        <h2>Routes <span class="count">{route_summary.get("total", 0)}</span></h2>
+      </div>
       <div class="grid">
         {_route_cards()}
       </div>
     </section>
+
+    <footer>
+      mihomo-proxy-manager · status dashboard
+    </footer>
   </div>
+  <script>
+    (function() {{
+      var stored = localStorage.getItem('theme');
+      var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      if (stored === 'light' || (!stored && !prefersDark)) {{
+        document.documentElement.classList.remove('dark');
+        document.querySelector('.theme-toggle').textContent = '☾';
+      }}
+    }})();
+    function toggleTheme() {{
+      var html = document.documentElement;
+      var btn = document.querySelector('.theme-toggle');
+      if (html.classList.contains('dark')) {{
+        html.classList.remove('dark');
+        localStorage.setItem('theme', 'light');
+        btn.textContent = '☾';
+      }} else {{
+        html.classList.add('dark');
+        localStorage.setItem('theme', 'dark');
+        btn.textContent = '☀';
+      }}
+    }}
+    document.querySelectorAll('.tab-btn').forEach(function(btn) {{
+      btn.addEventListener('click', function() {{
+        var tab = this.dataset.tab;
+        document.querySelectorAll('.tab-btn').forEach(function(b) {{ b.classList.remove('active'); }});
+        document.querySelectorAll('.tab-panel').forEach(function(p) {{ p.classList.remove('active'); }});
+        this.classList.add('active');
+        var panel = document.querySelector('.tab-panel[data-tab="' + tab + '"]');
+        if (panel) panel.classList.add('active');
+      }});
+    }});
+  </script>
 </body>
 </html>"""
 

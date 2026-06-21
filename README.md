@@ -16,21 +16,21 @@
 
 ## 这是什么
 
-`mihomo-proxy-manager` 是一个面向 Clash/Mihomo 及相关客户端的订阅聚合上游服务。它从多个订阅源下载节点，解析 YAML、share link 或 base64 内容，按配置过滤和重命名，再按 route 输出 provider YAML、直连订阅等客户端可用格式；其中 Mihomo `proxy-providers` YAML 是最初且默认的使用场景。
+`mihomo-proxy-manager` 是 Clash/Mihomo 生态的订阅聚合上游服务。它从多个订阅源下载节点，解析 YAML、share link 或 base64 内容，按配置过滤、重命名，再按 route 输出 provider YAML、直连订阅等客户端可用格式。Mihomo `proxy-providers` YAML 是最初也是默认的输出场景。
 
-它解决的是一个很具体的问题：原始订阅通常不适合直接分发给所有设备。你可能需要隐藏真实订阅地址，统一节点命名，把不同机场合并到一个 provider，或者给手机、电脑、路由器暴露不同的节点集合与订阅格式。这个服务把这些规则放在一份 TOML 配置里，并把输出稳定成几个隐藏订阅路径。
+它解决一个很具体的问题：原始订阅不适合直接分发给所有设备。你可能需要隐藏真实订阅地址、统一节点命名、把不同机场合并到一个 provider，或者给手机、电脑、路由器暴露不同的节点集合与订阅格式。这个服务把这些规则写进一份 TOML 配置，并把输出稳定成几个隐藏订阅路径。
 
 ## 适合场景
 
 - 多个机场订阅需要合并、筛选、统一命名。
-- Mihomo 客户端只想订阅 provider YAML，不想暴露原始订阅 URL。
-- 不同设备需要不同节点集合，例如手机只要低倍率节点，路由器只要特定地区节点。
-- 上游订阅偶尔失败，但客户端仍希望拿到上一次可用缓存。
-- 想把订阅刷新、解析、过滤逻辑放到服务端集中管理。
+- Mihomo 客户端只订阅 provider YAML，不想暴露原始订阅 URL。
+- 不同设备需要不同节点集合，比如手机只要低倍率节点，路由器只要特定地区节点。
+- 上游订阅偶尔失败，但客户端仍希望拿到上一次的可用缓存。
+- 想把订阅刷新、解析、过滤逻辑集中到服务端管理。
 
 ## 功能
 
-- 聚合多个 source，并按 route 输出 provider YAML 或其他订阅格式。
+- 聚合多个 source，按 route 输出 provider YAML 或其他订阅格式。
 - 支持 Clash/Mihomo YAML provider、完整 YAML 配置、常见 share links 和 base64 订阅。
 - 支持 `ss://`、`vmess://`、`vless://`、`trojan://`、`hysteria2://`。
 - Route 格式研究与扩展边界见 [docs/route-formats.md](docs/route-formats.md)。
@@ -40,7 +40,7 @@
 - 支持 ETag 和 Last-Modified 条件请求。
 - 支持 interval、cron、启动刷新和 jitter。
 - 支持 `before_fetch` HTTP Action 插件。
-- 默认限制私网 URL、重定向次数和响应大小，减少误抓内网和异常大响应的风险。
+- 默认限制私网 URL、重定向次数和响应大小，降低误抓内网和异常大响应的风险。
 
 ## 快速开始
 
@@ -122,7 +122,7 @@ mpm serve -c /app/config.toml
 - `[routes.*]`：对客户端暴露的订阅路径，以及这个 route 使用哪些 source。
 - `[security]`：隐藏路径熵、私网 URL 访问等安全约束。
 
-**注意：`user_agent` 必须写成 `clash-meta/<version>`、`clash.meta/<version>` 或 `mihomo/<version>`，其它格式都不接受。示例使用 `mihomo/1.19.5`，这是 Mihomo 已发布过的真实版本。不要写项目名或占位字符串；不少订阅源会根据 User-Agent 判断客户端类型。**
+**注意：`user_agent` 必须写成 `clash-meta/<version>`、`clash.meta/<version>` 或 `mihomo/<version>`，其他格式一律拒绝。示例使用 `mihomo/1.19.5`，这是 Mihomo 已发布过的真实版本。不要填项目名或占位字符串——不少订阅源会根据 User-Agent 判断客户端类型。**
 
 <details open>
 <summary>常用配置片段</summary>
@@ -497,7 +497,7 @@ enabled = false
 
 ## 设计
 
-核心设计是把“订阅源刷新”和“路由渲染”分开。订阅源只管从上游拿到可用节点，并把结果缓存下来；路由只管读取缓存、组合节点，再按配置生成客户端需要的订阅输出。provider YAML 是原始且默认输出，其他 route format 在同一管线中渲染。上游失败时，旧缓存仍能继续服务；客户端请求也不必直接等待每一次上游下载。
+核心设计是把“订阅源刷新”和“路由渲染”分开。订阅源只管从上游拿到可用节点并缓存结果；路由只管读取缓存、组合节点，再按配置生成客户端需要的订阅输出。provider YAML 是原始且默认的输出，其他 route format 在同一管线中渲染。上游失败时旧缓存仍能继续服务；客户端请求也不必直接等待每一次上游下载。
 
 ```mermaid
 flowchart LR
@@ -545,12 +545,12 @@ flowchart LR
 ## 安全
 
 - 订阅路径是 bearer secret。路径泄露后，拿到路径的人就能获取该 route 输出。
-- 生产环境请使用 HTTPS，或者放在可信反向代理后面。
+- 生产环境请使用 HTTPS，或放在可信反向代理后面。
 - `status_path` 也建议使用高熵随机路径。
 - `status_path` 会暴露访问聚合统计；不要公开，并避免 allowlist 高熵私有 header。
 - 上游订阅 URL、插件 header、节点 UUID/password 都应视为敏感信息。
-- 默认禁止抓取私网、localhost 和保留地址。只有在明确需要内网订阅源时才考虑放开。
-- 缓存文件会保存代理节点信息，建议把运行目录权限控制在服务用户范围内。
+- 默认禁止抓取私网、localhost 和保留地址。只在明确需要内网订阅源时才考虑放开。
+- 缓存文件保存代理节点信息，建议把运行目录权限控制在服务用户范围内。
 
 ## 开发
 

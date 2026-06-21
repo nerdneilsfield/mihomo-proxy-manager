@@ -16,13 +16,13 @@ A small upstream subscription service that turns multiple Clash/Mihomo subscript
 
 ## What It Is
 
-`mihomo-proxy-manager` is an upstream subscription service for Clash/Mihomo and related clients. It downloads proxy nodes from multiple subscription sources, parses YAML, share links, or base64 payloads, applies configurable filters and renaming rules, then renders configured route output formats such as provider YAML or direct subscription payloads. Mihomo-compatible `proxy-providers` YAML is the original and default use case.
+`mihomo-proxy-manager` is an upstream subscription service for Clash/Mihomo and related clients. It downloads proxy nodes from multiple subscription sources, parses YAML, share links, or base64 payloads, applies configurable filters and renaming rules, then renders route outputs such as provider YAML or direct subscription payloads. Mihomo-compatible `proxy-providers` YAML is the original and default output.
 
-The project is built for a practical problem: raw subscription URLs are often not suitable for every device. You may want to hide the original subscription URL, normalize node names, combine multiple providers, or expose different node sets and subscription formats for phones, laptops, and routers. This service keeps those rules in a TOML file and exposes stable hidden subscription routes.
+The project solves a practical problem: raw subscription URLs rarely suit every device. You may want to hide the original subscription URL, normalize node names, combine multiple providers, or expose different node sets and subscription formats for phones, laptops, and routers. This service keeps those rules in a TOML file and exposes stable hidden subscription routes.
 
 ## When To Use It
 
-- You have multiple subscription sources and want one clean provider YAML output or client-specific subscription output.
+- You have multiple subscription sources and want one clean provider YAML or client-specific subscription output.
 - You want Mihomo clients to consume provider YAML without seeing raw upstream URLs.
 - Different devices need different node sets.
 - Upstream subscriptions sometimes fail, but clients should still receive the last valid cache.
@@ -33,14 +33,14 @@ The project is built for a practical problem: raw subscription URLs are often no
 - Aggregates multiple sources and exposes different subscription routes and output formats.
 - Parses Clash/Mihomo provider YAML, full YAML configs, common share links, and base64 subscriptions.
 - Supports `ss://`, `vmess://`, `vless://`, `trojan://`, and `hysteria2://`.
-- Route format research and extension boundaries are documented in [docs/route-formats.md](docs/route-formats.md).
-- Supports source-level and route-level regex filters, type filters, prefixes, and suffixes.
+- Route format research and extension boundaries: [docs/route-formats.md](docs/route-formats.md).
+- Source-level and route-level regex filters, type filters, prefixes, and suffixes.
 - Renders Mihomo-compatible `proxies:` YAML.
-- Keeps source-level JSON caches and preserves old cache on refresh failure.
-- Supports ETag and Last-Modified conditional requests.
-- Supports interval, cron, startup refresh, and jitter.
-- Supports a `before_fetch` HTTP Action plugin hook.
-- Limits private-network URLs, redirect count, and response size by default.
+- Source-level JSON caches preserved on refresh failure.
+- ETag and Last-Modified conditional requests.
+- Interval, cron, startup refresh, and jitter.
+- `before_fetch` HTTP Action plugin hook.
+- Private-network URLs, redirect count, and response size limited by default.
 
 ## Quick Start
 
@@ -122,7 +122,7 @@ Configuration is written in TOML. A useful config usually has four parts:
 - `[routes.*]`: subscription routes exposed to clients and the sources each route uses.
 - `[security]`: hidden path entropy and private-network URL policy.
 
-**Important: `user_agent` must use `clash-meta/<version>`, `clash.meta/<version>`, or `mihomo/<version>`. Other formats are rejected. The example uses `mihomo/1.19.5`, a real released Mihomo version. Do not use the project name or a placeholder string; some subscription providers change behavior based on the User-Agent.**
+**Important: `user_agent` must use `clash-meta/<version>`, `clash.meta/<version>`, or `mihomo/<version>`. Other formats are rejected. The example uses `mihomo/1.19.5`, a real released Mihomo version. Do not use the project name or a placeholder string — some subscription providers change behavior based on the User-Agent.**
 
 <details open>
 <summary>Common configuration snippet</summary>
@@ -254,8 +254,8 @@ exclude = "倍率|测试"
 | Field | Meaning |
 | --- | --- |
 | `server.host` / `server.port` | HTTP listen address and port. Put the service behind a reverse proxy for public deployments. |
-| `server.health_path` | Liveness path. It only means the process is alive. |
-| `server.status_path` | Status path. Use a random path and avoid exposing it to clients. The root path returns an HTML dashboard; `{status_path}/api` returns the JSON API. |
+| `server.health_path` | Liveness path. Only means the process is alive. |
+| `server.status_path` | Status path. Use a random path; do not expose it to clients. The root path returns an HTML dashboard; `{status_path}/api` returns the JSON API. |
 | `server.route_refresh_wait` | How long a route request waits when a required cache is missing. |
 | `server.public_base_url` | Public base URL. Surfboard and Quantumult X import companions use it to generate stable absolute subscription URLs. |
 | `cache.dir` | Directory for source JSON cache files. Cache files contain proxy data. |
@@ -264,7 +264,7 @@ exclude = "倍率|测试"
 | `http.max_redirects` | Maximum redirect count for subscription downloads and plugin requests. |
 | `scheduler.startup_refresh_mode` | `background` starts serving first; `blocking` waits for startup refreshes first. |
 | `security.hidden_path_min_entropy_bits` | Minimum estimated entropy for hidden route paths. 128 or higher is recommended. |
-| `security.allow_private_network_urls` | Allows private, localhost, and reserved addresses. Keep this `false` in production unless you need it. |
+| `security.allow_private_network_urls` | Allows private, localhost, and reserved addresses. Keep `false` in production unless needed. |
 | `sources.<name>.format` | `auto`, `yaml`, or `share-links`. `auto` is the usual choice. |
 | `sources.<name>.parse_error` | `skip` drops bad nodes; `fail` fails the whole source refresh. |
 | `sources.<name>.filter.include` | Keeps nodes whose names match the regex. |
@@ -380,7 +380,7 @@ format = "surfboard"
 test_url = "http://www.gstatic.com/generate_204"
 ```
 
-`xray-uri` is directly subscribable by v2rayN-style clients and returns a base64 URI payload by default. `quantumult-x` returns server lines on the main route and registers a `-import` one-click import endpoint. `surfboard` returns a minimal full profile on the main route and registers `-nodes` for `policy-path`; its client-compatible output is currently `ss`, `trojan`, and `vmess`, while `hysteria2` and `vless` are skipped.
+`xray-uri` is directly subscribable by v2rayN-style clients and returns a base64 URI payload by default. `quantumult-x` returns server lines on the main route and registers a `-import` one-click import endpoint. `surfboard` returns a minimal full profile on the main route and registers `-nodes` for `policy-path`; compatible output is `ss`, `trojan`, and `vmess` — `hysteria2` and `vless` are skipped.
 
 ### One URL For Multiple Clients
 
@@ -434,7 +434,7 @@ The plugin runs before the subscription is fetched. `abort` keeps the old cache 
 
 ### DNS resolution for node hostnames
 
-By default, node hostnames are passed through unchanged. To resolve them to IP addresses, opt in per source:
+By default, node hostnames pass through unchanged. To resolve them to IP addresses, opt in per source:
 
 ```toml
 [dns]
@@ -448,9 +448,9 @@ servers = ["tls://1.1.1.1:853?servername=cloudflare-dns.com"]
 failure = "drop"
 ```
 
-`failure` accepts `keep`, `drop`, or `fail` — keep the original hostname, drop the node, or fail the whole refresh respectively. Only the top-level `server` field is replaced; existing `servername`, `sni`, and `ws-opts.headers.Host` are preserved. Sources with DNS enabled skip ETag/Last-Modified conditional requests so each refresh re-resolves.
+`failure` accepts `keep`, `drop`, or `fail` — keep the original hostname, drop the node, or fail the whole refresh. Only the top-level `server` field is replaced; existing `servername`, `sni`, and `ws-opts.headers.Host` are preserved. Sources with DNS enabled skip ETag/Last-Modified conditional requests so each refresh re-resolves.
 
-By default only A records (IPv4) are queried. To enable IPv6, set `enable_ipv6 = true` in `[dns]` or `[sources.<name>.dns]`; the resolver will additionally query AAAA records.
+By default only A records (IPv4) are queried. To enable IPv6, set `enable_ipv6 = true` in `[dns]` or `[sources.<name>.dns]`; the resolver will also query AAAA records.
 
 DNS servers may use `udp://`, `tcp://`, `tls://`, or `https://`. The DNS server hostname is resolved once per query and pinned to a public IP at connect time, preventing DNS rebinding attacks.
 
@@ -461,7 +461,7 @@ DNS servers may use `udp://`, `tcp://`, `tls://`, or `https://`. The DNS server 
 user_agent = ["mihomo/*", "clash-meta/*", "clash.meta/*"]
 ```
 
-Patterns are matched case-sensitively using shell-style glob (`fnmatch`). When unset or set to an empty list, the route stays open. Access control applies only to configured subscription routes, including main route paths and companion paths such as `-nodes` and `-import`; system endpoints such as `/healthz` are unaffected.
+Patterns are matched case-sensitively using shell-style glob (`fnmatch`). When unset or empty, the route stays open. Access control applies only to configured subscription routes, including main route paths and companion paths such as `-nodes` and `-import`; system endpoints such as `/healthz` are unaffected.
 
 ### File logging
 
@@ -479,7 +479,7 @@ When running with Docker, mount `logs` to `/app/logs`; otherwise logs stay insid
 
 ### Access audit logging
 
-When `[access_log]` is enabled, route access events are stored in SQLite for 30 days by default. `logs/access.log` is a separate human-readable access log and is not mixed with normal Loguru file logs. Access audit data is personal data: IP addresses, User-Agents, route paths, timestamps, selected sanitized headers, response status, response size, and duration. Header values are redacted and truncated before storage.
+When `[access_log]` is enabled, route access events are stored in SQLite for 30 days by default. `logs/access.log` is a separate human-readable access log, not mixed with normal Loguru file logs. Access audit data is personal data: IP addresses, User-Agents, route paths, timestamps, selected sanitized headers, response status, response size, and duration. Header values are redacted and truncated before storage.
 
 `trusted_proxies` gates `CF-Connecting-IP`, `True-Client-IP`, `X-Forwarded-For`, and `X-Real-IP`. Defaults trust loopback plus RFC1918 Docker/LAN ranges for zero-config reverse proxy deployments. If the app is reachable directly from private or LAN clients, set exact reverse proxy IPs/CIDRs; otherwise clients can spoof those headers. The reverse proxy must overwrite or sanitize `X-Forwarded-For`; otherwise remove it from `real_ip_headers`.
 
@@ -498,7 +498,7 @@ enabled = false
 
 ## Design
 
-The service separates source refresh from route rendering. A source is responsible for turning one upstream subscription into cached proxy records. A route is responsible for combining cached records into the subscription output that a client needs. Provider YAML is the original and default output, while other route formats render through the same pipeline. This keeps upstream failures, client requests, and output formatting from blocking each other unnecessarily.
+The service separates source refresh from route rendering. A source turns one upstream subscription into cached proxy records. A route combines cached records into the subscription output a client needs. Provider YAML is the original and default output; other route formats render through the same pipeline. This keeps upstream failures, client requests, and output formatting from blocking each other.
 
 ```mermaid
 flowchart LR

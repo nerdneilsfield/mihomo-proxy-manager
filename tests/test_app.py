@@ -158,6 +158,23 @@ class FakeAccessAuditStore:
         self.disposed = True
 
 
+class FailingCacheStore:
+    async def get(self, source_name: str):
+        raise RuntimeError("cache read failed")
+
+    async def set(self, source_name: str, cache) -> None:
+        raise AssertionError("cache must not be written")
+
+    async def status(self, source_name: str):
+        raise AssertionError("cache must not be queried")
+
+    def set_refreshing(self, source_name: str, refreshing: bool) -> None:
+        raise AssertionError("refresh state must not change")
+
+    def cache_path(self, source_name: str) -> str | None:
+        return None
+
+
 class FakeRefresher:
     """模拟刷新器，记录被调用的源名称。
 
@@ -744,12 +761,7 @@ async def test_access_audit_records_success_route(tmp_path) -> None:
     assert event.path == path
     assert event.companion is None
     assert event.status_code == 200
-    assert event.target_format in {
-        "provider",
-        "surfboard",
-        "quantumult-x",
-        "xray-uri",
-    }
+    assert event.target_format == "provider"
     assert event.response_bytes == len(response.content)
     assert event.real_ip == "203.0.113.10"
     assert event.ip_source == "cf-connecting-ip"
@@ -813,9 +825,11 @@ async def test_access_audit_records_422_for_unsupported_nodes(tmp_path) -> None:
         response = client.get(path)
 
     assert response.status_code == 422
-    assert store.events[-1].route_name == "phone"
-    assert store.events[-1].path == path
-    assert store.events[-1].status_code == 422
+    assert len(store.events) == 1
+    event = store.events[0]
+    assert event.route_name == "phone"
+    assert event.path == path
+    assert event.status_code == 422
 
 
 @pytest.mark.asyncio
@@ -836,8 +850,34 @@ async def test_access_audit_records_503(tmp_path) -> None:
         response = client.get(path)
 
     assert response.status_code == 503
-    assert store.events[-1].route_name == "phone"
-    assert store.events[-1].status_code == 503
+    assert len(store.events) == 1
+    event = store.events[0]
+    assert event.route_name == "phone"
+    assert event.path == path
+    assert event.status_code == 503
+
+
+def test_access_audit_records_500_for_provider_exception(tmp_path) -> None:
+    config = load_config(config_file(tmp_path))
+    store = FakeAccessAuditStore()
+    app = create_app(
+        config,
+        cache_store=FailingCacheStore(),
+        refresher=None,
+        scheduler=None,
+        access_audit_store=store,
+    )
+    path = config.routes["phone"].path
+
+    with TestClient(app) as client:
+        with pytest.raises(RuntimeError, match="cache read failed"):
+            client.get(path)
+
+    assert len(store.events) == 1
+    event = store.events[0]
+    assert event.route_name == "phone"
+    assert event.path == path
+    assert event.status_code == 500
 
 
 @pytest.mark.asyncio

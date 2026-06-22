@@ -12,6 +12,7 @@ from collections import Counter
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
+from zoneinfo import ZoneInfo
 
 from loguru import logger
 
@@ -227,6 +228,7 @@ async def build_status(
 
     return {
         "generated_at": datetime.now(UTC).isoformat(),
+        "generated_at_local": datetime.now(ZoneInfo(config.server.timezone)).strftime("%Y-%m-%d %H:%M:%S %Z"),
         "summary": summary,
         "sources": sources,
         "routes": routes,
@@ -236,7 +238,7 @@ async def build_status(
 
 def _render_html(data: dict[str, Any]) -> str:
     """将状态字典渲染为美观的 HTML 页面。"""
-    generated = html.escape(str(data.get("generated_at", "")))
+    generated = html.escape(str(data.get("generated_at_local", data.get("generated_at", ""))))
     summary = data.get("summary", {})
     source_summary = summary.get("sources", {})
     route_summary = summary.get("routes", {})

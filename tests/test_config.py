@@ -898,6 +898,34 @@ sources = ["airport_a"]
     assert report.ok
 
 
+@pytest.mark.parametrize(
+    "user_agent",
+    (
+        "FlClash/v0.8.93 clash-verge Platform/macos",
+        "FlClash/v0.8.76 clash-verge Platform/android",
+        "clash-verge/v2.4.0",
+    ),
+)
+def test_validation_accepts_common_clash_client_user_agents(
+    temp_config_path: Path, user_agent: str
+) -> None:
+    body = f"""
+[http]
+user_agent = "{user_agent}"
+
+[sources.airport_a]
+url = "https://example.com/sub"
+
+[routes.phone]
+path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml"
+sources = ["airport_a"]
+"""
+    config = load_config(write_config(temp_config_path, body), validate=False)
+    report = config.validate(config_path=temp_config_path)
+
+    assert report.ok
+
+
 def test_file_mode_accepts_toml_integer(temp_config_path: Path) -> None:
     """测试文件模式接受 TOML 整数值。
 

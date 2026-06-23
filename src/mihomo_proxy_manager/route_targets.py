@@ -51,6 +51,8 @@ UA_SIGNALS = (
     ("quantumult x", "quantumult-x"),
     ("quantumult-x", "quantumult-x"),
     ("surfboard", "surfboard"),
+    ("shadowrocket", "provider"),
+    ("loon", "provider"),
     ("v2rayn", "xray-uri"),
     ("v2rayng", "xray-uri"),
     ("v2ray", "xray-uri"),

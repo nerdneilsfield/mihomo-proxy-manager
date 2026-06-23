@@ -247,7 +247,8 @@ def _sb_value(value: object) -> str:
 
 def _sb_label(value: object) -> str:
     """Sanitize Surfboard node and group labels."""
-    return _sb_value(value)
+    cleaned = re.sub(r"[\x00-\x1f\x7f,=\[\]：:，]+", " ", _string(value))
+    return " ".join(cleaned.split())
 
 
 def _sb_bool(value: object) -> str:
@@ -377,6 +378,7 @@ def _prepare_surfboard_records(
         "ss",
         "trojan",
         "vmess",
+        "hysteria2",
         "snell",
         "anytls",
         "http",
@@ -424,6 +426,7 @@ def _prepare_surfboard_records(
                     warning=warning,
                 )
             continue
+        normalized["name"] = _sb_label(normalized.get("name"))
         normalized_records.append(ProxyRecord(source=record.source, data=normalized))
     repaired = repair_duplicate_names(normalized_records)
     proxies = [
@@ -1355,6 +1358,7 @@ class SurfboardRenderer:
             "ss": _render_sb_ss,
             "trojan": _render_sb_trojan,
             "vmess": _render_sb_vmess,
+            "hysteria2": _render_sb_hysteria2,
             "snell": _render_sb_snell,
             "anytls": _render_sb_anytls,
             "http": _render_sb_http,

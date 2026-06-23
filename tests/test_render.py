@@ -1657,6 +1657,32 @@ def test_surfboard_renderer_skips_unsupported_nodes() -> None:
     assert response.warnings
 
 
+def test_surfboard_renderer_skips_hysteria2_nodes() -> None:
+    """Test Surfboard skips Hysteria2 nodes until client support is reliable."""
+    response = build_renderer_registry()["surfboard"].render(
+        RenderRequest(
+            surfboard_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "HY2 01",
+                        "type": "hysteria2",
+                        "server": "example.com",
+                        "port": 443,
+                        "password": "secret",
+                    },
+                )
+            ],
+            companion_public_urls={"nodes": "https://mpm.example.com/surfboard-nodes"},
+        )
+    )
+
+    assert response.status_code == 422
+    assert b"no supported nodes for surfboard output" in response.body
+    assert response.warnings
+
+
 def test_surfboard_renderer_warns_when_unknown_node_is_dropped() -> None:
     """Test Surfboard warns when normalization drops an unknown node."""
     response = build_renderer_registry()["surfboard"].render(
@@ -1795,8 +1821,8 @@ def test_surfboard_vmess_ws_tls_uses_documented_option_order() -> None:
     ) in text
 
 
-def test_surfboard_hysteria2_only_node_renders_profile_line() -> None:
-    """Test Surfboard renders Hysteria2 following the documented profile format."""
+def test_surfboard_hysteria2_only_node_is_skipped() -> None:
+    """Test Surfboard skips Hysteria2 when it is the only available node."""
     response = build_renderer_registry()["surfboard"].render(
         RenderRequest(
             surfboard_route(),
@@ -1823,17 +1849,9 @@ def test_surfboard_hysteria2_only_node_renders_profile_line() -> None:
         )
     )
 
-    text = response.body.decode("utf-8")
-    assert response.status_code == 200
-    assert "HY2 01 = hysteria2, example.com, 443" in text
-    assert "password=secret" in text
-    assert "download-bandwidth=100 Mbps" in text
-    assert "port-hopping=1234;5000-6000" in text
-    assert "port-hopping-interval=30" in text
-    assert "skip-cert-verify=true" in text
-    assert "sni=example.com" in text
-    assert "salamander-password=obfs-secret" in text
-    assert not any("hysteria2" in w and "skipping" in w for w in response.warnings)
+    assert response.status_code == 422
+    assert b"no supported nodes for surfboard output" in response.body
+    assert any("hysteria2" in w and "skipping" in w for w in response.warnings)
 
 
 def test_surfboard_full_profile_includes_all_client_compatible_protocols() -> None:
@@ -1947,25 +1965,24 @@ def test_surfboard_full_profile_includes_all_client_compatible_protocols() -> No
     assert "SS 01 = ss, ss.example.com, 443" in text
     assert "Trojan 01 = trojan, trojan.example.com, 443" in text
     assert "VMess 01 = vmess, vmess.example.com, 443" in text
-    assert "HY2 01 = hysteria2, hy2.example.com, 443" in text
     assert "Snell 01 = snell, snell.example.com, 443" in text
     assert "AnyTLS 01 = anytls, anytls.example.com, 443" in text
     assert "HTTP 01 = http, http.example.com, 8080" in text
     assert "SOCKS 01 = socks5, socks.example.com, 1080" in text
     assert (
-        "Auto = url-test, SS 01, Trojan 01, VMess 01, HY2 01, Snell 01, "
+        "Auto = url-test, SS 01, Trojan 01, VMess 01, Snell 01, "
         "AnyTLS 01, HTTP 01, SOCKS 01, "
         "policy-path=https://mpm.example.com/surfboard-nodes"
     ) in text
     assert (
-        "Proxy = select, SS 01, Trojan 01, VMess 01, HY2 01, Snell 01, "
+        "Proxy = select, SS 01, Trojan 01, VMess 01, Snell 01, "
         "AnyTLS 01, HTTP 01, SOCKS 01, "
         "policy-path=https://mpm.example.com/surfboard-nodes"
     ) in text
 
 
-def test_surfboard_hysteria2_mixed_with_supported_nodes_is_rendered() -> None:
-    """Test Surfboard renders Hysteria2 alongside supported nodes."""
+def test_surfboard_hysteria2_mixed_with_supported_nodes_is_skipped() -> None:
+    """Test Surfboard skips Hysteria2 alongside supported nodes."""
     response = build_renderer_registry()["surfboard"].render(
         RenderRequest(
             surfboard_route(),
@@ -2001,10 +2018,10 @@ def test_surfboard_hysteria2_mixed_with_supported_nodes_is_rendered() -> None:
     text = response.body.decode("utf-8")
     assert response.status_code == 200
     assert "SS 01 = ss, example.com, 443" in text
-    assert "HY2 Minimal = hysteria2, example.com, 443" in text
-    assert "download-bandwidth=50" in text
-    assert "udp-relay=false" in text
-    assert not any("hysteria2" in w and "skipping" in w for w in response.warnings)
+    assert "HY2 Minimal = hysteria2, example.com, 443" not in text
+    assert "download-bandwidth=50" not in text
+    assert "udp-relay=false" not in text
+    assert any("hysteria2" in w and "skipping" in w for w in response.warnings)
 
 
 def test_surfboard_trojan_ws_maps_path_and_multi_headers() -> None:

@@ -479,7 +479,6 @@ format = "surfboard"
 SS 01 = ss, example.com, 443, encrypt-method=chacha20-ietf-poly1305, password=password
 VMess 01 = vmess, example.com, 443, username=00000000-0000-0000-0000-000000000000, ws=true, tls=true, ws-path=/ws, ws-headers=Host:example.com, sni=example.com
 Trojan 01 = trojan, example.com, 443, password=password, skip-cert-verify=false, sni=example.com
-HY2 01 = hysteria2, example.com, 443, password=secret, download-bandwidth=100 Mbps, sni=example.com
 Snell 01 = snell, example.com, 443, psk=psk-secret, version=4
 AnyTLS 01 = anytls, example.com, 443, anytls-secret, sni=example.com
 HTTP 01 = http, example.com, 8080, user, pass
@@ -507,7 +506,7 @@ FINAL,Main
 
 The main group is always `Main = select, Auto, Proxy, DIRECT`; the rule tail is `FINAL,Main`. The nodes companion uses the same route access policy as the main route.
 
-Client-compatible protocols are `ss`, `vmess`, `trojan`, `hysteria2`, `snell`, `anytls`, `http`, and `socks5`. VLESS is skipped because Surfboard does not document VLESS support. WireGuard is deferred because it requires a multi-section `[WireGuard Section]` configuration block that cannot be rendered as a single proxy line. Nodes using unsupported security-critical fields such as `reality-opts`, `ech-opts`, `flow`, or client TLS `fingerprint` are skipped; if every node is skipped, the route returns HTTP 422 with `no supported nodes for surfboard output`.
+Client-compatible protocols are `ss`, `vmess`, `trojan`, `snell`, `anytls`, `http`, and `socks5`. Hysteria2 and VLESS are skipped for Surfboard until reliable client support is validated. WireGuard is deferred because it requires a multi-section `[WireGuard Section]` configuration block that cannot be rendered as a single proxy line. Nodes using unsupported security-critical fields such as `reality-opts`, `ech-opts`, `flow`, or client TLS `fingerprint` are skipped; if every node is skipped, the route returns HTTP 422 with `no supported nodes for surfboard output`.
 
 ### Field Mapping Notes
 
@@ -516,8 +515,8 @@ Client-compatible protocols are `ss`, `vmess`, `trojan`, `hysteria2`, `snell`, `
 | `name` | left side before `=` | Escape commas and line breaks; avoid duplicate names. |
 | `ss.cipher` | `encrypt-method=` | Shadowsocks only. |
 | `uuid` | `username=` | VMess. VLESS is skipped because Surfboard does not document VLESS support. |
-| `password` | `password=` or positional | SS/Trojan/Hysteria2 use `password=`; AnyTLS/HTTP/SOCKS5 use positional value after port. |
-| `udp` / `udp-relay` | `udp-relay=` | Emitted for SS, VMess, Trojan, Hysteria2, and Snell when present. |
+| `password` | `password=` or positional | SS/Trojan use `password=`; AnyTLS/HTTP/SOCKS5 use positional value after port. |
+| `udp` / `udp-relay` | `udp-relay=` | Emitted for SS, VMess, Trojan, and Snell when present. |
 | `network = ws` | `ws=true`, `ws-path=`, `ws-headers=` | `ws-headers` uses `Header:value` pairs; multiple headers use `|` in examples. |
 | TLS enabled | `tls=true` or protocol-specific TLS defaults | VMess uses `tls=true`; Trojan is TLS-based. HTTP becomes `https`; SOCKS5 becomes `socks5-tls`. |
 | `sni` | `sni=` | Preserve if present. |

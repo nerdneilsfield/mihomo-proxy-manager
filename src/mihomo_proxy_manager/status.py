@@ -62,6 +62,19 @@ def _select_fields(
     ]
 
 
+def _refresh_metrics(status: Any) -> dict[str, int | float]:
+    attempts = int(status.refresh_attempt_count)
+    successes = int(status.refresh_success_count)
+    failures = int(status.refresh_failure_count)
+    return {
+        "refresh_attempt_count": attempts,
+        "refresh_success_count": successes,
+        "refresh_failure_count": failures,
+        "refresh_success_rate": successes / attempts if attempts else 0.0,
+        "refresh_failure_rate": failures / attempts if attempts else 0.0,
+    }
+
+
 async def _access_status(
     config: AppConfig, access_audit_store: AccessStatsStore | None
 ) -> dict[str, Any]:
@@ -158,6 +171,7 @@ async def build_status(
                     if status.last_error
                     else None,
                     "refreshing": status.refreshing,
+                    **_refresh_metrics(status),
                     "healthy": False,
                 }
             )
@@ -179,6 +193,7 @@ async def build_status(
                 if status.last_error
                 else None,
                 "refreshing": status.refreshing,
+                **_refresh_metrics(status),
                 "healthy": _is_still_valid(cache, config.cache.max_stale),
             }
         )
@@ -269,6 +284,36 @@ def _render_html(data: dict[str, Any]) -> str:
             node_count = source.get("node_count", 0)
             protocols = _pills(source.get("protocols", {}))
             last_success = html.escape(str(source.get("last_success_at") or "-"))
+            refresh_attempts = html.escape(
+                str(source.get("refresh_attempt_count", 0))
+            )
+            refresh_successes = html.escape(
+                str(source.get("refresh_success_count", 0))
+            )
+            refresh_failures = html.escape(
+                str(source.get("refresh_failure_count", 0))
+            )
+            refresh_total = int(source.get("refresh_attempt_count", 0) or 0)
+            refresh_success_rate = float(
+                source.get(
+                    "refresh_success_rate",
+                    (int(source.get("refresh_success_count", 0) or 0) / refresh_total)
+                    if refresh_total
+                    else 0.0,
+                )
+            )
+            refresh_failure_rate = float(
+                source.get(
+                    "refresh_failure_rate",
+                    (int(source.get("refresh_failure_count", 0) or 0) / refresh_total)
+                    if refresh_total
+                    else 0.0,
+                )
+            )
+            refresh_rates = (
+                f"{refresh_success_rate:.1%} success · "
+                f"{refresh_failure_rate:.1%} failed"
+            )
             last_error = source.get("last_error")
             error_block = ""
             if last_error:
@@ -286,6 +331,8 @@ def _render_html(data: dict[str, Any]) -> str:
                     <div class="metric-label">nodes</div>
                   </div>
                   <div class="detail"><span class="detail-label">Protocols</span>{protocols}</div>
+                  <div class="detail"><span class="detail-label">Refreshes</span>{refresh_attempts} total · {refresh_successes} success · {refresh_failures} failed</div>
+                  <div class="detail"><span class="detail-label">Refresh Rate</span>{html.escape(refresh_rates)}</div>
                   <div class="detail"><span class="detail-label">Last Success</span>{last_success}</div>
                   {error_block}
                 </div>

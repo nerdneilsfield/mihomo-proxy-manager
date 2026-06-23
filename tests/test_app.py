@@ -308,6 +308,9 @@ async def test_status_endpoint_returns_source_states(tmp_path) -> None:
                 ProxyRecord("airport_a", {"name": "HK", "type": "vmess"}),
                 ProxyRecord("airport_a", {"name": "JP", "type": "vmess"}),
             ),
+            7,
+            5,
+            2,
         ),
     )
     app = create_app(config, cache_store=store, refresher=None, scheduler=None)
@@ -320,6 +323,11 @@ async def test_status_endpoint_returns_source_states(tmp_path) -> None:
     assert data["sources"][0]["source"] == "airport_a"
     assert data["sources"][0]["node_count"] == 2
     assert data["sources"][0]["last_error"] is None
+    assert data["sources"][0]["refresh_attempt_count"] == 7
+    assert data["sources"][0]["refresh_success_count"] == 5
+    assert data["sources"][0]["refresh_failure_count"] == 2
+    assert data["sources"][0]["refresh_success_rate"] == pytest.approx(5 / 7)
+    assert data["sources"][0]["refresh_failure_rate"] == pytest.approx(2 / 7)
 
 
 @pytest.mark.asyncio
@@ -1626,6 +1634,38 @@ def test_status_html_renders_access_stats() -> None:
     assert "&lt;US&gt;" in html_text
     assert "<US>" not in html_text
     assert "headers_json" not in html_text
+
+
+def test_status_html_renders_source_refresh_counts() -> None:
+    html_text = render_status_html(
+        {
+            "generated_at": "...",
+            "summary": {},
+            "sources": [
+                {
+                    "source": "airport_a",
+                    "node_count": 2,
+                    "protocols": {"vmess": 2},
+                    "last_success_at": "2026-06-22T00:00:00+00:00",
+                    "last_error": None,
+                    "refreshing": False,
+                    "healthy": True,
+                    "refresh_attempt_count": 7,
+                    "refresh_success_count": 5,
+                    "refresh_failure_count": 2,
+                }
+            ],
+            "routes": [],
+            "access": {"enabled": False},
+        }
+    )
+
+    assert "Refreshes" in html_text
+    assert "7 total" in html_text
+    assert "5 success" in html_text
+    assert "2 failed" in html_text
+    assert "71.4% success" in html_text
+    assert "28.6% failed" in html_text
 
 
 @pytest.mark.asyncio

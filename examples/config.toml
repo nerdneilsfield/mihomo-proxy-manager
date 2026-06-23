@@ -205,7 +205,7 @@ exclude = "倍率|测试|Traffic"
 # Patterns use shell-style glob (fnmatch), case-sensitive.
 # Empty list or omitted = open to all.
 [routes.phone.access]
-user_agent = ["mihomo/*", "clash-meta/*", "clash.meta/*"]
+user_agent = ["mihomo/*", "clash-meta/*", "clash.meta/*", "FlClash/*", "clash-verge/*"]
 
 # Route for a gateway: require every source and keep only selected regions.
 [routes.gateway]

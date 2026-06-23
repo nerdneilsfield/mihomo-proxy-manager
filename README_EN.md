@@ -147,7 +147,7 @@ Configuration is written in TOML. A useful config usually has four parts:
 - `[routes.*]`: subscription routes exposed to clients and the sources each route uses.
 - `[security]`: hidden path entropy and private-network URL policy.
 
-**Important: `user_agent` must use `clash-meta/<version>`, `clash.meta/<version>`, or `mihomo/<version>`. Other formats are rejected. The example uses `mihomo/1.19.5`, a real released Mihomo version. Do not use the project name or a placeholder string — some subscription providers change behavior based on the User-Agent.**
+**Important: `user_agent` must use a known Clash/Mihomo client format, such as `clash-meta/<version>`, `clash.meta/<version>`, `mihomo/<version>`, `FlClash/v<version>`, or `clash-verge/v<version>`. The example uses `mihomo/1.19.5`, a real released Mihomo version. Do not use the project name or a placeholder string — some subscription providers change behavior based on the User-Agent.**
 
 <details open>
 <summary>Common configuration snippet</summary>
@@ -538,7 +538,7 @@ DNS servers may use `udp://`, `tcp://`, `tls://`, or `https://`. The DNS server 
 
 ```toml
 [routes.phone.access]
-user_agent = ["mihomo/*", "clash-meta/*", "clash.meta/*"]
+user_agent = ["mihomo/*", "clash-meta/*", "clash.meta/*", "FlClash/*", "clash-verge/*"]
 ```
 
 Patterns are matched case-sensitively using shell-style glob (`fnmatch`). When unset or empty, the route stays open. Access control applies only to configured subscription routes, including main route paths and companion paths such as `-nodes` and `-import`; system endpoints such as `/healthz` are unaffected.

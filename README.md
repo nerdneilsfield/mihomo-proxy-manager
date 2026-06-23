@@ -147,7 +147,7 @@ mpm serve -c /app/config.toml
 - `[routes.*]`：对客户端暴露的订阅路径，以及这个 route 使用哪些 source。
 - `[security]`：隐藏路径熵、私网 URL 访问等安全约束。
 
-**注意：`user_agent` 必须写成 `clash-meta/<version>`、`clash.meta/<version>` 或 `mihomo/<version>`，其他格式一律拒绝。示例使用 `mihomo/1.19.5`，这是 Mihomo 已发布过的真实版本。不要填项目名或占位字符串——不少订阅源会根据 User-Agent 判断客户端类型。**
+**注意：`user_agent` 必须写成已知 Clash/Mihomo 客户端格式，例如 `clash-meta/<version>`、`clash.meta/<version>`、`mihomo/<version>`、`FlClash/v<version>` 或 `clash-verge/v<version>`。示例使用 `mihomo/1.19.5`，这是 Mihomo 已发布过的真实版本。不要填项目名或占位字符串——不少订阅源会根据 User-Agent 判断客户端类型。**
 
 <details open>
 <summary>常用配置片段</summary>
@@ -532,7 +532,7 @@ DNS 服务器支持 `udp://`、`tcp://`、`tls://`、`https://` 四种 scheme，
 
 ```toml
 [routes.phone.access]
-user_agent = ["mihomo/*", "clash-meta/*", "clash.meta/*"]
+user_agent = ["mihomo/*", "clash-meta/*", "clash.meta/*", "FlClash/*", "clash-verge/*"]
 ```
 
 匹配使用大小写敏感的 shell glob（`fnmatch`）。未配置或配置为空列表时保持开放。仅作用于已配置的订阅路由，包括主 route path 及其 companion path，例如 `-nodes` 和 `-import`；不影响 `/healthz` 等系统端点。

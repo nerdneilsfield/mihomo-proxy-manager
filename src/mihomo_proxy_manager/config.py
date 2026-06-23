@@ -55,7 +55,11 @@ from .models import (
 
 DEFAULT_USER_AGENT = "mihomo/1.19.5"
 USER_AGENT_PATTERN = re.compile(
-    r"^(?:clash[.-]meta|mihomo)/\d+(?:\.\d+){1,3}(?:[-+][A-Za-z0-9._-]+)?$"
+    r"^(?:(?:clash[.-]meta|mihomo)/\d+(?:\.\d+){1,3}"
+    r"|(?:flclash|clash-verge)/v?\d+(?:\.\d+){1,3})"
+    r"(?:[-+][A-Za-z0-9._-]+)?"
+    r"(?:\s+[A-Za-z][A-Za-z0-9._-]*(?:/[A-Za-z0-9._-]+)?)*$",
+    re.IGNORECASE,
 )
 
 DNS_FAILURES = {"keep", "drop", "fail"}
@@ -391,15 +395,16 @@ def _fetch(
 
 
 def _validate_user_agent(value: str, *, label: str) -> str | None:
-    """验证 User-Agent 是否是允许的 Mihomo/Clash Meta 客户端格式。
+    """验证 User-Agent 是否是允许的 Mihomo/Clash 客户端格式。
 
-    Validate that a User-Agent uses the allowed Mihomo/Clash Meta client format.
+    Validate that a User-Agent uses the allowed Mihomo/Clash client format.
     """
     if USER_AGENT_PATTERN.fullmatch(value.strip()):
         return None
     return (
         f"{label} user_agent must use 'clash-meta/<version>', "
-        f"'clash.meta/<version>', or 'mihomo/<version>'; got {value!r}"
+        f"'clash.meta/<version>', 'mihomo/<version>', "
+        f"'FlClash/v<version>', or 'clash-verge/v<version>'; got {value!r}"
     )
 
 

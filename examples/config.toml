@@ -49,6 +49,10 @@ compression = "gz"
 # requests are hidden by default. The HTML dashboard is at status_path and the
 # JSON API is at status_path + "/api"; both include access aggregates when
 # [access_log.status] enabled = true.
+# Source refresh stats are always part of the status response: attempts,
+# successes, failures, success/failure rates, last attempt, last success, and
+# last error. 304 not-modified counts as success; refresh lock timeout and
+# in-flight timeout count as failure.
 [access_log]
 enabled = true
 db_path = "data/access/access.sqlite3"
@@ -71,6 +75,8 @@ stats_max_rows = 5000
 
 [access_log.status]
 enabled = true
+# true masks status-page IPs as IPv4 /24 and IPv6 /64 networks.
+# Set false only if you intentionally want exact IPs on the status page/API.
 mask_ips = true
 include_recent = false
 recent_limit = 20

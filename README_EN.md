@@ -49,7 +49,7 @@ The project solves a practical problem: raw subscription URLs rarely suit every 
 - `before_fetch` HTTP Action plugin hook.
 - Route-level User-Agent access control.
 - SQLite access audit, separate human-readable access log, status-page access stats, and IP/header aggregates.
-- HTML status dashboard plus `{status_path}/api` JSON API.
+- HTML status dashboard plus `{status_path}/api` JSON API; each source shows refresh attempts, successes, failures, and success/failure rates.
 - Private-network URLs, redirect count, and response size limited by default.
 
 ## Current Capability Matrix
@@ -293,7 +293,7 @@ exclude = "倍率|测试"
 | `access_log.real_ip_headers` | Real-IP header priority. Defaults to `cf-connecting-ip`, `true-client-ip`, `x-forwarded-for`, and `x-real-ip`. |
 | `access_log.file.*` | Separate human-readable access log, independent from normal app logs. |
 | `access_log.headers.stats_allowlist` | Headers to aggregate on the status page. Do not include tokens or high-entropy private headers. |
-| `access_log.status.*` | Status-page access stats controls: IP masking, recent rows, and top-list length. |
+| `access_log.status.*` | Status-page access stats controls: IP masking, recent rows, and top-list length. Source refresh counters are not controlled by this switch. |
 | `http.max_response_size` | Maximum upstream response size. |
 | `http.max_redirects` | Maximum redirect count for subscription downloads and plugin requests. |
 | `scheduler.startup_refresh_mode` | `background` starts serving first; `blocking` waits for startup refreshes first. |
@@ -435,7 +435,7 @@ test_url = "http://www.gstatic.com/generate_204"
 | `provider` | Mihomo provider YAML | none | Mihomo / Clash Meta `proxy-providers` | Emits Mihomo proxy dictionaries. |
 | `xray-uri` | URI subscription, base64 by default | none | v2rayN / v2rayNG / Xray-style clients | `ss`, `vmess`, `vless`, `trojan`, `hysteria2`. |
 | `quantumult-x` | Quantumult X server lines | `-import` | Quantumult X | Common `ss`, `vmess`, `trojan`, `vless`, `http`, `socks5`, and `anytls` fields; incompatible nodes are skipped. |
-| `surfboard` | Minimal full profile | `-nodes` | Surfboard | Client-compatible `ss`, `vmess`, `trojan`, `hysteria2`, `snell`, `anytls`, `http`, `socks5`; `vless` and `wireguard` are skipped. |
+| `surfboard` | Minimal full profile | `-nodes` | Surfboard | Client-compatible `ss`, `vmess`, `trojan`, `snell`, `anytls`, `http`, `socks5`; `hysteria2`, `vless`, and `wireguard` are skipped. |
 
 `xray-uri` is directly subscribable by v2rayN-style clients. The default is `encoding = "base64"`; use `plain` for debugging. The renderer preserves common reality, vision, TLS, SNI, WebSocket, and gRPC fields when the target format supports them. Nodes that cannot be rendered for the target client are skipped and logged as warnings.
 
@@ -566,7 +566,9 @@ Only matched subscription routes are recorded: success, 403, 400, 422, 503, and 
 
 The human-readable access log writes one request per line with `ip=`, `ip_source=`, `method=`, `path=`, `route_name=`, `target=`, `status=`, `bytes=`, `duration_ms=`, `ua=`, and `headers=` fields. Use it for debugging real client traffic; SQLite powers aggregate status stats.
 
-The status page shows aggregate stats only; full `headers_json` is never shown. Access stats appear in the `status_path` HTML dashboard and `{status_path}/api` JSON: total events, retention, top IPs, top User-Agents, top headers, top paths, and optional recent rows. IPs are masked in status by default, recent rows are hidden by default, and recent rows still exclude full headers. Keep `status_path` high entropy and non-public, and do not allowlist high-entropy private headers in `access_log.headers.stats_allowlist`.
+The status page shows each source's node count, protocol distribution, refresh attempts, successful refreshes, failed refreshes, success/failure rates, last attempt time, last success time, and last error. Refresh counters are persisted in the source cache JSON and survive restarts; legacy cache files without counter fields load as zero. Real refresh success and 304 not-modified count as success. Fetch, plugin, parse, DNS, and transform failures count as failure. Refresh lock timeout and in-flight timeout also count as failure. If the cache itself is too corrupted to read, refresh still returns a normal failed result and clears the refreshing state; failure-counter persistence is best-effort and never allowed to break the main refresh path.
+
+Access stats show aggregates only; full `headers_json` is never shown. Access stats appear in the `status_path` HTML dashboard and `{status_path}/api` JSON: total events, retention, top IPs, top User-Agents, top headers, top paths, and optional recent rows. IPs are masked in status by default: IPv4 appears as a `/24` network and IPv6 appears as a `/64` network. To show real IPs, set `[access_log.status] mask_ips = false`. Recent rows are hidden by default and still exclude full headers. Keep `status_path` high entropy and non-public, and do not allowlist high-entropy private headers in `access_log.headers.stats_allowlist`.
 
 SQLite stats queries are bounded: Top IP/User-Agent/Path use SQL `LIMIT`, and header stats read at most `stats_max_rows` rows before Python-side aggregation. High-traffic deployments should still use reverse-proxy rate limits, status-path access control, and disk monitoring.
 

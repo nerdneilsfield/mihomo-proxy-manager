@@ -611,6 +611,43 @@ async def test_auto_route_user_agent_selection_and_case_insensitivity(tmp_path) 
 
 
 @pytest.mark.asyncio
+async def test_auto_route_real_client_user_agents(tmp_path) -> None:
+    config = auto_app_config(tmp_path, auto_default="surfboard")
+    store = JsonSourceCacheStore(config.cache)
+    await store.set("airport_a", source_cache_with_nodes(ss_node()))
+    app = create_app(config, cache_store=store, refresher=None, scheduler=None)
+    path = config.routes["phone"].path
+
+    with TestClient(app) as client:
+        qx = client.get(
+            path,
+            headers={"User-Agent": "Quantumult%20X/1.6.0 (iPhone16,2; iOS 26.6)"},
+        )
+        loon = client.get(
+            path,
+            headers={"User-Agent": "Loon/962 CFNetwork/3860.600.12 Darwin/25.6.0"},
+        )
+        shadowrocket = client.get(
+            path,
+            headers={
+                "User-Agent": (
+                    "Shadowrocket/3308 CFNetwork/3860.600.12 Darwin/25.6.0 iPhone16,2"
+                )
+            },
+        )
+        flclash = client.get(
+            path,
+            headers={"User-Agent": "FlClash/v0.8.92 clash-verge Platform/macos"},
+        )
+
+    assert qx.text.startswith("shadowsocks=example.com:443,")
+    assert "tag=SS 01" in qx.text
+    for response in (loon, shadowrocket, flclash):
+        assert response.headers["content-type"].startswith("application/yaml")
+        assert "proxies:" in response.text
+
+
+@pytest.mark.asyncio
 async def test_auto_route_companion_suffix_beats_user_agent_when_query_auto(
     tmp_path,
 ) -> None:

@@ -1657,8 +1657,8 @@ def test_surfboard_renderer_skips_unsupported_nodes() -> None:
     assert response.warnings
 
 
-def test_surfboard_renderer_skips_hysteria2_nodes() -> None:
-    """Test Surfboard skips Hysteria2 nodes until client support is reliable."""
+def test_surfboard_renderer_renders_hysteria2_nodes() -> None:
+    """Test Surfboard renders Hysteria2 nodes with documented syntax."""
     response = build_renderer_registry()["surfboard"].render(
         RenderRequest(
             surfboard_route(),
@@ -1678,9 +1678,10 @@ def test_surfboard_renderer_skips_hysteria2_nodes() -> None:
         )
     )
 
-    assert response.status_code == 422
-    assert b"no supported nodes for surfboard output" in response.body
-    assert response.warnings
+    text = response.body.decode("utf-8")
+    assert response.status_code == 200
+    assert "HY2 01 = hysteria2, example.com, 443, password=secret" in text
+    assert response.warnings == ()
 
 
 def test_surfboard_renderer_warns_when_unknown_node_is_dropped() -> None:
@@ -1821,8 +1822,8 @@ def test_surfboard_vmess_ws_tls_uses_documented_option_order() -> None:
     ) in text
 
 
-def test_surfboard_hysteria2_only_node_is_skipped() -> None:
-    """Test Surfboard skips Hysteria2 when it is the only available node."""
+def test_surfboard_hysteria2_only_node_renders_documented_fields() -> None:
+    """Test Surfboard Hysteria2 maps documented optional fields."""
     response = build_renderer_registry()["surfboard"].render(
         RenderRequest(
             surfboard_route(),
@@ -1849,9 +1850,15 @@ def test_surfboard_hysteria2_only_node_is_skipped() -> None:
         )
     )
 
-    assert response.status_code == 422
-    assert b"no supported nodes for surfboard output" in response.body
-    assert any("hysteria2" in w and "skipping" in w for w in response.warnings)
+    text = response.body.decode("utf-8")
+    assert response.status_code == 200
+    assert (
+        "HY2 01 = hysteria2, example.com, 443, password=secret, "
+        "download-bandwidth=100 Mbps, port-hopping=1234;5000-6000, "
+        "port-hopping-interval=30, skip-cert-verify=true, sni=example.com, "
+        "salamander-password=obfs-secret"
+    ) in text
+    assert response.warnings == ()
 
 
 def test_surfboard_full_profile_includes_all_client_compatible_protocols() -> None:
@@ -1965,24 +1972,25 @@ def test_surfboard_full_profile_includes_all_client_compatible_protocols() -> No
     assert "SS 01 = ss, ss.example.com, 443" in text
     assert "Trojan 01 = trojan, trojan.example.com, 443" in text
     assert "VMess 01 = vmess, vmess.example.com, 443" in text
+    assert "HY2 01 = hysteria2, hy2.example.com, 443" in text
     assert "Snell 01 = snell, snell.example.com, 443" in text
     assert "AnyTLS 01 = anytls, anytls.example.com, 443" in text
     assert "HTTP 01 = http, http.example.com, 8080" in text
     assert "SOCKS 01 = socks5, socks.example.com, 1080" in text
     assert (
-        "Auto = url-test, SS 01, Trojan 01, VMess 01, Snell 01, "
+        "Auto = url-test, SS 01, Trojan 01, VMess 01, HY2 01, Snell 01, "
         "AnyTLS 01, HTTP 01, SOCKS 01, "
         "policy-path=https://mpm.example.com/surfboard-nodes"
     ) in text
     assert (
-        "Proxy = select, SS 01, Trojan 01, VMess 01, Snell 01, "
+        "Proxy = select, SS 01, Trojan 01, VMess 01, HY2 01, Snell 01, "
         "AnyTLS 01, HTTP 01, SOCKS 01, "
         "policy-path=https://mpm.example.com/surfboard-nodes"
     ) in text
 
 
-def test_surfboard_hysteria2_mixed_with_supported_nodes_is_skipped() -> None:
-    """Test Surfboard skips Hysteria2 alongside supported nodes."""
+def test_surfboard_hysteria2_mixed_with_supported_nodes_is_rendered() -> None:
+    """Test Surfboard keeps Hysteria2 alongside other supported nodes."""
     response = build_renderer_registry()["surfboard"].render(
         RenderRequest(
             surfboard_route(),
@@ -2018,10 +2026,10 @@ def test_surfboard_hysteria2_mixed_with_supported_nodes_is_skipped() -> None:
     text = response.body.decode("utf-8")
     assert response.status_code == 200
     assert "SS 01 = ss, example.com, 443" in text
-    assert "HY2 Minimal = hysteria2, example.com, 443" not in text
-    assert "download-bandwidth=50" not in text
-    assert "udp-relay=false" not in text
-    assert any("hysteria2" in w and "skipping" in w for w in response.warnings)
+    assert "HY2 Minimal = hysteria2, example.com, 443" in text
+    assert "download-bandwidth=50" in text
+    assert "udp-relay=false" in text
+    assert response.warnings == ()
 
 
 def test_surfboard_trojan_ws_maps_path_and_multi_headers() -> None:
@@ -2172,7 +2180,7 @@ def test_surfboard_ss_plugin_unsupported_warns_when_mixed() -> None:
 
 
 def test_surfboard_renderer_sanitizes_node_names() -> None:
-    """Test Surfboard labels avoid comma/control characters."""
+    """Test Surfboard labels avoid profile delimiters and control characters."""
     response = build_renderer_registry()["surfboard"].render(
         RenderRequest(
             surfboard_route(),
@@ -2180,7 +2188,7 @@ def test_surfboard_renderer_sanitizes_node_names() -> None:
                 ProxyRecord(
                     "airport_a",
                     {
-                        "name": "HK, 01\n",
+                        "name": "[HK], 01 = Premium\n",
                         "type": "ss",
                         "server": "example.com",
                         "port": 443,
@@ -2194,12 +2202,80 @@ def test_surfboard_renderer_sanitizes_node_names() -> None:
     )
 
     text = response.body.decode("utf-8")
-    proxy_line = next(line for line in text.splitlines() if line.startswith("HK "))
+    proxy_line = next(
+        line for line in text.splitlines() if line.startswith("HK 01 Premium")
+    )
     auto_line = next(line for line in text.splitlines() if line.startswith("Auto ="))
-    assert proxy_line.startswith("HK 01 = ss,")
-    assert "HK, 01" not in proxy_line
-    assert "HK, 01" not in auto_line
+    assert proxy_line.startswith("HK 01 Premium = ss,")
+    assert "[HK], 01 = Premium" not in proxy_line
+    assert "[HK], 01 = Premium" not in auto_line
     assert "\n" not in proxy_line
+
+
+def test_surfboard_renderer_sanitizes_provider_stat_names() -> None:
+    """Test Surfboard labels handle provider traffic-info names."""
+    response = build_renderer_registry()["surfboard"].render(
+        RenderRequest(
+            surfboard_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "PROVIDER]流量统计：1234.56 GB",
+                        "type": "hysteria2",
+                        "server": "hy2.example.com",
+                        "port": 443,
+                        "password": "secret",
+                    },
+                )
+            ],
+            companion="nodes",
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert response.status_code == 200
+    assert "PROVIDER 流量统计 1234.56 GB = hysteria2, hy2.example.com, 443" in text
+    assert "PROVIDER]流量统计：1234.56 GB" not in text
+
+
+def test_surfboard_renderer_repairs_names_after_sanitizing() -> None:
+    """Test Surfboard repairs duplicate names created by label sanitizing."""
+    response = build_renderer_registry()["surfboard"].render(
+        RenderRequest(
+            surfboard_route(),
+            [
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "HK,01",
+                        "type": "ss",
+                        "server": "a.example.com",
+                        "port": 443,
+                        "cipher": "chacha20-ietf-poly1305",
+                        "password": "password",
+                    },
+                ),
+                ProxyRecord(
+                    "airport_a",
+                    {
+                        "name": "HK=01",
+                        "type": "ss",
+                        "server": "b.example.com",
+                        "port": 443,
+                        "cipher": "chacha20-ietf-poly1305",
+                        "password": "password",
+                    },
+                ),
+            ],
+            companion="nodes",
+        )
+    )
+
+    text = response.body.decode("utf-8")
+    assert response.status_code == 200
+    assert "HK 01 = ss, a.example.com, 443" in text
+    assert "HK 01 #2 = ss, b.example.com, 443" in text
 
 
 def test_surfboard_snell_renders_with_psk_and_obfs() -> None:

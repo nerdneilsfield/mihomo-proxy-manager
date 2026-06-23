@@ -693,6 +693,71 @@ async def test_refresher_rewrites_cache_timestamps_on_304_not_modified(
 
 
 @pytest.mark.asyncio
+async def test_refresh_persists_attempt_success_and_failure_counts(
+    tmp_path: Path,
+) -> None:
+    """Test refresh counters persist across success and failure outcomes."""
+    store = JsonSourceCacheStore(
+        CacheConfig(tmp_path, 2, 0o600, max_stale=timedelta(days=7))
+    )
+    refresher = SourceRefresher(
+        sources={"src": _source("src")},
+        plugins={},
+        cache_store=store,
+        fetcher=FailingAfterFirstFetcher(_proxy_yaml(), "raise"),
+        http_plugin=None,
+        refresh_lock_timeout=timedelta(seconds=1),
+    )
+
+    success = await refresher.refresh("src")
+    first = await store.get("src")
+    failure = await refresher.refresh("src")
+    second = await store.get("src")
+
+    assert success.ok is True
+    assert failure.ok is False
+    assert first is not None
+    assert first.refresh_attempt_count == 1
+    assert first.refresh_success_count == 1
+    assert first.refresh_failure_count == 0
+    assert second is not None
+    assert second.refresh_attempt_count == 2
+    assert second.refresh_success_count == 1
+    assert second.refresh_failure_count == 1
+
+
+@pytest.mark.asyncio
+async def test_refresh_lock_timeout_persists_failure_count(tmp_path: Path) -> None:
+    """Test lock timeout is counted as a failed refresh attempt."""
+    store = JsonSourceCacheStore(
+        CacheConfig(tmp_path, 2, 0o600, max_stale=timedelta(days=7))
+    )
+    refresher = SourceRefresher(
+        sources={"src": _source("src")},
+        plugins={},
+        cache_store=store,
+        fetcher=StaticFetcher(_proxy_yaml()),
+        http_plugin=None,
+        refresh_lock_timeout=timedelta(milliseconds=10),
+    )
+    lock = refresher._lock("src")
+    await lock.acquire()
+    try:
+        result = await refresher.refresh("src")
+    finally:
+        lock.release()
+    cache = await store.get("src")
+
+    assert result.ok is False
+    assert cache is not None
+    assert cache.refresh_attempt_count == 1
+    assert cache.refresh_success_count == 0
+    assert cache.refresh_failure_count == 1
+    assert cache.last_error is not None
+    assert "refresh lock timeout" in cache.last_error
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("require_all_sources", [True, False])
 async def test_route_refresh_wait_timeout_is_respected(
     tmp_path: Path, require_all_sources: bool
@@ -804,6 +869,36 @@ async def test_inflight_dedup_shares_single_fetch(tmp_path: Path) -> None:
     assert first.ok
     assert second.ok
     assert fetcher.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_inflight_timeout_failure_count_survives_later_success(
+    tmp_path: Path,
+) -> None:
+    """Test an in-flight timeout failure is not overwritten by later success."""
+    store = JsonSourceCacheStore(
+        CacheConfig(tmp_path, 2, 0o600, max_stale=timedelta(days=7))
+    )
+    refresher = SourceRefresher(
+        sources={"src": _source("src")},
+        plugins={},
+        cache_store=store,
+        fetcher=SlowFetcher(0.05),
+        http_plugin=None,
+        refresh_lock_timeout=timedelta(milliseconds=5),
+    )
+
+    first, second = await asyncio.gather(
+        refresher.refresh("src"), refresher.refresh("src")
+    )
+    cache = await store.get("src")
+
+    assert first.ok is True
+    assert second.ok is False
+    assert cache is not None
+    assert cache.refresh_attempt_count == 2
+    assert cache.refresh_success_count == 1
+    assert cache.refresh_failure_count == 1
 
 
 @pytest.mark.asyncio

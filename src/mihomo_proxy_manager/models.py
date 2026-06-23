@@ -429,6 +429,9 @@ class SourceCache:
     warnings: tuple[str, ...]
     last_error: str | None
     proxies: tuple[ProxyRecord, ...]
+    refresh_attempt_count: int = 0
+    refresh_success_count: int = 0
+    refresh_failure_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -444,3 +447,6 @@ class SourceStatus:
     node_count: int
     last_error: str | None
     refreshing: bool = False
+    refresh_attempt_count: int = 0
+    refresh_success_count: int = 0
+    refresh_failure_count: int = 0

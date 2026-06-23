@@ -120,10 +120,13 @@ class SourceRefresher:
                 logger.warning(
                     "refresh inflight timeout: source={source}", source=source_name
                 )
+                error = "in-flight refresh timed out; stale cache may be used if still within max_stale"
+                await self._record_failed_attempt(source_name, error)
                 return RefreshResult(
                     False,
                     source_name,
-                    error="in-flight refresh timed out; stale cache may be used if still within max_stale",
+                    cache_path=self.cache_store.cache_path(source_name),
+                    error=error,
                 )
         task = asyncio.create_task(self._refresh_with_lock(source_name))
         self._inflight[source_name] = task
@@ -150,15 +153,71 @@ class SourceRefresher:
             )
         except TimeoutError:
             logger.warning("refresh lock timeout: source={source}", source=source_name)
+            error = "refresh lock timeout; stale cache may be used if still within max_stale"
+            await self._record_failed_attempt(source_name, error)
             return RefreshResult(
                 False,
                 source_name,
-                error="refresh lock timeout; stale cache may be used if still within max_stale",
+                cache_path=self.cache_store.cache_path(source_name),
+                error=error,
             )
         try:
             return await self._refresh_locked(source_name)
         finally:
             lock.release()
+
+    def _next_counts(
+        self, cache: SourceCache | None, *, success: bool
+    ) -> tuple[int, int, int]:
+        attempts = (cache.refresh_attempt_count if cache else 0) + 1
+        successes = (cache.refresh_success_count if cache else 0) + (1 if success else 0)
+        failures = (cache.refresh_failure_count if cache else 0) + (0 if success else 1)
+        return attempts, successes, failures
+
+    async def _next_counts_from_latest(
+        self, source_name: str, fallback: SourceCache | None, *, success: bool
+    ) -> tuple[int, int, int]:
+        latest = await self.cache_store.get(source_name)
+        return self._next_counts(latest or fallback, success=success)
+
+    async def _record_failed_attempt(
+        self, source_name: str, error: str, old_cache: SourceCache | None = None
+    ) -> None:
+        now = datetime.now(UTC)
+        if old_cache is None:
+            try:
+                old_cache = await self.cache_store.get(source_name)
+            except Exception as exc:
+                logger.warning(
+                    "refresh failure counter skipped: source={source} error={error}",
+                    source=source_name,
+                    error=redact_secret(str(exc)),
+                )
+                return
+        attempts, successes, failures = self._next_counts(old_cache, success=False)
+        failed = SourceCache(
+            source=source_name,
+            schema_version=CURRENT_SCHEMA_VERSION,
+            last_attempt_at=now,
+            last_success_at=old_cache.last_success_at if old_cache else None,
+            etag=old_cache.etag if old_cache else None,
+            last_modified=old_cache.last_modified if old_cache else None,
+            node_count=old_cache.node_count if old_cache else 0,
+            warnings=old_cache.warnings if old_cache else (),
+            last_error=error,
+            proxies=old_cache.proxies if old_cache else (),
+            refresh_attempt_count=attempts,
+            refresh_success_count=successes,
+            refresh_failure_count=failures,
+        )
+        try:
+            await self.cache_store.set(source_name, failed)
+        except Exception as exc:
+            logger.warning(
+                "refresh failure counter write failed: source={source} error={error}",
+                source=source_name,
+                error=redact_secret(str(exc)),
+            )
 
     async def _refresh_locked(self, source_name: str) -> RefreshResult:
         """持有锁时执行实际刷新逻辑。
@@ -224,6 +283,9 @@ class SourceRefresher:
                 last_modified=last_modified,
             )
             if fetched.not_modified and old_cache:
+                attempts, successes, failures = await self._next_counts_from_latest(
+                    source_name, old_cache, success=True
+                )
                 logger.info(
                     "refresh not-modified: source={source} nodes={nodes}",
                     source=source_name,
@@ -240,6 +302,9 @@ class SourceRefresher:
                     warnings=old_cache.warnings,
                     last_error=None,
                     proxies=old_cache.proxies,
+                    refresh_attempt_count=attempts,
+                    refresh_success_count=successes,
+                    refresh_failure_count=failures,
                 )
                 await self.cache_store.set(source_name, cache)
                 return RefreshResult(
@@ -283,6 +348,9 @@ class SourceRefresher:
                 warnings.extend(dns_warnings)
             if not transformed:
                 raise ParseError("no usable proxies after source transform")
+            attempts, successes, failures = await self._next_counts_from_latest(
+                source_name, old_cache, success=True
+            )
             cache = SourceCache(
                 source=source_name,
                 schema_version=CURRENT_SCHEMA_VERSION,
@@ -294,6 +362,9 @@ class SourceRefresher:
                 warnings=tuple(warnings),
                 last_error=None,
                 proxies=tuple(transformed),
+                refresh_attempt_count=attempts,
+                refresh_success_count=successes,
+                refresh_failure_count=failures,
             )
             await self.cache_store.set(source_name, cache)
             logger.info(
@@ -317,6 +388,9 @@ class SourceRefresher:
                 error=redacted_error,
             )
             if old_cache:
+                attempts, successes, failures = await self._next_counts_from_latest(
+                    source_name, old_cache, success=False
+                )
                 failed = SourceCache(
                     source=source_name,
                     schema_version=CURRENT_SCHEMA_VERSION,
@@ -328,8 +402,13 @@ class SourceRefresher:
                     warnings=old_cache.warnings,
                     last_error=redacted_error,
                     proxies=old_cache.proxies,
+                    refresh_attempt_count=attempts,
+                    refresh_success_count=successes,
+                    refresh_failure_count=failures,
                 )
                 await self.cache_store.set(source_name, failed)
+            else:
+                await self._record_failed_attempt(source_name, redacted_error)
             return RefreshResult(
                 False,
                 source_name,

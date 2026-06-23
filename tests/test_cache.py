@@ -82,6 +82,47 @@ async def test_cache_json_includes_type_schema_metadata(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_cache_json_roundtrips_refresh_counters(tmp_path) -> None:
+    """Test cache JSON persists refresh attempt, success, and failure counts."""
+    store = JsonSourceCacheStore(
+        CacheConfig(
+            tmp_path, 2, 0o600, max_stale=__import__("datetime").timedelta(days=7)
+        )
+    )
+    cache = SourceCache(
+        "airport_a",
+        1,
+        datetime(2026, 6, 17, tzinfo=UTC),
+        datetime(2026, 6, 17, tzinfo=UTC),
+        None,
+        None,
+        1,
+        (),
+        None,
+        (ProxyRecord("airport_a", {"name": "HK", "type": "vmess"}),),
+        7,
+        5,
+        2,
+    )
+
+    await store.set("airport_a", cache)
+    data = json.loads((tmp_path / "airport_a.json").read_text(encoding="utf-8"))
+    loaded = await store.get("airport_a")
+    status = await store.status("airport_a")
+
+    assert data["refresh_attempt_count"] == 7
+    assert data["refresh_success_count"] == 5
+    assert data["refresh_failure_count"] == 2
+    assert loaded is not None
+    assert loaded.refresh_attempt_count == 7
+    assert loaded.refresh_success_count == 5
+    assert loaded.refresh_failure_count == 2
+    assert status.refresh_attempt_count == 7
+    assert status.refresh_success_count == 5
+    assert status.refresh_failure_count == 2
+
+
+@pytest.mark.asyncio
 async def test_cache_json_reads_legacy_v1_without_type_schema_metadata(
     tmp_path,
 ) -> None:
@@ -116,6 +157,9 @@ async def test_cache_json_reads_legacy_v1_without_type_schema_metadata(
 
     assert loaded is not None
     assert loaded.proxies[0].data["name"] == "HK"
+    assert loaded.refresh_attempt_count == 0
+    assert loaded.refresh_success_count == 0
+    assert loaded.refresh_failure_count == 0
 
 
 @pytest.mark.asyncio

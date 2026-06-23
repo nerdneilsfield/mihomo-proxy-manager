@@ -279,6 +279,9 @@ class JsonSourceCacheStore:
             node_count=cache.node_count,
             last_error=cache.last_error,
             refreshing=source_name in self._refreshing,
+            refresh_attempt_count=cache.refresh_attempt_count,
+            refresh_success_count=cache.refresh_success_count,
+            refresh_failure_count=cache.refresh_failure_count,
         )
 
     def _cleanup_stale_tmp_for_source(self, source_name: str) -> None:
@@ -363,6 +366,9 @@ class JsonSourceCacheStore:
                 warnings=tuple(data.get("warnings", ())),
                 last_error=data.get("last_error"),
                 proxies=proxies,
+                refresh_attempt_count=int(data.get("refresh_attempt_count", 0)),
+                refresh_success_count=int(data.get("refresh_success_count", 0)),
+                refresh_failure_count=int(data.get("refresh_failure_count", 0)),
             )
         except (KeyError, TypeError) as exc:
             raise ValueError(f"malformed cache file {path}: {exc}") from exc
@@ -388,6 +394,9 @@ class JsonSourceCacheStore:
             "node_count": cache.node_count,
             "warnings": list(cache.warnings),
             "last_error": cache.last_error,
+            "refresh_attempt_count": cache.refresh_attempt_count,
+            "refresh_success_count": cache.refresh_success_count,
+            "refresh_failure_count": cache.refresh_failure_count,
             "proxies": [
                 {"source": record.source, "data": record.data}
                 for record in cache.proxies

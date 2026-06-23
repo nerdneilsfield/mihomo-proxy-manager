@@ -64,7 +64,7 @@ The project solves a practical problem: raw subscription URLs rarely suit every 
 | Route output `quantumult-x` | Implemented | Main route returns server lines; optional `-import` one-click import. |
 | Route output `surfboard` | Implemented | Main route returns a minimal full profile; `-nodes` returns policy-path nodes. |
 | Route output `auto` | Implemented | Chooses output by query, companion suffix, User-Agent, then `auto_default`. |
-| `sing-box` / `loon` | Aliases reserved, renderer not implemented | Query/UA can recognize them as future targets, but no usable renderer exists yet. |
+| `sing-box` / `loon` | Query aliases reserved, renderer not implemented | Explicit query targets are treated as unsupported future targets; Loon User-Agent currently returns provider YAML. |
 | Access audit | Implemented | SQLite + separate access log + status aggregates, default 30-day retention. |
 
 ## Quick Start
@@ -435,13 +435,13 @@ test_url = "http://www.gstatic.com/generate_204"
 | `provider` | Mihomo provider YAML | none | Mihomo / Clash Meta `proxy-providers` | Emits Mihomo proxy dictionaries. |
 | `xray-uri` | URI subscription, base64 by default | none | v2rayN / v2rayNG / Xray-style clients | `ss`, `vmess`, `vless`, `trojan`, `hysteria2`. |
 | `quantumult-x` | Quantumult X server lines | `-import` | Quantumult X | Common `ss`, `vmess`, `trojan`, `vless`, `http`, `socks5`, and `anytls` fields; incompatible nodes are skipped. |
-| `surfboard` | Minimal full profile | `-nodes` | Surfboard | Client-compatible `ss`, `vmess`, `trojan`, `snell`, `anytls`, `http`, `socks5`; `hysteria2`, `vless`, and `wireguard` are skipped. |
+| `surfboard` | Minimal full profile | `-nodes` | Surfboard | Client-compatible `ss`, `vmess`, `trojan`, `hysteria2`, `snell`, `anytls`, `http`, `socks5`; `vless` and `wireguard` are skipped. |
 
 `xray-uri` is directly subscribable by v2rayN-style clients. The default is `encoding = "base64"`; use `plain` for debugging. The renderer preserves common reality, vision, TLS, SNI, WebSocket, and gRPC fields when the target format supports them. Nodes that cannot be rendered for the target client are skipped and logged as warnings.
 
 `quantumult-x` returns server lines on the main route. By default it also registers `{path}-import` for one-click remote resource import. `import_response = "redirect"` returns a 302 redirect, while `plain` returns the import URL as text. `import_target = "app-scheme"` uses `quantumult-x:///add-resource?...`; `universal-link` uses a Quantumult X universal link.
 
-`surfboard` returns a minimal full profile with `[Proxy]`, `[Proxy Group]`, and `[Rule]` sections. By default it also registers `{path}-nodes` for `policy-path`. The generated profile uses three groups: `Main`, `Auto`, and `Proxy`; `Main` can choose automatic, manual, or direct behavior, and `Final` uses `Main`.
+`surfboard` returns a minimal full profile with `[Proxy]`, `[Proxy Group]`, and `[Rule]` sections. By default it also registers `{path}-nodes` for `policy-path`. The generated profile uses three groups: `Main`, `Auto`, and `Proxy`; `Main` can choose automatic, manual, or direct behavior, and `Final` uses `Main`. Surfboard node names are sanitized before duplicate-name repair: commas, `=`, brackets, ASCII/full-width colons, and control characters are folded to spaces while readable CJK/ASCII text is preserved.
 
 ### One URL For Multiple Clients
 
@@ -485,10 +485,11 @@ Supported query / UA target aliases:
 | `surfboard` | `surfboard` |
 | Reserved but not rendered | `sing-box`, `singbox`, `sfa`, `sfi`, `sfm`, `hiddify`, `loon` |
 
-User-Agent detection maps Quantumult X, Surfboard, v2rayN/v2rayNG,
-Clash/Mihomo/FlClash/Clash Verge, and similar clients to implemented outputs.
-sing-box / Loon / Hiddify-style User-Agents are recognized as future targets
-but are not rendered yet.
+User-Agent detection maps Quantumult X, including `Quantumult%20X/...`, to
+`quantumult-x`; Surfboard to `surfboard`; v2rayN/v2rayNG to `xray-uri`;
+Clash/Mihomo/FlClash/Clash Verge, Shadowrocket, and Loon to provider YAML.
+sing-box / Hiddify-style User-Agents are recognized as future targets but are
+not rendered yet.
 
 ### HTTP Action plugin
 

@@ -76,6 +76,19 @@ Each `[routes.*]` still needs `path` and `sources`; omitted here for brevity.
 Reserved future aliases such as `singbox`, `sing-box`, `sfa`, `sfi`, `sfm`,
 `hiddify`, and `loon` return `400 unsupported target` until renderers exist.
 
+User-Agent selection is intentionally more compatibility-oriented than explicit
+query selection. Known direct clients map as follows:
+
+| User-Agent signal | Effective output |
+| --- | --- |
+| `Quantumult X`, `Quantumult%20X`, `Quantumult-X` | `quantumult-x` |
+| `Surfboard` | `surfboard` |
+| `v2rayN`, `v2rayNG`, `v2ray` | `xray-uri` |
+| `Clash`, `Mihomo`, `FlClash`, `Clash Verge`, `Shadowrocket`, `Loon` | `provider` |
+
+`Loon` remains a future explicit query target, but its User-Agent falls back to
+provider YAML until a native Loon renderer exists.
+
 Alias matching receives the value after the HTTP parser's normal one-time percent
 decoding; the resolver must not decode again. It trims leading and trailing
 whitespace, is case-insensitive, normalizes `_` to `-`, and keeps `.` significant
@@ -506,13 +519,13 @@ FINAL,Main
 
 The main group is always `Main = select, Auto, Proxy, DIRECT`; the rule tail is `FINAL,Main`. The nodes companion uses the same route access policy as the main route.
 
-Client-compatible protocols are `ss`, `vmess`, `trojan`, `snell`, `anytls`, `http`, and `socks5`. Hysteria2 and VLESS are skipped for Surfboard until reliable client support is validated. WireGuard is deferred because it requires a multi-section `[WireGuard Section]` configuration block that cannot be rendered as a single proxy line. Nodes using unsupported security-critical fields such as `reality-opts`, `ech-opts`, `flow`, or client TLS `fingerprint` are skipped; if every node is skipped, the route returns HTTP 422 with `no supported nodes for surfboard output`.
+Client-compatible protocols are `ss`, `vmess`, `trojan`, `hysteria2`, `snell`, `anytls`, `http`, and `socks5`. VLESS is skipped because Surfboard does not document VLESS proxy-line support. WireGuard is deferred because it requires a multi-section `[WireGuard Section]` configuration block that cannot be rendered as a single proxy line. Nodes using unsupported security-critical fields such as `reality-opts`, `ech-opts`, `flow`, or client TLS `fingerprint` are skipped; if every node is skipped, the route returns HTTP 422 with `no supported nodes for surfboard output`.
 
 ### Field Mapping Notes
 
 | Normalized field | Surfboard field | Notes |
 | --- | --- | --- |
-| `name` | left side before `=` | Escape commas and line breaks; avoid duplicate names. |
+| `name` | left side before `=` | Surfboard labels are sanitized before duplicate-name repair. Profile delimiters such as comma, `=`, brackets, colons, and control characters are folded to spaces; readable CJK/ASCII text is preserved. |
 | `ss.cipher` | `encrypt-method=` | Shadowsocks only. |
 | `uuid` | `username=` | VMess. VLESS is skipped because Surfboard does not document VLESS support. |
 | `password` | `password=` or positional | SS/Trojan use `password=`; AnyTLS/HTTP/SOCKS5 use positional value after port. |

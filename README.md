@@ -64,7 +64,7 @@
 | Route output `quantumult-x` | 已实现 | 主 route 返回 server lines；可注册 `-import` 一键导入。 |
 | Route output `surfboard` | 已实现 | 主 route 返回最小 full profile；`-nodes` 返回 policy-path 节点。 |
 | Route output `auto` | 已实现 | 同一 URL 按 query、companion suffix、User-Agent、`auto_default` 选择输出。 |
-| `sing-box` / `loon` | 已保留识别别名，未渲染 | Query/UA 识别到后会按未支持目标处理或回落；渲染器尚未实现。 |
+| `sing-box` / `loon` | 已保留 query 别名，未渲染 | 显式 query 会按未支持目标处理；Loon User-Agent 暂按 provider YAML 返回。 |
 | Access audit | 已实现 | SQLite + 独立 access log + status 聚合统计，默认 30 天 retention。 |
 
 ## 快速开始
@@ -434,13 +434,13 @@ test_url = "http://www.gstatic.com/generate_204"
 | `provider` | Mihomo provider YAML | 无 | Mihomo / Clash Meta `proxy-providers` | 原样输出 Mihomo proxy dict。 |
 | `xray-uri` | URI 订阅，默认 base64 | 无 | v2rayN / v2rayNG / Xray 类客户端 | `ss`、`vmess`、`vless`、`trojan`、`hysteria2`。 |
 | `quantumult-x` | Quantumult X server lines | `-import` | Quantumult X | `ss`、`vmess`、`trojan`、`vless`、`http`、`socks5`、`anytls` 的常见字段；不兼容节点会跳过。 |
-| `surfboard` | 最小 full profile | `-nodes` | Surfboard | 为客户端兼容性输出 `ss`、`vmess`、`trojan`、`snell`、`anytls`、`http`、`socks5`；`hysteria2`、`vless` 和 `wireguard` 会跳过。 |
+| `surfboard` | 最小 full profile | `-nodes` | Surfboard | 为客户端兼容性输出 `ss`、`vmess`、`trojan`、`hysteria2`、`snell`、`anytls`、`http`、`socks5`；`vless` 和 `wireguard` 会跳过。 |
 
 `xray-uri` 可直接给 v2rayN 等客户端订阅。默认 `encoding = "base64"`，调试时可改成 `plain` 看每行 URI。渲染器会尽量保留 reality、vision、TLS、SNI、WebSocket、gRPC 等常见字段；如果某个节点无法转换成目标客户端格式，会跳过并在服务日志里记录 warning。
 
 `quantumult-x` 主路由返回 server lines；默认额外注册 `{path}-import`，用于一键导入 remote resource。`import_response = "redirect"` 会返回 302 跳转，`plain` 会把导入链接作为文本返回。`import_target = "app-scheme"` 使用 `quantumult-x:///add-resource?...`，`universal-link` 使用 Quantumult X universal link。
 
-`surfboard` 主路由返回最小完整 profile：`[Proxy]`、`[Proxy Group]`、`[Rule]` 等段落；默认额外注册 `{path}-nodes` 给 `policy-path` 使用。profile 中使用三组策略：`Main`、`Auto`、`Proxy`；`Main` 可在自动、手动和直连之间选择，`Final` 走 `Main`。
+`surfboard` 主路由返回最小完整 profile：`[Proxy]`、`[Proxy Group]`、`[Rule]` 等段落；默认额外注册 `{path}-nodes` 给 `policy-path` 使用。profile 中使用三组策略：`Main`、`Auto`、`Proxy`；`Main` 可在自动、手动和直连之间选择，`Final` 走 `Main`。Surfboard 的节点名会在 duplicate repair 前做专用清洗，逗号、`=`、方括号、半角/全角冒号和控制字符会折成空格，中文、英文、数字等可读部分会保留。
 
 ### 单 URL 自动订阅
 
@@ -483,7 +483,7 @@ Quantumult X 需要嵌入绝对订阅 URL。
 | `surfboard` | `surfboard` |
 | 预留但未渲染 | `sing-box`、`singbox`、`sfa`、`sfi`、`sfm`、`hiddify`、`loon` |
 
-User-Agent 命中逻辑用于客户端直接订阅时自动选择格式：Quantumult X、Surfboard、v2rayN/v2rayNG、Clash/Mihomo/FlClash/Clash Verge 等会映射到对应已实现格式。sing-box / Loon / Hiddify 等 UA 目前只会被识别为未来目标，不会渲染成可用格式。
+User-Agent 命中逻辑用于客户端直接订阅时自动选择格式：Quantumult X，包括 `Quantumult%20X/...`，映射到 `quantumult-x`；Surfboard 映射到 `surfboard`；v2rayN/v2rayNG 映射到 `xray-uri`；Clash/Mihomo/FlClash/Clash Verge、Shadowrocket 和 Loon 暂映射到 provider YAML。sing-box / Hiddify 等 UA 目前只会被识别为未来目标，不会渲染成可用格式。
 
 ### HTTP Action 插件
 

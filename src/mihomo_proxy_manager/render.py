@@ -1665,15 +1665,21 @@ def _dump_proxy_list_yaml(
 
 
 def _dump_proxy_name_list_yaml(names: list[str]) -> str:
-    """Dump proxy name list as a YAML sequence of quoted strings."""
-    quoted = [_QuotedString(name) for name in names]
-    return yaml.dump(
-        quoted,
-        Dumper=_MihomoProviderDumper,
-        allow_unicode=True,
-        sort_keys=False,
-        default_flow_style=False,
-    )
+    """Emit a YAML sequence of double-quoted proxy names.
+
+    Implemented as a manual builder instead of ``yaml.dump`` because the input
+    is always a flat list of strings, the desired escape rules match JSON
+    string semantics, and the render path benefits from skipping a YAML
+    serialization pass on every request.
+
+    ``json.dumps`` is used with the default ``ensure_ascii=True`` so that
+    control characters and non-BMP code points are escaped as ``\\uXXXX`` /
+    ``\\UXXXXXXXX`` sequences. This keeps the output valid YAML while avoiding
+    the YAML emitter overhead.
+    """
+    if not names:
+        return "[]\n"
+    return "\n".join(f"- {json.dumps(name)}" for name in names) + "\n"
 
 
 def _indent_block(block: str, indent: str) -> str:
@@ -1688,10 +1694,6 @@ def _indent_block(block: str, indent: str) -> str:
 # ``CLASH_PROXY_NAMES_PLACEHOLDER`` is optional.
 CLASH_PROXIES_PLACEHOLDER = "{{proxies}}"
 CLASH_PROXY_NAMES_PLACEHOLDER = "{{proxy_names}}"
-CLASH_TEMPLATE_PLACEHOLDERS: tuple[str, ...] = (
-    CLASH_PROXIES_PLACEHOLDER,
-    CLASH_PROXY_NAMES_PLACEHOLDER,
-)
 
 
 def template_line_is_placeholder(line: str, placeholder: str) -> bool:

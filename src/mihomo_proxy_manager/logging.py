@@ -35,6 +35,13 @@ def _collect_secret_values(
         secrets.append(config.server.status_path)
     if include_route_paths:
         secrets.extend(route.path for route in config.routes.values())
+    for route in config.routes.values():
+        # Clash-config templates can embed credentials and operator-controlled
+        # endpoints; treat both the body and the on-disk location as secrets.
+        if isinstance(route.output.template_body, str):
+            secrets.append(route.output.template_body)
+        if route.output.template_path is not None:
+            secrets.append(str(route.output.template_path))
     for source in config.sources.values():
         secrets.append(source.url)
         secrets.extend(source.fetch.headers.values())

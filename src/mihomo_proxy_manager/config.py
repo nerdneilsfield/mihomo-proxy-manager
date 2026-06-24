@@ -18,6 +18,11 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from croniter import croniter
 
+from .render import (
+    CLASH_PROXIES_PLACEHOLDER,
+    template_contains_placeholder,
+)
+from .route_targets import IMPLEMENTED_FORMATS
 from .security import SecurityError, assert_safe_url, has_path_entropy
 
 from .models import (
@@ -598,6 +603,127 @@ def _companion_paths(route: RouteConfig) -> tuple[str, ...]:
     return ()
 
 
+CLASH_TEMPLATE_PROXIES_PLACEHOLDER = CLASH_PROXIES_PLACEHOLDER
+
+# Per-fixed-format capabilities. ``auto`` routes accept the union of all
+# capabilities and are validated separately.
+_FORMATS_SUPPORTING_TEMPLATE_PATH = {"clash-config"}
+_FORMATS_SUPPORTING_META_COMMENTS = {"provider"}
+
+
+def template_has_proxies_placeholder(content: str) -> bool:
+    """Return True when the template contains a standalone {{proxies}} line."""
+    return template_contains_placeholder(content, CLASH_PROXIES_PLACEHOLDER)
+
+
+def _validate_clash_template(route: RouteConfig) -> list[str]:
+    errors: list[str] = []
+    template_path = route.output.template_path
+    if template_path is None:
+        return errors
+    if not template_path.exists():
+        errors.append(
+            f"route {route.name!r} template_path does not exist: {template_path}"
+        )
+        return errors
+    if not template_path.is_file():
+        errors.append(
+            f"route {route.name!r} template_path is not a file: {template_path}"
+        )
+        return errors
+    # The renderer only serves ``template_body`` cached at config-load time. If
+    # caching failed, surface that as a validation error instead of re-reading
+    # the file; otherwise validation could pass while the renderer 500s.
+    content = route.output.template_body
+    if content is None:
+        errors.append(
+            f"route {route.name!r} template_path cannot be read: {template_path}"
+        )
+        return errors
+    if not template_has_proxies_placeholder(content):
+        errors.append(
+            f"route {route.name!r} template must contain a line with only "
+            f"'{CLASH_PROXIES_PLACEHOLDER}'"
+        )
+    return errors
+
+
+def _validate_surfboard_output(
+    route: RouteConfig, *, public_base_url: str | None, allow_modes: set[str]
+) -> list[str]:
+    errors: list[str] = []
+    if route.output.mode not in allow_modes:
+        errors.append(
+            f"route {route.name!r} surfboard mode is unsupported: {route.output.mode!r}"
+        )
+    if not route.output.test_url.startswith("http://"):
+        errors.append(
+            f"route {route.name!r} surfboard test_url must use http://"
+        )
+    if not 1 <= route.output.test_interval <= 2_678_400:
+        errors.append(
+            f"route {route.name!r} surfboard test_interval must be between 1 and 2678400"
+        )
+    if not 1 <= route.output.test_timeout <= 300:
+        errors.append(
+            f"route {route.name!r} surfboard test_timeout must be between 1 and 300"
+        )
+    if not 0 <= route.output.test_tolerance <= 60_000:
+        errors.append(
+            f"route {route.name!r} surfboard test_tolerance must be between 0 and 60000"
+        )
+    if not public_base_url:
+        errors.append(
+            f"route {route.name!r} public_base_url is required for surfboard output"
+        )
+    return errors
+
+
+def _validate_quantumult_x_output(
+    route: RouteConfig,
+    *,
+    public_base_url: str | None,
+    allow_modes: set[str],
+    require_public_base_url: bool,
+) -> list[str]:
+    errors: list[str] = []
+    if route.output.mode not in allow_modes:
+        errors.append(
+            f"route {route.name!r} quantumult-x mode is unsupported: {route.output.mode!r}"
+        )
+    if route.output.import_response not in {"redirect", "plain"}:
+        errors.append(
+            f"route {route.name!r} quantumult-x import_response is unsupported: "
+            f"{route.output.import_response!r}"
+        )
+    if route.output.import_target not in {"app-scheme", "universal-link"}:
+        errors.append(
+            f"route {route.name!r} quantumult-x import_target is unsupported: "
+            f"{route.output.import_target!r}"
+        )
+    if require_public_base_url and not public_base_url:
+        errors.append(
+            f"route {route.name!r} public_base_url is required for quantumult-x import_link"
+        )
+    return errors
+
+
+def _validate_xray_uri_output(
+    route: RouteConfig, *, enforce_default_mode: bool
+) -> list[str]:
+    errors: list[str] = []
+    if enforce_default_mode and route.output.mode != "default":
+        errors.append(
+            f"route {route.name!r} xray-uri output mode must be default"
+        )
+    if route.output.encoding not in {"base64", "plain"}:
+        errors.append(
+            f"route {route.name!r} xray-uri encoding is unsupported: "
+            f"{route.output.encoding!r}"
+        )
+    return errors
+
+
 class LoadedConfig(AppConfig):
     """已加载并解析的完整应用配置。
 
@@ -705,23 +831,12 @@ class LoadedConfig(AppConfig):
                         errors.append(
                             f"route {route.name!r} {pattern_name} regex is invalid: {exc}"
                         )
-            if route.output.format not in {
-                "provider",
-                "surfboard",
-                "quantumult-x",
-                "xray-uri",
-                "auto",
-            }:
+            if route.output.format not in IMPLEMENTED_FORMATS and route.output.format != "auto":
                 errors.append(
                     f"route {route.name!r} output format is unsupported: {route.output.format!r}"
                 )
                 continue
-            if route.output.auto_default not in {
-                "provider",
-                "surfboard",
-                "quantumult-x",
-                "xray-uri",
-            }:
+            if route.output.auto_default not in IMPLEMENTED_FORMATS:
                 errors.append(
                     f"route {route.name!r} auto_default is unsupported: "
                     f"{route.output.auto_default!r}"
@@ -731,109 +846,95 @@ class LoadedConfig(AppConfig):
                     errors.append(
                         f"route {route.name!r} auto output mode must be default"
                     )
-                if route.output.import_response not in {"redirect", "plain"}:
-                    errors.append(
-                        f"route {route.name!r} quantumult-x import_response is unsupported: "
-                        f"{route.output.import_response!r}"
+                # auto accepts the union of fixed-format capabilities; reuse the
+                # same validators so any rule tightening reaches both paths.
+                errors.extend(
+                    _validate_quantumult_x_output(
+                        route,
+                        public_base_url=self.server.public_base_url,
+                        # auto-route QX mode is constrained by the auto mode check
+                        # above; only validate import_response/import_target here.
+                        allow_modes={"default"},
+                        require_public_base_url=False,
                     )
-                if route.output.import_target not in {
-                    "app-scheme",
-                    "universal-link",
-                }:
-                    errors.append(
-                        f"route {route.name!r} quantumult-x import_target is unsupported: "
-                        f"{route.output.import_target!r}"
+                )
+                errors.extend(
+                    _validate_surfboard_output(
+                        route,
+                        public_base_url=self.server.public_base_url,
+                        allow_modes={"default"},
                     )
-                if not route.output.test_url.startswith("http://"):
-                    errors.append(
-                        f"route {route.name!r} surfboard test_url must use http://"
-                    )
-                if not 1 <= route.output.test_interval <= 2_678_400:
-                    errors.append(
-                        f"route {route.name!r} surfboard test_interval must be between 1 and 2678400"
-                    )
-                if not 1 <= route.output.test_timeout <= 300:
-                    errors.append(
-                        f"route {route.name!r} surfboard test_timeout must be between 1 and 300"
-                    )
-                if not 0 <= route.output.test_tolerance <= 60_000:
-                    errors.append(
-                        f"route {route.name!r} surfboard test_tolerance must be between 0 and 60000"
-                    )
-                if route.output.encoding not in {"base64", "plain"}:
-                    errors.append(
-                        f"route {route.name!r} xray-uri encoding is unsupported: "
-                        f"{route.output.encoding!r}"
-                    )
+                )
+                errors.extend(
+                    _validate_xray_uri_output(route, enforce_default_mode=False)
+                )
                 if not self.server.public_base_url:
                     errors.append(
                         f"route {route.name!r} public_base_url is required for auto output"
                     )
+                if (
+                    route.output.auto_default == "clash-config"
+                    and route.output.template_path is None
+                ):
+                    errors.append(
+                        f"route {route.name!r} template_path is required when "
+                        f"auto_default is 'clash-config'"
+                    )
+                errors.extend(_validate_clash_template(route))
                 continue
+            # Fixed format capability checks shared across all non-auto formats.
+            if (
+                route.output.template_path is not None
+                and route.output.format not in _FORMATS_SUPPORTING_TEMPLATE_PATH
+            ):
+                errors.append(
+                    f"route {route.name!r} template_path is only supported "
+                    f"for clash-config or auto output"
+                )
+            if (
+                route.output.include_meta_comments
+                and route.output.format not in _FORMATS_SUPPORTING_META_COMMENTS
+            ):
+                errors.append(
+                    f"route {route.name!r} include_meta_comments is only supported for provider output"
+                )
             if route.output.format == "provider":
                 if route.output.mode != "default":
                     errors.append(
                         f"route {route.name!r} provider output mode must be default"
                     )
-            else:
-                if route.output.include_meta_comments:
+            elif route.output.format == "clash-config":
+                if route.output.mode != "default":
                     errors.append(
-                        f"route {route.name!r} include_meta_comments is only supported for provider output"
+                        f"route {route.name!r} clash-config output mode must be default"
                     )
-                if route.output.format == "surfboard":
-                    if route.output.mode not in {"default", "full-profile"}:
-                        errors.append(
-                            f"route {route.name!r} surfboard mode is unsupported: {route.output.mode!r}"
-                        )
-                    if not route.output.test_url.startswith("http://"):
-                        errors.append(
-                            f"route {route.name!r} surfboard test_url must use http://"
-                        )
-                    if not 1 <= route.output.test_interval <= 2_678_400:
-                        errors.append(
-                            f"route {route.name!r} surfboard test_interval must be between 1 and 2678400"
-                        )
-                    if not 1 <= route.output.test_timeout <= 300:
-                        errors.append(
-                            f"route {route.name!r} surfboard test_timeout must be between 1 and 300"
-                        )
-                    if not 0 <= route.output.test_tolerance <= 60_000:
-                        errors.append(
-                            f"route {route.name!r} surfboard test_tolerance must be between 0 and 60000"
-                        )
-                    if not self.server.public_base_url:
-                        errors.append(
-                            f"route {route.name!r} public_base_url is required for surfboard output"
-                        )
-                elif route.output.format == "quantumult-x":
-                    if route.output.mode not in {"default", "server-remote"}:
-                        errors.append(
-                            f"route {route.name!r} quantumult-x mode is unsupported: {route.output.mode!r}"
-                        )
-                    if route.output.import_response not in {"redirect", "plain"}:
-                        errors.append(
-                            f"route {route.name!r} quantumult-x import_response is unsupported: {route.output.import_response!r}"
-                        )
-                    if route.output.import_target not in {
-                        "app-scheme",
-                        "universal-link",
-                    }:
-                        errors.append(
-                            f"route {route.name!r} quantumult-x import_target is unsupported: {route.output.import_target!r}"
-                        )
-                    if route.output.import_link and not self.server.public_base_url:
-                        errors.append(
-                            f"route {route.name!r} public_base_url is required for quantumult-x import_link"
-                        )
-                elif route.output.format == "xray-uri":
-                    if route.output.mode != "default":
-                        errors.append(
-                            f"route {route.name!r} xray-uri output mode must be default"
-                        )
-                    if route.output.encoding not in {"base64", "plain"}:
-                        errors.append(
-                            f"route {route.name!r} xray-uri encoding is unsupported: {route.output.encoding!r}"
-                        )
+                if route.output.template_path is None:
+                    errors.append(
+                        f"route {route.name!r} template_path is required for clash-config output"
+                    )
+                else:
+                    errors.extend(_validate_clash_template(route))
+            elif route.output.format == "surfboard":
+                errors.extend(
+                    _validate_surfboard_output(
+                        route,
+                        public_base_url=self.server.public_base_url,
+                        allow_modes={"default", "full-profile"},
+                    )
+                )
+            elif route.output.format == "quantumult-x":
+                errors.extend(
+                    _validate_quantumult_x_output(
+                        route,
+                        public_base_url=self.server.public_base_url,
+                        allow_modes={"default", "server-remote"},
+                        require_public_base_url=route.output.import_link,
+                    )
+                )
+            elif route.output.format == "xray-uri":
+                errors.extend(
+                    _validate_xray_uri_output(route, enforce_default_mode=True)
+                )
 
         for source in self.sources.values():
             fetch_user_agent_error = _validate_user_agent(
@@ -1168,7 +1269,9 @@ def load_config(path: Path, *, validate: bool = True) -> LoadedConfig:
         "test_interval",
         "test_timeout",
         "test_tolerance",
+        "template_path",
     }
+    config_dir = path.parent
     for name, values in _table(raw, "routes").items():
         output_values = _table(values, "output")
         unknown_output_keys = sorted(set(output_values) - allowed_route_output_keys)
@@ -1188,6 +1291,21 @@ def load_config(path: Path, *, validate: bool = True) -> LoadedConfig:
                 else False,
             )
         )
+        template_path_raw = output_values.get("template_path")
+        if template_path_raw is None:
+            template_path: Path | None = None
+            template_body: str | None = None
+        else:
+            template_path = Path(str(template_path_raw))
+            if not template_path.is_absolute():
+                template_path = (config_dir / template_path).resolve()
+            # Read the template body eagerly at config-load time so request-time
+            # rendering never re-reads the file (closes a TOCTOU file-disclosure
+            # window and avoids per-request blocking disk I/O on the async path).
+            try:
+                template_body = template_path.read_text(encoding="utf-8")
+            except OSError:
+                template_body = None
         routes[name] = RouteConfig(
             name=name,
             path=values.get("path", ""),
@@ -1209,6 +1327,8 @@ def load_config(path: Path, *, validate: bool = True) -> LoadedConfig:
                 test_interval=int(output_values.get("test_interval", 600)),
                 test_timeout=int(output_values.get("test_timeout", 5)),
                 test_tolerance=int(output_values.get("test_tolerance", 100)),
+                template_path=template_path,
+                template_body=template_body,
             ),
             rename=_rename(_table(values, "rename")),
             filter=_filter(_table(values, "filter")),

@@ -43,7 +43,9 @@ from .route_targets import (
 from .security import redact_secret
 from .status import build_status, render_status_html
 
-ImplementedOutputFormat = Literal["provider", "surfboard", "quantumult-x", "xray-uri"]
+ImplementedOutputFormat = Literal[
+    "provider", "surfboard", "quantumult-x", "xray-uri", "clash-config"
+]
 
 
 class _Refresher(Protocol):

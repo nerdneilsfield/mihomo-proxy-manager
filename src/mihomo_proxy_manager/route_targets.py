@@ -6,7 +6,13 @@ from dataclasses import dataclass
 from typing import Mapping, Sequence
 
 SELECTOR_KEYS = ("target", "format", "flag", "client")
-IMPLEMENTED_FORMATS = {"provider", "surfboard", "quantumult-x", "xray-uri"}
+IMPLEMENTED_FORMATS = {
+    "provider",
+    "surfboard",
+    "quantumult-x",
+    "xray-uri",
+    "clash-config",
+}
 # Future aliases are explicit parse results, not implemented outputs. Callers that
 # dispatch renderers must reject formats outside IMPLEMENTED_FORMATS.
 FUTURE_FORMATS = {"sing-box", "loon"}
@@ -30,6 +36,11 @@ TARGET_ALIASES = {
     "qx": "quantumult-x",
     "quantumult x": "quantumult-x",
     "surfboard": "surfboard",
+    "clash-config": "clash-config",
+    "full-config": "clash-config",
+    "full": "clash-config",
+    "clash-full": "clash-config",
+    "mihomo-config": "clash-config",
     "sing-box": "sing-box",
     "singbox": "sing-box",
     "sfa": "sing-box",
@@ -44,6 +55,7 @@ CANONICAL_TARGETS = {
     "surfboard": "surfboard",
     "quantumult-x": "quanx",
     "xray-uri": "v2rayn",
+    "clash-config": "clash-config",
 }
 
 UA_SIGNALS = (

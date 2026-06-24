@@ -164,12 +164,17 @@ class RouteOutputConfig:
     Route output configuration controlling output format and meta comments.
     """
 
-    format: Literal["provider", "surfboard", "quantumult-x", "xray-uri", "auto"] = (
-        "provider"
-    )
-    auto_default: Literal["provider", "surfboard", "quantumult-x", "xray-uri"] = (
-        "provider"
-    )
+    format: Literal[
+        "provider",
+        "surfboard",
+        "quantumult-x",
+        "xray-uri",
+        "clash-config",
+        "auto",
+    ] = "provider"
+    auto_default: Literal[
+        "provider", "surfboard", "quantumult-x", "xray-uri", "clash-config"
+    ] = "provider"
     include_meta_comments: bool = False
     mode: Literal["default", "full-profile", "server-remote"] = "default"
     encoding: Literal["base64", "plain"] = "base64"
@@ -181,6 +186,8 @@ class RouteOutputConfig:
     test_interval: int = 600
     test_timeout: int = 5
     test_tolerance: int = 100
+    template_path: Path | None = None
+    template_body: str | None = None
 
 
 @dataclass(frozen=True)

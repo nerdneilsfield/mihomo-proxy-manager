@@ -1651,6 +1651,167 @@ class ProviderRouteRenderer:
         )
 
 
+def _dump_proxy_list_yaml(
+    proxies: list[dict[str, object]], *, sort_keys: bool
+) -> str:
+    """Dump a proxy list as a top-level YAML sequence."""
+    return yaml.dump(
+        proxies,
+        Dumper=_MihomoProviderDumper,
+        allow_unicode=True,
+        sort_keys=sort_keys,
+        default_flow_style=False,
+    )
+
+
+def _dump_proxy_name_list_yaml(names: list[str]) -> str:
+    """Dump proxy name list as a YAML sequence of quoted strings."""
+    quoted = [_QuotedString(name) for name in names]
+    return yaml.dump(
+        quoted,
+        Dumper=_MihomoProviderDumper,
+        allow_unicode=True,
+        sort_keys=False,
+        default_flow_style=False,
+    )
+
+
+def _indent_block(block: str, indent: str) -> str:
+    """Prefix every non-empty line of a YAML block with `indent`."""
+    lines = block.splitlines()
+    indented_lines = [f"{indent}{line}" if line else "" for line in lines]
+    return "\n".join(indented_lines)
+
+
+# Public placeholders for the clash-config template. ``CLASH_PROXIES_PLACEHOLDER``
+# is required (config validation rejects templates without it).
+# ``CLASH_PROXY_NAMES_PLACEHOLDER`` is optional.
+CLASH_PROXIES_PLACEHOLDER = "{{proxies}}"
+CLASH_PROXY_NAMES_PLACEHOLDER = "{{proxy_names}}"
+CLASH_TEMPLATE_PLACEHOLDERS: tuple[str, ...] = (
+    CLASH_PROXIES_PLACEHOLDER,
+    CLASH_PROXY_NAMES_PLACEHOLDER,
+)
+
+
+def template_line_is_placeholder(line: str, placeholder: str) -> bool:
+    """Return True when ``line`` is a standalone placeholder line.
+
+    A standalone placeholder line is one whose stripped content equals
+    ``placeholder``. Lines that contain extra text are not recognized as
+    placeholders and are emitted verbatim.
+    """
+    return line.strip() == placeholder
+
+
+def template_contains_placeholder(template: str, placeholder: str) -> bool:
+    """Return True when ``template`` contains a standalone placeholder line."""
+    return any(
+        template_line_is_placeholder(line, placeholder)
+        for line in template.splitlines()
+    )
+
+
+def _replace_placeholders(
+    template: str, replacements: dict[str, str]
+) -> tuple[str, bool]:
+    """Replace whole-line placeholders. Returns (rendered, replaced_proxies).
+
+    A placeholder line is a line whose stripped content equals one of the keys.
+    The line's leading whitespace is used as the indentation prefix for the
+    injected block.
+    """
+    out_lines: list[str] = []
+    proxies_replaced = False
+    for line in template.splitlines():
+        stripped = line.strip()
+        if stripped in replacements:
+            indent_len = len(line) - len(line.lstrip(" \t"))
+            indent = line[:indent_len]
+            block = replacements[stripped]
+            out_lines.append(_indent_block(block, indent))
+            if stripped == CLASH_PROXIES_PLACEHOLDER:
+                proxies_replaced = True
+        else:
+            out_lines.append(line)
+    rendered = "\n".join(out_lines)
+    if template.endswith("\n"):
+        rendered += "\n"
+    return rendered, proxies_replaced
+
+
+class ClashConfigRenderer:
+    """Render route records into a full Clash YAML configuration via template."""
+
+    def __init__(self, *, yaml_sort_keys: bool = False) -> None:
+        self.yaml_sort_keys = yaml_sort_keys
+
+    def companion_paths(self, route: RouteConfig) -> tuple[str, ...]:
+        """clash-config has no companion endpoints."""
+        return ()
+
+    def render(self, request: RenderRequest) -> RenderResponse:
+        """Render clash-config output by injecting proxies into a cached template.
+
+        The template body is cached on ``route.output.template_body`` at
+        config-load time so request-time rendering never touches disk. This
+        closes the TOCTOU file-disclosure window that would otherwise exist
+        between validation and serving, and keeps the async request path off
+        of blocking I/O.
+        """
+        template = request.route.output.template_body
+        if template is None:
+            # Either no template was configured, or it could not be read at
+            # config load. The former is the expected miss for auto routes
+            # whose explicit target is clash-config without template_path.
+            if request.route.output.template_path is None:
+                return RenderResponse(
+                    body=b"clash-config template_path is required",
+                    media_type="text/plain; charset=utf-8",
+                    status_code=400,
+                )
+            return RenderResponse(
+                body=b"clash-config template cannot be read",
+                media_type="text/plain; charset=utf-8",
+                status_code=500,
+            )
+
+        proxies = prepare_render_records(request.route, request.records)
+        if not proxies:
+            return RenderResponse(
+                body=b"no supported nodes for clash-config output",
+                media_type="text/plain; charset=utf-8",
+                status_code=422,
+            )
+
+        proxies_block = _dump_proxy_list_yaml(
+            proxies, sort_keys=self.yaml_sort_keys
+        ).rstrip("\n")
+        names = [str(proxy.get("name", "")) for proxy in proxies]
+        names_block = _dump_proxy_name_list_yaml(names).rstrip("\n")
+
+        rendered, proxies_replaced = _replace_placeholders(
+            template,
+            {
+                CLASH_PROXIES_PLACEHOLDER: proxies_block,
+                CLASH_PROXY_NAMES_PLACEHOLDER: names_block,
+            },
+        )
+        if not proxies_replaced:
+            return RenderResponse(
+                body=b"clash-config template is missing {{proxies}} placeholder",
+                media_type="text/plain; charset=utf-8",
+                status_code=500,
+            )
+
+        return RenderResponse(
+            body=rendered.encode("utf-8"),
+            media_type="application/yaml; charset=utf-8",
+        )
+
+    render_sync = render
+
+
 def build_renderer_registry(
     *, yaml_sort_keys: bool = False
 ) -> dict[str, RouteRenderer]:
@@ -1662,4 +1823,5 @@ def build_renderer_registry(
         "xray-uri": XrayUriRenderer(),
         "quantumult-x": QuantumultXRenderer(),
         "surfboard": SurfboardRenderer(),
+        "clash-config": ClashConfigRenderer(yaml_sort_keys=yaml_sort_keys),
     }

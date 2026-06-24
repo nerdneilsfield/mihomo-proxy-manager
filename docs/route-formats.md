@@ -5,9 +5,10 @@ Date: 2026-06-19
 本文记录 `mihomo-proxy-manager` route 输出格式的格式边界、字段映射、写法示例和后续实现检查项。当前实现支持：
 
 - source input: `auto`, `yaml`, `share-links`
-- route output: `provider`, `auto`, `xray-uri`, `quantumult-x`, `surfboard`
+- route output: `provider`, `clash-config`, `auto`, `xray-uri`, `quantumult-x`, `surfboard`
 - provider payload: Mihomo/Clash `proxies:` YAML
 - direct subscription payloads: Xray/V2Ray URI subscription, Quantumult X server lines plus import companion, Surfboard minimal full profile plus nodes companion
+- full Clash configuration: `clash-config` injects proxies into a user-supplied template
 
 目标不是一次做成所有客户端的完整配置生成器，而是先把本服务已经规范化的 proxy node，可靠输出成各客户端可消费的订阅片段。完整 profile 只在格式确实需要 wrapper 时生成。
 
@@ -33,6 +34,7 @@ Date: 2026-06-19
 | Target | Current support | Route format | Recommended MVP | Notes |
 | --- | --- | --- | --- | --- |
 | Clash/Mihomo provider | Supported as input and output | `provider` | Keep current `proxies:` YAML | Mihomo provider content也可为 URI lines/base64，但 YAML 最稳。 |
+| Full Clash configuration | Implemented route output | `clash-config` | Inject proxies into a user-supplied template | Returns a complete Clash YAML for direct use as `config.yaml`; `provider` is unchanged. |
 | Auto per-request subscription | Implemented route output | `auto` | Query/UA-selected `provider`, `surfboard`, `quantumult-x`, or `xray-uri` | Query selectors: `target`, `format`, `flag`, `client`; fixed routes are unchanged. |
 | Xray/V2Ray subscription | Implemented route output | `xray-uri` | Default base64 URI subscription; `encoding = "plain"` optional | Direct v2rayN-compatible subscription; no companion endpoint. Full Xray JSON remains future work. |
 | Quantumult X profile | Implemented route output | `quantumult-x` | Server lines on main route plus `-import` companion | `server_remote`/server lines output; app-scheme/universal-link and redirect/plain import supported. |
@@ -72,6 +74,7 @@ Each `[routes.*]` still needs `path` and `sources`; omitted here for brevity.
 | `surfboard` | `surfboard` |
 | `quanx`, `qx`, `quantumult-x`, `quantumult x` | `quantumult-x` |
 | `v2rayn`, `v2rayng`, `v2ray`, `xray`, `xray-uri`, `general` | `xray-uri` |
+| `clash-config`, `full-config`, `full`, `clash-full`, `mihomo-config` | `clash-config` (requires `template_path`) |
 
 Reserved future aliases such as `singbox`, `sing-box`, `sfa`, `sfi`, `sfm`,
 `hiddify`, and `loon` return `400 unsupported target` until renderers exist.
@@ -196,6 +199,88 @@ proxy-providers:
 | `type = hysteria2` | `type: hysteria2` | Needs `password` or auth field; port hopping and obfs need explicit mapping. |
 
 MVP keeps the existing `provider` renderer unchanged. No provider alias is implemented.
+
+## Clash Full Configuration
+
+### What To Output
+
+Route output `clash-config` returns a complete Clash YAML configuration by injecting route proxies into a user-provided template. Use this when the consuming client wants a ready-to-use `config.yaml` instead of a provider payload.
+
+`provider` is unchanged: it remains a Mihomo/Clash provider payload with a top-level `proxies:`. `clash-config` is the complete-file output that wraps proxies inside the user's template.
+
+### Service Config
+
+```toml
+[routes.phone]
+path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml"
+sources = ["airport_a"]
+
+[routes.phone.output]
+format = "clash-config"
+template_path = "templates/clash.yaml"
+```
+
+`template_path` is resolved relative to the directory containing `config.toml` when it is not absolute. The template must exist and contain a line whose stripped content equals `{{proxies}}`.
+
+### Template Contract
+
+Required placeholder: `{{proxies}}` injects a YAML list of rendered proxy objects, intended to be placed under top-level `proxies:`.
+
+Optional placeholder: `{{proxy_names}}` injects a YAML list of quoted proxy names, intended to be placed under `proxy-groups.*.proxies:`.
+
+Both placeholders must be on their own line. The indentation prefix of the placeholder line controls the indentation of the injected block. Inline placeholders such as `proxies: {{proxies}}` are not supported.
+
+Example template:
+
+```yaml
+port: 7890
+socks-port: 7891
+allow-lan: true
+mode: rule
+log-level: info
+
+proxies:
+{{proxies}}
+
+proxy-groups:
+  - name: Proxy
+    type: select
+    proxies:
+      - DIRECT
+      {{proxy_names}}
+
+rules:
+  - MATCH,Proxy
+```
+
+Rendered shape:
+
+```yaml
+proxies:
+- name: "HK 01"
+  type: ss
+  server: "example.com"
+  port: 443
+  cipher: "chacha20-ietf-poly1305"
+  password: "password"
+
+proxy-groups:
+  - name: Proxy
+    type: select
+    proxies:
+      - DIRECT
+      - "HK 01"
+```
+
+The proxy list items above are emitted at column 0 because `{{proxies}}` itself sits at column 0; indent the placeholder line (e.g. `  {{proxies}}`) to push every emitted list item right by the same amount. The same rule applies to `{{proxy_names}}`.
+
+### Auto Routes
+
+`format = "auto"` routes can serve `clash-config` only when explicitly selected via `?target=clash-config` (or aliases `full-config`, `full`, `clash-full`, `mihomo-config`) and the route has a `template_path`. User-Agent auto detection never selects `clash-config`. If `auto_default = "clash-config"`, `template_path` is required at config load time.
+
+### Aliases
+
+`?target=clash-config`, `?target=full-config`, `?target=full`, `?target=clash-full`, and `?target=mihomo-config` all resolve to the `clash-config` renderer.
 
 ## Xray/V2Ray Subscription
 

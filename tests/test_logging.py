@@ -163,6 +163,35 @@ def test_collect_secret_values_includes_plugin_body(tmp_path) -> None:
     assert body in secrets
 
 
+def test_collect_secret_values_includes_clash_template_body_and_path(
+    tmp_path,
+) -> None:
+    """Clash-config templates can embed credentials and operator file paths;
+    both must be redacted from logs.
+    """
+    template_path = tmp_path / "clash.tpl.yaml"
+    template_body = "secret-token-in-template\nproxies:\n{{proxies}}\n"
+    template_path.write_text(template_body, encoding="utf-8")
+
+    base = _minimal_config(tmp_path)
+    route = list(base.routes.values())[0]
+    route_with_template = replace(
+        route,
+        output=replace(
+            route.output,
+            format="clash-config",
+            template_path=template_path,
+            template_body=template_body,
+        ),
+    )
+    config = replace(base, routes={route.name: route_with_template})
+
+    secrets = _collect_secret_values(config)
+
+    assert template_body in secrets
+    assert str(template_path) in secrets
+
+
 def test_access_log_sink_is_separate(tmp_path: Path) -> None:
     normal_path = tmp_path / "normal.log"
     access_path = tmp_path / "access.log"

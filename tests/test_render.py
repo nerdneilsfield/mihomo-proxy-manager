@@ -24,6 +24,8 @@ from mihomo_proxy_manager.render import (
     prepare_render_records,
 )
 
+from tests.conftest import CLASH_CONFIG_TEMPLATE_BODY
+
 REALITY_PUBLIC_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 
 
@@ -2457,3 +2459,172 @@ def test_prepare_render_records_preserves_filtering_and_renaming() -> None:
     proxies = prepare_render_records(test_route, records)
 
     assert [proxy["name"] for proxy in proxies] == ["[phone] HK", "[phone] HK #2"]
+
+
+# ---------------------------------------------------------------------------
+# clash-config renderer tests
+# ---------------------------------------------------------------------------
+
+
+def _clash_config_route(template_path, template_body=None) -> RouteConfig:
+    if template_path is not None and template_body is None:
+        try:
+            template_body = template_path.read_text(encoding="utf-8")
+        except OSError:
+            template_body = None
+    return RouteConfig(
+        name="phone",
+        path="/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml",
+        sources=("airport_a",),
+        require_all_sources=False,
+        output=RouteOutputConfig(
+            format="clash-config",
+            template_path=template_path,
+            template_body=template_body,
+        ),
+        rename=RenameConfig(),
+        filter=FilterConfig(),
+    )
+
+
+def _ss_record(name: str = "HK 01") -> ProxyRecord:
+    return ProxyRecord(
+        "airport_a",
+        {
+            "name": name,
+            "type": "ss",
+            "server": "example.com",
+            "port": 443,
+            "cipher": "chacha20-ietf-poly1305",
+            "password": "password",
+        },
+    )
+
+
+_CLASH_TEMPLATE = CLASH_CONFIG_TEMPLATE_BODY
+
+
+def test_clash_config_replaces_proxies_and_proxy_names(tmp_path) -> None:
+    template = tmp_path / "clash.tpl.yaml"
+    template.write_text(_CLASH_TEMPLATE, encoding="utf-8")
+    from mihomo_proxy_manager.render import ClashConfigRenderer
+
+    renderer = ClashConfigRenderer()
+    response = renderer.render(
+        RenderRequest(_clash_config_route(template), [_ss_record("HK 01")])
+    )
+
+    assert response.status_code == 200
+    assert response.media_type == "application/yaml; charset=utf-8"
+    text = response.body.decode("utf-8")
+
+    parsed = yaml.safe_load(text)
+    assert parsed["port"] == 7890
+    assert parsed["mode"] == "rule"
+    assert parsed["proxies"] == [
+        {
+            "name": "HK 01",
+            "type": "ss",
+            "server": "example.com",
+            "port": 443,
+            "cipher": "chacha20-ietf-poly1305",
+            "password": "password",
+        }
+    ]
+    assert parsed["proxy-groups"] == [
+        {"name": "Proxy", "type": "select", "proxies": ["DIRECT", "HK 01"]}
+    ]
+    assert parsed["rules"] == ["MATCH,Proxy"]
+
+
+def test_clash_config_template_indentation_is_preserved(tmp_path) -> None:
+    template = tmp_path / "clash.tpl.yaml"
+    template.write_text(_CLASH_TEMPLATE, encoding="utf-8")
+    from mihomo_proxy_manager.render import ClashConfigRenderer
+
+    response = ClashConfigRenderer().render(
+        RenderRequest(_clash_config_route(template), [_ss_record("HK 01")])
+    )
+    text = response.body.decode("utf-8")
+
+    # {{proxies}} placeholder had no indentation (column 0): rendered proxies block
+    # must start at column 0 as well.
+    assert '\nproxies:\n- ' in text
+    # {{proxy_names}} placeholder had 6-space indent; rendered names inherit it.
+    assert '\n      - "HK 01"\n' in text
+
+
+def test_clash_config_quotes_proxy_string_fields(tmp_path) -> None:
+    template = tmp_path / "clash.tpl.yaml"
+    template.write_text(_CLASH_TEMPLATE, encoding="utf-8")
+    from mihomo_proxy_manager.render import ClashConfigRenderer
+
+    response = ClashConfigRenderer().render(
+        RenderRequest(_clash_config_route(template), [_ss_record("HK 01")])
+    )
+    text = response.body.decode("utf-8")
+
+    assert 'name: "HK 01"' in text
+    assert 'server: "example.com"' in text
+    assert 'password: "password"' in text
+
+
+def test_clash_config_repairs_duplicate_names_before_proxy_names(tmp_path) -> None:
+    template = tmp_path / "clash.tpl.yaml"
+    template.write_text(_CLASH_TEMPLATE, encoding="utf-8")
+    from mihomo_proxy_manager.render import ClashConfigRenderer
+
+    response = ClashConfigRenderer().render(
+        RenderRequest(
+            _clash_config_route(template),
+            [_ss_record("HK 01"), _ss_record("HK 01")],
+        )
+    )
+
+    parsed = yaml.safe_load(response.body.decode("utf-8"))
+    names = [proxy["name"] for proxy in parsed["proxies"]]
+    assert names == ["HK 01", "HK 01 #2"]
+    assert parsed["proxy-groups"][0]["proxies"] == ["DIRECT", "HK 01", "HK 01 #2"]
+
+
+def test_clash_config_returns_400_when_template_path_missing() -> None:
+    from mihomo_proxy_manager.render import ClashConfigRenderer
+
+    response = ClashConfigRenderer().render(
+        RenderRequest(_clash_config_route(None), [_ss_record()])
+    )
+
+    assert response.status_code == 400
+    assert b"template_path is required" in response.body
+
+
+def test_clash_config_returns_500_when_proxies_placeholder_missing(tmp_path) -> None:
+    template = tmp_path / "clash.tpl.yaml"
+    template.write_text("port: 7890\nproxies: []\n", encoding="utf-8")
+    from mihomo_proxy_manager.render import ClashConfigRenderer
+
+    response = ClashConfigRenderer().render(
+        RenderRequest(_clash_config_route(template), [_ss_record()])
+    )
+
+    assert response.status_code == 500
+    assert b"missing {{proxies}}" in response.body
+
+
+def test_clash_config_returns_422_when_no_supported_proxies(tmp_path) -> None:
+    template = tmp_path / "clash.tpl.yaml"
+    template.write_text(_CLASH_TEMPLATE, encoding="utf-8")
+    from mihomo_proxy_manager.render import ClashConfigRenderer
+
+    response = ClashConfigRenderer().render(
+        RenderRequest(_clash_config_route(template), [])
+    )
+
+    assert response.status_code == 422
+    assert b"no supported nodes" in response.body
+
+
+def test_clash_config_renderer_registered_in_registry() -> None:
+    registry = build_renderer_registry()
+    assert "clash-config" in registry
+

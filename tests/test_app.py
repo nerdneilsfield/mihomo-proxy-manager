@@ -6,6 +6,7 @@ Web application route and lifecycle tests.
 import asyncio
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Literal
 
 import pytest
@@ -23,6 +24,8 @@ from mihomo_proxy_manager.models import (
     SourceCache,
 )
 from mihomo_proxy_manager.status import build_status, render_status_html
+
+from tests.conftest import write_clash_template as _write_clash_template_helper
 
 
 def config_file(tmp_path):
@@ -87,12 +90,19 @@ def app_config_with_route_output(
 def auto_app_config(
     tmp_path,
     *,
-    auto_default: Literal["provider", "surfboard", "quantumult-x", "xray-uri"] = (
-        "provider"
-    ),
+    auto_default: Literal[
+        "provider", "surfboard", "quantumult-x", "xray-uri", "clash-config"
+    ] = "provider",
     import_link: bool = True,
     allowed_user_agents: tuple[str, ...] = (),
+    template_path=None,
 ) -> AppConfig:
+    template_body = None
+    if template_path is not None:
+        try:
+            template_body = template_path.read_text(encoding="utf-8")
+        except OSError:
+            template_body = None
     return app_config_with_route_output(
         tmp_path,
         RouteOutputConfig(
@@ -101,6 +111,8 @@ def auto_app_config(
             encoding="plain",
             import_link=import_link,
             resource_tag="MPM",
+            template_path=template_path,
+            template_body=template_body,
         ),
         public_base_url="https://mpm.example.com",
         allowed_user_agents=allowed_user_agents,
@@ -1913,3 +1925,179 @@ async def test_status_api_returns_json_and_route_stats(tmp_path) -> None:
     assert data["routes"][0]["protocols"] == {"ss": 1, "vmess": 1}
     assert data["sources"][0]["protocols"] == {"ss": 1, "vmess": 1}
     assert data["sources"][0]["healthy"] is True
+
+
+# ---------------------------------------------------------------------------
+# clash-config integration tests
+# ---------------------------------------------------------------------------
+
+
+def _write_clash_template(tmp_path) -> Path:
+    return _write_clash_template_helper(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_fixed_clash_config_route_returns_full_yaml(tmp_path) -> None:
+    import yaml as _yaml
+
+    template = _write_clash_template(tmp_path)
+    config = app_config_with_route_output(
+        tmp_path,
+        RouteOutputConfig(
+            format="clash-config",
+            template_path=template,
+            template_body=template.read_text(encoding="utf-8"),
+        ),
+    )
+    store = JsonSourceCacheStore(config.cache)
+    await store.set("airport_a", source_cache_with_nodes(ss_node()))
+    app = create_app(config, cache_store=store, refresher=None, scheduler=None)
+
+    with TestClient(app) as client:
+        response = client.get(config.routes["phone"].path)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/yaml")
+    parsed = _yaml.safe_load(response.text)
+    assert parsed["port"] == 7890
+    assert parsed["proxies"][0]["name"] == "SS 01"
+    assert parsed["proxy-groups"][0]["proxies"] == ["DIRECT", "SS 01"]
+
+
+@pytest.mark.asyncio
+async def test_auto_route_clash_config_target_with_template_returns_full_yaml(
+    tmp_path,
+) -> None:
+    import yaml as _yaml
+
+    template = _write_clash_template(tmp_path)
+    config = auto_app_config(tmp_path, template_path=template)
+    store = JsonSourceCacheStore(config.cache)
+    await store.set("airport_a", source_cache_with_nodes(ss_node()))
+    app = create_app(config, cache_store=store, refresher=None, scheduler=None)
+    path = config.routes["phone"].path
+
+    with TestClient(app) as client:
+        response = client.get(f"{path}?target=clash-config")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/yaml")
+    parsed = _yaml.safe_load(response.text)
+    assert parsed["proxies"][0]["name"] == "SS 01"
+
+
+@pytest.mark.asyncio
+async def test_auto_route_clash_config_target_without_template_returns_400(
+    tmp_path,
+) -> None:
+    config = auto_app_config(tmp_path)
+    store = JsonSourceCacheStore(config.cache)
+    await store.set("airport_a", source_cache_with_nodes(ss_node()))
+    app = create_app(config, cache_store=store, refresher=None, scheduler=None)
+    path = config.routes["phone"].path
+
+    with TestClient(app) as client:
+        response = client.get(f"{path}?target=clash-config")
+
+    assert response.status_code == 400
+    assert b"template_path is required" in response.content
+
+
+@pytest.mark.asyncio
+async def test_auto_route_clash_config_default_returns_full_yaml(tmp_path) -> None:
+    import yaml as _yaml
+
+    template = _write_clash_template(tmp_path)
+    config = auto_app_config(
+        tmp_path, auto_default="clash-config", template_path=template
+    )
+    store = JsonSourceCacheStore(config.cache)
+    await store.set("airport_a", source_cache_with_nodes(ss_node()))
+    app = create_app(config, cache_store=store, refresher=None, scheduler=None)
+    path = config.routes["phone"].path
+
+    with TestClient(app) as client:
+        response = client.get(path)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/yaml")
+    parsed = _yaml.safe_load(response.text)
+    assert parsed["proxies"][0]["name"] == "SS 01"
+
+
+@pytest.mark.asyncio
+async def test_clash_config_aliases_resolve_via_query(tmp_path) -> None:
+    template = _write_clash_template(tmp_path)
+    config = auto_app_config(tmp_path, template_path=template)
+    store = JsonSourceCacheStore(config.cache)
+    await store.set("airport_a", source_cache_with_nodes(ss_node()))
+    app = create_app(config, cache_store=store, refresher=None, scheduler=None)
+    path = config.routes["phone"].path
+
+    with TestClient(app) as client:
+        for alias in ("full-config", "full", "clash-full", "mihomo-config"):
+            response = client.get(f"{path}?target={alias}")
+            assert response.status_code == 200, alias
+            assert response.headers["content-type"].startswith("application/yaml")
+
+
+@pytest.mark.asyncio
+async def test_clash_config_clash_like_user_agent_does_not_select_clash_config(
+    tmp_path,
+) -> None:
+    template = _write_clash_template(tmp_path)
+    config = auto_app_config(
+        tmp_path, auto_default="provider", template_path=template
+    )
+    store = JsonSourceCacheStore(config.cache)
+    await store.set("airport_a", source_cache_with_nodes(ss_node()))
+    app = create_app(config, cache_store=store, refresher=None, scheduler=None)
+    path = config.routes["phone"].path
+
+    with TestClient(app) as client:
+        response = client.get(path, headers={"User-Agent": "mihomo/1.19.5"})
+
+    assert response.status_code == 200
+    # UA selects provider, not clash-config
+    assert "proxies:" in response.text
+    assert "proxy-groups" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_clash_config_companion_target_is_incompatible(tmp_path) -> None:
+    template = _write_clash_template(tmp_path)
+    config = auto_app_config(tmp_path, template_path=template)
+    store = JsonSourceCacheStore(config.cache)
+    await store.set("airport_a", source_cache_with_nodes(ss_node()))
+    app = create_app(config, cache_store=store, refresher=None, scheduler=None)
+    path = config.routes["phone"].path
+
+    with TestClient(app) as client:
+        response = client.get(f"{path}-nodes?target=clash-config")
+
+    assert response.status_code == 400
+    assert response.text == "target does not support companion"
+
+
+@pytest.mark.asyncio
+async def test_access_audit_records_clash_config_target_format(tmp_path) -> None:
+    template = _write_clash_template(tmp_path)
+    config = auto_app_config(tmp_path, template_path=template)
+    cache_store = JsonSourceCacheStore(config.cache)
+    await cache_store.set("airport_a", source_cache_with_nodes(ss_node()))
+    store = FakeAccessAuditStore()
+    app = create_app(
+        config,
+        cache_store=cache_store,
+        refresher=None,
+        scheduler=None,
+        access_audit_store=store,
+    )
+    path = config.routes["phone"].path
+
+    with TestClient(app) as client:
+        response = client.get(f"{path}?target=clash-config")
+
+    assert response.status_code == 200
+    assert len(store.events) == 1
+    assert store.events[0].target_format == "clash-config"

@@ -1,5 +1,6 @@
 from mihomo_proxy_manager.route_targets import (
     COMPANION_TARGETS,
+    IMPLEMENTED_FORMATS,
     QuerySelection,
     canonical_target_for_format,
     has_future_user_agent_signal,
@@ -157,7 +158,67 @@ def test_canonical_targets() -> None:
     assert canonical_target_for_format("surfboard") == "surfboard"
     assert canonical_target_for_format("quantumult-x") == "quanx"
     assert canonical_target_for_format("xray-uri") == "v2rayn"
+    assert canonical_target_for_format("clash-config") == "clash-config"
+
+
+def test_clash_config_aliases_resolve_to_clash_config() -> None:
+    for alias in (
+        "clash-config",
+        "full-config",
+        "full",
+        "clash-full",
+        "mihomo-config",
+    ):
+        selection = resolve_query_selection({"target": [alias]})
+        assert selection == QuerySelection(format="clash-config", explicit=True)
+
+
+def test_clash_like_user_agent_still_resolves_to_provider_not_clash_config() -> None:
+    assert resolve_user_agent_format("clash/1.0") == "provider"
+    assert resolve_user_agent_format("mihomo/1.19.5") == "provider"
+    assert resolve_user_agent_format("clash-verge/1.0") == "provider"
 
 
 def test_companion_targets() -> None:
     assert COMPANION_TARGETS == {"nodes": "surfboard", "import": "quantumult-x"}
+
+
+def test_implemented_formats_stay_in_sync_with_model_and_app_literals() -> None:
+    """Guard against adding a format in one place but missing the others.
+
+    Failure modes this catches:
+    - Adding a new value to `RouteOutputConfig.format`/`auto_default` literals
+      without updating `IMPLEMENTED_FORMATS`.
+    - Forgetting to register a renderer for an implemented format.
+    - Forgetting to add a `CANONICAL_TARGETS` entry for an implemented format.
+    """
+    import typing
+
+    from mihomo_proxy_manager.app import ImplementedOutputFormat
+    from mihomo_proxy_manager.models import RouteOutputConfig
+    from mihomo_proxy_manager.render import build_renderer_registry
+    from mihomo_proxy_manager.route_targets import CANONICAL_TARGETS
+
+    hints = typing.get_type_hints(RouteOutputConfig)
+    model_format_literals = set(typing.get_args(hints["format"]))
+    model_auto_default_literals = set(typing.get_args(hints["auto_default"]))
+    app_literal_values = set(typing.get_args(ImplementedOutputFormat))
+    registry_keys = set(build_renderer_registry().keys())
+
+    assert IMPLEMENTED_FORMATS == app_literal_values, (
+        "ImplementedOutputFormat must mirror IMPLEMENTED_FORMATS"
+    )
+    assert IMPLEMENTED_FORMATS == registry_keys, (
+        "Renderer registry must implement exactly the formats listed in "
+        "IMPLEMENTED_FORMATS"
+    )
+    assert IMPLEMENTED_FORMATS == model_auto_default_literals, (
+        "RouteOutputConfig.auto_default must mirror IMPLEMENTED_FORMATS"
+    )
+    assert model_format_literals == IMPLEMENTED_FORMATS | {"auto"}, (
+        "RouteOutputConfig.format must equal IMPLEMENTED_FORMATS plus 'auto'"
+    )
+    assert set(CANONICAL_TARGETS.keys()) == IMPLEMENTED_FORMATS, (
+        "CANONICAL_TARGETS must define a canonical name for every implemented "
+        "format"
+    )

@@ -10,6 +10,37 @@ from pathlib import Path
 import pytest
 
 
+CLASH_CONFIG_TEMPLATE_BODY = """\
+port: 7890
+mode: rule
+
+proxies:
+{{proxies}}
+
+proxy-groups:
+  - name: Proxy
+    type: select
+    proxies:
+      - DIRECT
+      {{proxy_names}}
+
+rules:
+  - MATCH,Proxy
+"""
+
+
+def write_clash_template(
+    directory: Path,
+    *,
+    body: str = CLASH_CONFIG_TEMPLATE_BODY,
+    name: str = "clash.tpl.yaml",
+) -> Path:
+    """Write the canonical Clash template body to ``directory`` for tests."""
+    template = directory / name
+    template.write_text(body, encoding="utf-8")
+    return template
+
+
 @pytest.fixture
 def sample_proxy() -> dict[str, object]:
     """提供一个示例代理字典用于测试。

@@ -15,6 +15,8 @@ from mihomo_proxy_manager.config import (
     parse_size,
 )
 
+from tests.conftest import CLASH_CONFIG_TEMPLATE_BODY
+
 
 def write_config(path: Path, body: str) -> Path:
     """将配置内容写入文件。
@@ -454,7 +456,7 @@ unexpected = "value"
 @pytest.mark.parametrize(
     ("output", "message"),
     (
-        ('format = "full-config"', "output format is unsupported"),
+        ('format = "unknown-format"', "output format is unsupported"),
         (
             'format = "xray-uri"\nencoding = "hex"',
             "encoding is unsupported",
@@ -790,7 +792,7 @@ path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml"
 sources = ["airport_a"]
 
 [routes.phone.output]
-format = "full-config"
+format = "unknown-format"
 
 [routes.phone.filter]
 include = "["
@@ -1196,3 +1198,240 @@ user_agent = []
     config = load_config(write_config(temp_config_path, body))
 
     assert config.routes["phone"].access.user_agent == ()
+
+
+# ---------------------------------------------------------------------------
+# clash-config tests
+# ---------------------------------------------------------------------------
+
+
+def _write_template(
+    directory: Path, body: str = CLASH_CONFIG_TEMPLATE_BODY
+) -> Path:
+    template = directory / "clash.tpl.yaml"
+    template.write_text(body, encoding="utf-8")
+    return template
+
+
+def test_clash_config_route_parses_template_path_relative_to_config(
+    temp_config_path: Path,
+) -> None:
+    template = _write_template(temp_config_path.parent)
+    body = (
+        minimal_config()
+        + f"""
+[routes.phone.output]
+format = "clash-config"
+template_path = "{template.name}"
+"""
+    )
+
+    config = load_config(write_config(temp_config_path, body))
+
+    route_template = config.routes["phone"].output.template_path
+    assert route_template is not None
+    assert route_template.is_absolute()
+    assert route_template.resolve() == template.resolve()
+
+
+def test_clash_config_route_accepts_absolute_template_path(
+    temp_config_path: Path,
+) -> None:
+    template = _write_template(temp_config_path.parent)
+    body = (
+        minimal_config()
+        + f"""
+[routes.phone.output]
+format = "clash-config"
+template_path = "{template}"
+"""
+    )
+
+    config = load_config(write_config(temp_config_path, body))
+
+    assert config.routes["phone"].output.template_path == template
+
+
+def test_clash_config_route_requires_template_path(temp_config_path: Path) -> None:
+    body = (
+        minimal_config()
+        + """
+[routes.phone.output]
+format = "clash-config"
+"""
+    )
+
+    with pytest.raises(
+        ValueError, match="template_path is required for clash-config output"
+    ):
+        load_config(write_config(temp_config_path, body))
+
+
+def test_clash_config_route_rejects_missing_template_file(
+    temp_config_path: Path,
+) -> None:
+    body = (
+        minimal_config()
+        + """
+[routes.phone.output]
+format = "clash-config"
+template_path = "does-not-exist.yaml"
+"""
+    )
+
+    with pytest.raises(ValueError, match="template_path does not exist"):
+        load_config(write_config(temp_config_path, body))
+
+
+def test_clash_config_route_rejects_template_without_placeholder(
+    temp_config_path: Path,
+) -> None:
+    template = _write_template(
+        temp_config_path.parent,
+        body="port: 7890\nproxies: []\n",
+    )
+    body = (
+        minimal_config()
+        + f"""
+[routes.phone.output]
+format = "clash-config"
+template_path = "{template.name}"
+"""
+    )
+
+    with pytest.raises(
+        ValueError, match="template must contain a line with only '{{proxies}}'"
+    ):
+        load_config(write_config(temp_config_path, body))
+
+
+def test_clash_config_validation_fails_when_template_body_unreadable(
+    temp_config_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If load_config could not cache the template body, validation must reject
+    the route instead of re-reading the file, so renderer and validator stay
+    aligned on the same content (the renderer only serves template_body).
+    """
+    template = _write_template(temp_config_path.parent)
+    body = (
+        minimal_config()
+        + f"""
+[routes.phone.output]
+format = "clash-config"
+template_path = "{template.name}"
+"""
+    )
+    config_path = write_config(temp_config_path, body)
+
+    original_read_text = Path.read_text
+
+    def failing_read_text(
+        self: Path,
+        encoding: str | None = None,
+        errors: str | None = None,
+    ) -> str:
+        if self.name == template.name:
+            raise OSError("simulated read failure")
+        return original_read_text(self, encoding, errors)
+
+    monkeypatch.setattr(Path, "read_text", failing_read_text)
+
+    with pytest.raises(ValueError, match="template_path cannot be read"):
+        load_config(config_path)
+
+
+@pytest.mark.parametrize(
+    "fmt", ["provider", "surfboard", "quantumult-x", "xray-uri"]
+)
+def test_template_path_rejected_on_non_clash_config_fixed_routes(
+    temp_config_path: Path, fmt: str
+) -> None:
+    template = _write_template(temp_config_path.parent)
+    output = f'format = "{fmt}"\ntemplate_path = "{template.name}"'
+
+    with pytest.raises(
+        ValueError,
+        match="template_path is only supported for clash-config or auto output",
+    ):
+        load_config(_write_base_config(temp_config_path, output))
+
+
+def test_auto_route_allows_optional_template_path(temp_config_path: Path) -> None:
+    template = _write_template(temp_config_path.parent)
+    body = """
+[server]
+status_path = "/s/X6HfeBRQz6xqk9S4dTV7gQwL2nP8aYcM"
+public_base_url = "https://mpm.example.com"
+
+[sources.airport_a]
+url = "https://example.com/sub"
+
+[routes.phone]
+path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml"
+sources = ["airport_a"]
+
+[routes.phone.output]
+format = "auto"
+template_path = "%s"
+""" % template.name
+
+    config = load_config(write_config(temp_config_path, body))
+
+    assert config.routes["phone"].output.template_path is not None
+
+
+def test_auto_route_requires_template_path_when_auto_default_is_clash_config(
+    temp_config_path: Path,
+) -> None:
+    body = """
+[server]
+status_path = "/s/X6HfeBRQz6xqk9S4dTV7gQwL2nP8aYcM"
+public_base_url = "https://mpm.example.com"
+
+[sources.airport_a]
+url = "https://example.com/sub"
+
+[routes.phone]
+path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml"
+sources = ["airport_a"]
+
+[routes.phone.output]
+format = "auto"
+auto_default = "clash-config"
+"""
+
+    with pytest.raises(
+        ValueError,
+        match="template_path is required when auto_default is 'clash-config'",
+    ):
+        load_config(write_config(temp_config_path, body))
+
+
+def test_auto_route_with_clash_config_auto_default_and_template_passes(
+    temp_config_path: Path,
+) -> None:
+    template = _write_template(temp_config_path.parent)
+    body = """
+[server]
+status_path = "/s/X6HfeBRQz6xqk9S4dTV7gQwL2nP8aYcM"
+public_base_url = "https://mpm.example.com"
+
+[sources.airport_a]
+url = "https://example.com/sub"
+
+[routes.phone]
+path = "/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml"
+sources = ["airport_a"]
+
+[routes.phone.output]
+format = "auto"
+auto_default = "clash-config"
+template_path = "%s"
+""" % template.name
+
+    config = load_config(write_config(temp_config_path, body))
+
+    assert config.routes["phone"].output.auto_default == "clash-config"
+    assert config.routes["phone"].output.template_path is not None
+

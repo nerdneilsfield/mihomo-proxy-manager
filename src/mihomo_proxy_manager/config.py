@@ -603,8 +603,6 @@ def _companion_paths(route: RouteConfig) -> tuple[str, ...]:
     return ()
 
 
-CLASH_TEMPLATE_PROXIES_PLACEHOLDER = CLASH_PROXIES_PLACEHOLDER
-
 # Per-fixed-format capabilities. ``auto`` routes accept the union of all
 # capabilities and are validated separately.
 _FORMATS_SUPPORTING_TEMPLATE_PATH = {"clash-config"}
@@ -621,14 +619,16 @@ def _validate_clash_template(route: RouteConfig) -> list[str]:
     template_path = route.output.template_path
     if template_path is None:
         return errors
+    # Validation messages intentionally omit the absolute template path to
+    # avoid leaking deployment layout into logs / API errors.
     if not template_path.exists():
         errors.append(
-            f"route {route.name!r} template_path does not exist: {template_path}"
+            f"route {route.name!r} template_path does not exist"
         )
         return errors
     if not template_path.is_file():
         errors.append(
-            f"route {route.name!r} template_path is not a file: {template_path}"
+            f"route {route.name!r} template_path is not a file"
         )
         return errors
     # The renderer only serves ``template_body`` cached at config-load time. If
@@ -637,7 +637,7 @@ def _validate_clash_template(route: RouteConfig) -> list[str]:
     content = route.output.template_body
     if content is None:
         errors.append(
-            f"route {route.name!r} template_path cannot be read: {template_path}"
+            f"route {route.name!r} template_path cannot be read"
         )
         return errors
     if not template_has_proxies_placeholder(content):
@@ -649,7 +649,11 @@ def _validate_clash_template(route: RouteConfig) -> list[str]:
 
 
 def _validate_surfboard_output(
-    route: RouteConfig, *, public_base_url: str | None, allow_modes: set[str]
+    route: RouteConfig,
+    *,
+    public_base_url: str | None,
+    allow_modes: set[str],
+    require_public_base_url: bool = True,
 ) -> list[str]:
     errors: list[str] = []
     if route.output.mode not in allow_modes:
@@ -672,7 +676,7 @@ def _validate_surfboard_output(
         errors.append(
             f"route {route.name!r} surfboard test_tolerance must be between 0 and 60000"
         )
-    if not public_base_url:
+    if require_public_base_url and not public_base_url:
         errors.append(
             f"route {route.name!r} public_base_url is required for surfboard output"
         )
@@ -863,6 +867,7 @@ class LoadedConfig(AppConfig):
                         route,
                         public_base_url=self.server.public_base_url,
                         allow_modes={"default"},
+                        require_public_base_url=False,
                     )
                 )
                 errors.extend(
@@ -1296,9 +1301,30 @@ def load_config(path: Path, *, validate: bool = True) -> LoadedConfig:
             template_path: Path | None = None
             template_body: str | None = None
         else:
-            template_path = Path(str(template_path_raw))
-            if not template_path.is_absolute():
-                template_path = (config_dir / template_path).resolve()
+            raw_path = Path(str(template_path_raw))
+            was_relative = not raw_path.is_absolute()
+            # Reject symlinks *before* ``resolve()`` collapses them, otherwise
+            # the resolved path points at the symlink target and is_symlink()
+            # always returns False.
+            candidate = config_dir / raw_path if was_relative else raw_path
+            if candidate.is_symlink():
+                raise ValueError(
+                    f"route {name!r} template_path must not be a symlink"
+                )
+            if was_relative:
+                template_path = candidate.resolve()
+                # Containment check for relative paths: prevent `..` traversal
+                # out of the operator's config directory. Operators that need
+                # an external template must pass an absolute path explicitly.
+                try:
+                    template_path.relative_to(config_dir.resolve())
+                except ValueError:
+                    raise ValueError(
+                        f"route {name!r} template_path escapes the config "
+                        f"directory; use an absolute path to opt in"
+                    ) from None
+            else:
+                template_path = raw_path
             # Read the template body eagerly at config-load time so request-time
             # rendering never re-reads the file (closes a TOCTOU file-disclosure
             # window and avoids per-request blocking disk I/O on the async path).

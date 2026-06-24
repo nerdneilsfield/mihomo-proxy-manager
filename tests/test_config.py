@@ -15,7 +15,7 @@ from mihomo_proxy_manager.config import (
     parse_size,
 )
 
-from tests.conftest import CLASH_CONFIG_TEMPLATE_BODY
+from tests.conftest import CLASH_CONFIG_TEMPLATE_BODY, write_clash_template
 
 
 def write_config(path: Path, body: str) -> Path:
@@ -557,7 +557,9 @@ def test_route_output_formats_requiring_import_links_need_public_base_url(
 
 
 def test_auto_route_requires_public_base_url(temp_config_path: Path) -> None:
-    with pytest.raises(ValueError, match="public_base_url is required for auto output"):
+    with pytest.raises(
+        ValueError, match="public_base_url is required for auto output"
+    ) as exc_info:
         load_config(
             _write_base_config(
                 temp_config_path,
@@ -565,6 +567,11 @@ def test_auto_route_requires_public_base_url(temp_config_path: Path) -> None:
                 server="",
             )
         )
+    # ``auto`` delegates to each implemented format for validation. Make sure
+    # the per-format public_base_url errors are suppressed so the caller gets
+    # exactly one auto-level error, not a stack of duplicate messages.
+    message = str(exc_info.value)
+    assert message.count("public_base_url is required") == 1
 
 
 def test_route_output_companion_path_collision_is_rejected(
@@ -1208,9 +1215,9 @@ user_agent = []
 def _write_template(
     directory: Path, body: str = CLASH_CONFIG_TEMPLATE_BODY
 ) -> Path:
-    template = directory / "clash.tpl.yaml"
-    template.write_text(body, encoding="utf-8")
-    return template
+    # Thin shim around the conftest helper so tests can override ``body`` for
+    # edge cases such as templates missing the {{proxies}} placeholder.
+    return write_clash_template(directory, body=body)
 
 
 def test_clash_config_route_parses_template_path_relative_to_config(
@@ -1434,4 +1441,74 @@ template_path = "%s"
 
     assert config.routes["phone"].output.auto_default == "clash-config"
     assert config.routes["phone"].output.template_path is not None
+
+
+def test_relative_template_path_cannot_escape_config_dir(
+    temp_config_path: Path, tmp_path: Path
+) -> None:
+    """Relative template_path traversing out of the config directory must be
+    rejected at load time. Operators that intentionally want a path outside
+    the config directory must use an absolute path.
+    """
+    outside = tmp_path.parent / "outside.tpl.yaml"
+    outside.write_text(CLASH_CONFIG_TEMPLATE_BODY, encoding="utf-8")
+
+    body = (
+        minimal_config()
+        + """
+[routes.phone.output]
+format = "clash-config"
+template_path = "../outside.tpl.yaml"
+"""
+    )
+
+    with pytest.raises(
+        ValueError, match="template_path escapes the config directory"
+    ):
+        load_config(write_config(temp_config_path, body))
+
+
+def test_symlink_template_path_is_rejected(
+    temp_config_path: Path, tmp_path: Path
+) -> None:
+    real_template = write_clash_template(temp_config_path.parent, name="real.yaml")
+    link_path = temp_config_path.parent / "linked.yaml"
+    link_path.symlink_to(real_template)
+
+    body = (
+        minimal_config()
+        + """
+[routes.phone.output]
+format = "clash-config"
+template_path = "linked.yaml"
+"""
+    )
+
+    with pytest.raises(
+        ValueError, match="template_path must not be a symlink"
+    ):
+        load_config(write_config(temp_config_path, body))
+
+
+def test_validation_error_messages_do_not_leak_template_absolute_path(
+    temp_config_path: Path,
+) -> None:
+    """Validation errors must not include the resolved absolute template path
+    (avoids leaking deployment layout into logs / API errors).
+    """
+    body = (
+        minimal_config()
+        + """
+[routes.phone.output]
+format = "clash-config"
+template_path = "does-not-exist.yaml"
+"""
+    )
+
+    with pytest.raises(ValueError) as excinfo:
+        load_config(write_config(temp_config_path, body))
+
+    message = str(excinfo.value)
+    assert "template_path does not exist" in message
+    assert str(temp_config_path.parent) not in message
 

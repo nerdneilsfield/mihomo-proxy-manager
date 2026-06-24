@@ -41,6 +41,18 @@ def write_clash_template(
     return template
 
 
+def read_template_body(template_path: Path) -> str | None:
+    """Read a template file like production code does.
+
+    Centralized so tests that build ``RouteConfig`` directly mirror config-load
+    behavior without duplicating the read-and-swallow-error pattern.
+    """
+    try:
+        return template_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
 @pytest.fixture
 def sample_proxy() -> dict[str, object]:
     """提供一个示例代理字典用于测试。

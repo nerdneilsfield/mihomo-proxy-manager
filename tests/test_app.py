@@ -25,7 +25,10 @@ from mihomo_proxy_manager.models import (
 )
 from mihomo_proxy_manager.status import build_status, render_status_html
 
-from tests.conftest import write_clash_template as _write_clash_template_helper
+from tests.conftest import (
+    read_template_body,
+    write_clash_template as _write_clash_template_helper,
+)
 
 
 def config_file(tmp_path):
@@ -99,10 +102,7 @@ def auto_app_config(
 ) -> AppConfig:
     template_body = None
     if template_path is not None:
-        try:
-            template_body = template_path.read_text(encoding="utf-8")
-        except OSError:
-            template_body = None
+        template_body = read_template_body(template_path)
     return app_config_with_route_output(
         tmp_path,
         RouteOutputConfig(

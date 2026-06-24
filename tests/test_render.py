@@ -24,7 +24,10 @@ from mihomo_proxy_manager.render import (
     prepare_render_records,
 )
 
-from tests.conftest import CLASH_CONFIG_TEMPLATE_BODY
+from tests.conftest import (
+    read_template_body,
+    write_clash_template,
+)
 
 REALITY_PUBLIC_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 
@@ -2468,10 +2471,7 @@ def test_prepare_render_records_preserves_filtering_and_renaming() -> None:
 
 def _clash_config_route(template_path, template_body=None) -> RouteConfig:
     if template_path is not None and template_body is None:
-        try:
-            template_body = template_path.read_text(encoding="utf-8")
-        except OSError:
-            template_body = None
+        template_body = read_template_body(template_path)
     return RouteConfig(
         name="phone",
         path="/p/CsYWr0BGzGQQmwq2X5eG5Qn8Kp4zR7vL.yaml",
@@ -2501,12 +2501,11 @@ def _ss_record(name: str = "HK 01") -> ProxyRecord:
     )
 
 
-_CLASH_TEMPLATE = CLASH_CONFIG_TEMPLATE_BODY
+_ss_record = _ss_record
 
 
 def test_clash_config_replaces_proxies_and_proxy_names(tmp_path) -> None:
-    template = tmp_path / "clash.tpl.yaml"
-    template.write_text(_CLASH_TEMPLATE, encoding="utf-8")
+    template = write_clash_template(tmp_path)
     from mihomo_proxy_manager.render import ClashConfigRenderer
 
     renderer = ClashConfigRenderer()
@@ -2538,8 +2537,7 @@ def test_clash_config_replaces_proxies_and_proxy_names(tmp_path) -> None:
 
 
 def test_clash_config_template_indentation_is_preserved(tmp_path) -> None:
-    template = tmp_path / "clash.tpl.yaml"
-    template.write_text(_CLASH_TEMPLATE, encoding="utf-8")
+    template = write_clash_template(tmp_path)
     from mihomo_proxy_manager.render import ClashConfigRenderer
 
     response = ClashConfigRenderer().render(
@@ -2555,8 +2553,7 @@ def test_clash_config_template_indentation_is_preserved(tmp_path) -> None:
 
 
 def test_clash_config_quotes_proxy_string_fields(tmp_path) -> None:
-    template = tmp_path / "clash.tpl.yaml"
-    template.write_text(_CLASH_TEMPLATE, encoding="utf-8")
+    template = write_clash_template(tmp_path)
     from mihomo_proxy_manager.render import ClashConfigRenderer
 
     response = ClashConfigRenderer().render(
@@ -2570,8 +2567,7 @@ def test_clash_config_quotes_proxy_string_fields(tmp_path) -> None:
 
 
 def test_clash_config_repairs_duplicate_names_before_proxy_names(tmp_path) -> None:
-    template = tmp_path / "clash.tpl.yaml"
-    template.write_text(_CLASH_TEMPLATE, encoding="utf-8")
+    template = write_clash_template(tmp_path)
     from mihomo_proxy_manager.render import ClashConfigRenderer
 
     response = ClashConfigRenderer().render(
@@ -2599,8 +2595,9 @@ def test_clash_config_returns_400_when_template_path_missing() -> None:
 
 
 def test_clash_config_returns_500_when_proxies_placeholder_missing(tmp_path) -> None:
-    template = tmp_path / "clash.tpl.yaml"
-    template.write_text("port: 7890\nproxies: []\n", encoding="utf-8")
+    template = write_clash_template(
+        tmp_path, body="port: 7890\nproxies: []\n"
+    )
     from mihomo_proxy_manager.render import ClashConfigRenderer
 
     response = ClashConfigRenderer().render(
@@ -2612,8 +2609,7 @@ def test_clash_config_returns_500_when_proxies_placeholder_missing(tmp_path) -> 
 
 
 def test_clash_config_returns_422_when_no_supported_proxies(tmp_path) -> None:
-    template = tmp_path / "clash.tpl.yaml"
-    template.write_text(_CLASH_TEMPLATE, encoding="utf-8")
+    template = write_clash_template(tmp_path)
     from mihomo_proxy_manager.render import ClashConfigRenderer
 
     response = ClashConfigRenderer().render(
